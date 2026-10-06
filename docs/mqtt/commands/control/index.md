@@ -10,20 +10,22 @@ Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration)
 
 - [Types](#types)
   - [`CalibrationPayload`](#calibrationpayload)
-  - [`CalibrationRequest`](#calibrationrequest)
   - [`CleanPrintErrorPayload`](#cleanprinterrorpayload)
-  - [`CleanPrintErrorRequest`](#cleanprinterrorrequest)
   - [`HmsActionPayload`](#hmsactionpayload)
-  - [`HmsActionRequest`](#hmsactionrequest)
   - [`IdleIgnorePayload`](#idleignorepayload)
-  - [`IdleIgnoreRequest`](#idleignorerequest)
   - [`PrintSpeedPayload`](#printspeedpayload)
-  - [`PrintSpeedRequest`](#printspeedrequest)
   - [`SkipObjectsPayload`](#skipobjectspayload)
-  - [`SkipObjectsRequest`](#skipobjectsrequest)
   - [`StandardControlPayload`](#standardcontrolpayload)
-  - [`StandardControlRequest`](#standardcontrolrequest)
   - [`UiopPayload`](#uioppayload)
+  - [`IdleIgnoreScope`](#idleignorescope)
+  - [`StandardCommand`](#standardcommand)
+  - [`CalibrationRequest`](#calibrationrequest)
+  - [`CleanPrintErrorRequest`](#cleanprinterrorrequest)
+  - [`HmsActionRequest`](#hmsactionrequest)
+  - [`IdleIgnoreRequest`](#idleignorerequest)
+  - [`PrintSpeedRequest`](#printspeedrequest)
+  - [`SkipObjectsRequest`](#skipobjectsrequest)
+  - [`StandardControlRequest`](#standardcontrolrequest)
   - [`UiopRequest`](#uioprequest)
 
 ## Quick Reference
@@ -31,21 +33,23 @@ Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration)
 | Item | Kind | Description |
 |------|------|-------------|
 | [`CalibrationPayload`](#calibrationpayload) | struct | Triggers automated physical resonance compensation sweeps and chassis alignments. |
-| [`CalibrationRequest`](#calibrationrequest) | struct | Kicks off a calibration routine (vibration compensation, bed leveling, etc.). |
 | [`CleanPrintErrorPayload`](#cleanprinterrorpayload) | struct | Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE]. |
-| [`CleanPrintErrorRequest`](#cleanprinterrorrequest) | struct | Clears the printer's current error state so it can resume operation. |
 | [`HmsActionPayload`](#hmsactionpayload) | struct | Error-dialog action carrying the fault it answers [REF-MQTT-LIFECYCLE]. |
-| [`HmsActionRequest`](#hmsactionrequest) | struct | Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it. |
 | [`IdleIgnorePayload`](#idleignorepayload) | struct | Dismisses a warning without resuming anything [REF-MQTT-LIFECYCLE]. |
-| [`IdleIgnoreRequest`](#idleignorerequest) | struct | Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`). |
 | [`PrintSpeedPayload`](#printspeedpayload) | struct | Dynamically scales maximum movement velocity and acceleration limits. |
-| [`PrintSpeedRequest`](#printspeedrequest) | struct | Changes the active print speed profile (silent, standard, sport, ludicrous). |
 | [`SkipObjectsPayload`](#skipobjectspayload) | struct | Instructs the printer to bypass rendering specific objects within active multi-model jobs. |
-| [`SkipObjectsRequest`](#skipobjectsrequest) | struct | Tells the printer to skip specific objects in a multi-object print. |
-| [`StandardControlPayload`](#standardcontrolpayload) | struct | General control payload used for pause, resume, stop, and clean actions. |
-| [`StandardControlRequest`](#standardcontrolrequest) | struct | Sends a print lifecycle command (pause, resume, stop) to the printer. |
+| [`StandardControlPayload`](#standardcontrolpayload) | struct | General control payload used for pause, resume, stop and the other name-only commands. |
 | [`UiopPayload`](#uioppayload) | struct | Closes the printer's on-screen `print_error` dialog [REF-MQTT-LIFECYCLE]. |
-| [`UiopRequest`](#uioprequest) | struct | Closes the error dialog on the printer's screen (BambuStudio `command_clean_print_error_uiop`). |
+| [`IdleIgnoreScope`](#idleignorescope) | enum | How long an `idle_ignore` dismissal lasts. |
+| [`StandardCommand`](#standardcommand) | enum | A print-lifecycle command that carries nothing but its name and `sequence_id` [REF-MQTT-LIFECYCLE]. |
+| [`CalibrationRequest`](#calibrationrequest) | type | Kicks off a calibration routine (vibration compensation, bed leveling, etc.). |
+| [`CleanPrintErrorRequest`](#cleanprinterrorrequest) | type | Clears the printer's current error state so it can resume operation. |
+| [`HmsActionRequest`](#hmsactionrequest) | type | Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it. |
+| [`IdleIgnoreRequest`](#idleignorerequest) | type | Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`). |
+| [`PrintSpeedRequest`](#printspeedrequest) | type | Changes the active print speed profile (silent, standard, sport, ludicrous). |
+| [`SkipObjectsRequest`](#skipobjectsrequest) | type | Tells the printer to skip specific objects in a multi-object print. |
+| [`StandardControlRequest`](#standardcontrolrequest) | type | Sends a name-only print lifecycle command (pause, resume, stop, ...) to the printer. |
+| [`UiopRequest`](#uioprequest) | type | Closes the error dialog on the printer's screen (BambuStudio `command_clean_print_error_uiop`). |
 
 ## Types
 
@@ -55,7 +59,7 @@ Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration)
 struct CalibrationPayload {
     pub command: &'static str,
     pub option: u32,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -71,7 +75,7 @@ Triggers automated physical resonance compensation sweeps and chassis alignments
 
   Calculated 32-bit active target parameter option bitmask [REF-MQTT-LIFECYCLE].
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -89,48 +93,12 @@ Triggers automated physical resonance compensation sweeps and chassis alignments
 
 - <span id="calibrationpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `CalibrationRequest`
-
-```rust
-struct CalibrationRequest {
-    pub print: CalibrationPayload,
-}
-```
-
-Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
-
-#### Fields
-
-- **`print`**: `CalibrationPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="calibrationrequest-new"></span>`fn new(option_bitmask: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `calibration` request from a capability option bitmask.
-
-#### Trait Implementations
-
-##### `impl Clone for CalibrationRequest`
-
-- <span id="calibrationrequest-clone"></span>`fn clone(&self) -> CalibrationRequest` — [`CalibrationRequest`](#calibrationrequest)
-
-##### `impl Debug for CalibrationRequest`
-
-- <span id="calibrationrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for CalibrationRequest`
-
-- <span id="calibrationrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `CleanPrintErrorPayload`
 
 ```rust
 struct CleanPrintErrorPayload {
     pub command: &'static str,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -142,7 +110,7 @@ Clears active error codes from the printer's diagnostic fault register [REF-MQTT
 
   Wire command name, always `"clean_print_error"`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -160,42 +128,6 @@ Clears active error codes from the printer's diagnostic fault register [REF-MQTT
 
 - <span id="cleanprinterrorpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `CleanPrintErrorRequest`
-
-```rust
-struct CleanPrintErrorRequest {
-    pub print: CleanPrintErrorPayload,
-}
-```
-
-Clears the printer's current error state so it can resume operation.
-
-#### Fields
-
-- **`print`**: `CleanPrintErrorPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="cleanprinterrorrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `clean_print_error` request.
-
-#### Trait Implementations
-
-##### `impl Clone for CleanPrintErrorRequest`
-
-- <span id="cleanprinterrorrequest-clone"></span>`fn clone(&self) -> CleanPrintErrorRequest` — [`CleanPrintErrorRequest`](#cleanprinterrorrequest)
-
-##### `impl Debug for CleanPrintErrorRequest`
-
-- <span id="cleanprinterrorrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for CleanPrintErrorRequest`
-
-- <span id="cleanprinterrorrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `HmsActionPayload`
 
 ```rust
@@ -204,7 +136,7 @@ struct HmsActionPayload {
     pub err: String,
     pub param: &'static str,
     pub job_id: String,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -233,7 +165,7 @@ and `job_id` alongside the command name. `err` is the code in *decimal* — Bamb
 
   The current job's `job_id`, or empty when unknown (bambuddy sends `""` then).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -251,53 +183,6 @@ and `job_id` alongside the command name. `err` is the code in *decimal* — Bamb
 
 - <span id="hmsactionpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `HmsActionRequest`
-
-```rust
-struct HmsActionRequest {
-    pub print: HmsActionPayload,
-}
-```
-
-Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it.
-
-#### Fields
-
-- **`print`**: `HmsActionPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="hmsactionrequest-ignore"></span>`fn ignore(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an `ignore` request: skip the next re-check of `error_code` and resume.
-
-  Unlike a plain `resume` ("fixed it, re-check"), this stops a fault such as a wrong build
-  plate from being re-detected and re-pausing the print a second later (bambuddy #1869).
-
-- <span id="hmsactionrequest-resume"></span>`fn resume(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an error-aware `resume` request, the form BambuStudio's error dialog sends.
-
-- <span id="hmsactionrequest-stop"></span>`fn stop(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an error-aware `stop` request, the form BambuStudio's error dialog sends.
-
-#### Trait Implementations
-
-##### `impl Clone for HmsActionRequest`
-
-- <span id="hmsactionrequest-clone"></span>`fn clone(&self) -> HmsActionRequest` — [`HmsActionRequest`](#hmsactionrequest)
-
-##### `impl Debug for HmsActionRequest`
-
-- <span id="hmsactionrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for HmsActionRequest`
-
-- <span id="hmsactionrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `IdleIgnorePayload`
 
 ```rust
@@ -305,7 +190,7 @@ struct IdleIgnorePayload {
     pub command: &'static str,
     pub err: String,
     pub ignore_type: u8,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -325,7 +210,7 @@ Dismisses a warning without resuming anything [REF-MQTT-LIFECYCLE].
 
   `0` dismisses this occurrence; `1` suppresses the same warning permanently.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -343,49 +228,13 @@ Dismisses a warning without resuming anything [REF-MQTT-LIFECYCLE].
 
 - <span id="idleignorepayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `IdleIgnoreRequest`
-
-```rust
-struct IdleIgnoreRequest {
-    pub print: IdleIgnorePayload,
-}
-```
-
-Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`).
-
-#### Fields
-
-- **`print`**: `IdleIgnorePayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="idleignorerequest-new"></span>`fn new(error_code: u32, persistent: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an `idle_ignore` request; `persistent` selects `type: 1` (never show again).
-
-#### Trait Implementations
-
-##### `impl Clone for IdleIgnoreRequest`
-
-- <span id="idleignorerequest-clone"></span>`fn clone(&self) -> IdleIgnoreRequest` — [`IdleIgnoreRequest`](#idleignorerequest)
-
-##### `impl Debug for IdleIgnoreRequest`
-
-- <span id="idleignorerequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for IdleIgnoreRequest`
-
-- <span id="idleignorerequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `PrintSpeedPayload`
 
 ```rust
 struct PrintSpeedPayload {
     pub command: &'static str,
     pub param: String,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -405,7 +254,7 @@ Dynamically scales maximum movement velocity and acceleration limits.
   * `"3"`: Sport Mode (124% limits).
   * `"4"`: Ludicrous Mode (166% limits).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -423,49 +272,13 @@ Dynamically scales maximum movement velocity and acceleration limits.
 
 - <span id="printspeedpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `PrintSpeedRequest`
-
-```rust
-struct PrintSpeedRequest {
-    pub print: PrintSpeedPayload,
-}
-```
-
-Changes the active print speed profile (silent, standard, sport, ludicrous).
-
-#### Fields
-
-- **`print`**: `PrintSpeedPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="printspeedrequest-new"></span>`fn new(speed_index_str: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `print_speed` request from a stringified speed index.
-
-#### Trait Implementations
-
-##### `impl Clone for PrintSpeedRequest`
-
-- <span id="printspeedrequest-clone"></span>`fn clone(&self) -> PrintSpeedRequest` — [`PrintSpeedRequest`](#printspeedrequest)
-
-##### `impl Debug for PrintSpeedRequest`
-
-- <span id="printspeedrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for PrintSpeedRequest`
-
-- <span id="printspeedrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `SkipObjectsPayload`
 
 ```rust
 struct SkipObjectsPayload {
     pub command: &'static str,
     pub obj_list: Vec<u32>,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -481,7 +294,7 @@ Instructs the printer to bypass rendering specific objects within active multi-m
 
   List of object indices (as sliced) to skip rendering.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -499,60 +312,24 @@ Instructs the printer to bypass rendering specific objects within active multi-m
 
 - <span id="skipobjectspayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `SkipObjectsRequest`
-
-```rust
-struct SkipObjectsRequest {
-    pub print: SkipObjectsPayload,
-}
-```
-
-Tells the printer to skip specific objects in a multi-object print.
-
-#### Fields
-
-- **`print`**: `SkipObjectsPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="skipobjectsrequest-new"></span>`fn new(object_indices: Vec<u32>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `skip_objects` request from a list of object indices to skip.
-
-#### Trait Implementations
-
-##### `impl Clone for SkipObjectsRequest`
-
-- <span id="skipobjectsrequest-clone"></span>`fn clone(&self) -> SkipObjectsRequest` — [`SkipObjectsRequest`](#skipobjectsrequest)
-
-##### `impl Debug for SkipObjectsRequest`
-
-- <span id="skipobjectsrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for SkipObjectsRequest`
-
-- <span id="skipobjectsrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `StandardControlPayload`
 
 ```rust
 struct StandardControlPayload {
-    pub command: String,
-    pub sequence_id: String,
+    pub command: &'static str,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
-General control payload used for pause, resume, stop, and clean actions.
+General control payload used for pause, resume, stop and the other name-only commands.
 
 #### Fields
 
-- **`command`**: `String`
+- **`command`**: `&'static str`
 
-  Wire command name ("pause", "resume", "stop", etc.), a dynamic string rather than `&'static str`.
+  Wire command name — see [`StandardCommand`](#standardcommand).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -570,48 +347,12 @@ General control payload used for pause, resume, stop, and clean actions.
 
 - <span id="standardcontrolpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `StandardControlRequest`
-
-```rust
-struct StandardControlRequest {
-    pub print: StandardControlPayload,
-}
-```
-
-Sends a print lifecycle command (pause, resume, stop) to the printer.
-
-#### Fields
-
-- **`print`**: `StandardControlPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="standardcontrolrequest-new"></span>`fn new(command: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
-
-#### Trait Implementations
-
-##### `impl Clone for StandardControlRequest`
-
-- <span id="standardcontrolrequest-clone"></span>`fn clone(&self) -> StandardControlRequest` — [`StandardControlRequest`](#standardcontrolrequest)
-
-##### `impl Debug for StandardControlRequest`
-
-- <span id="standardcontrolrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for StandardControlRequest`
-
-- <span id="standardcontrolrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `UiopPayload`
 
 ```rust
 struct UiopPayload {
     pub command: &'static str,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
     pub name: &'static str,
     pub action: &'static str,
     pub source: u8,
@@ -628,7 +369,7 @@ Closes the printer's on-screen `print_error` dialog [REF-MQTT-LIFECYCLE].
 
   Wire command name, always `"uiop"`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -666,42 +407,182 @@ Closes the printer's on-screen `print_error` dialog [REF-MQTT-LIFECYCLE].
 
 - <span id="uioppayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `IdleIgnoreScope`
+
+```rust
+enum IdleIgnoreScope {
+    Once,
+    Permanent,
+}
+```
+
+How long an `idle_ignore` dismissal lasts.
+
+#### Variants
+
+- **`Once`**
+
+  Dismiss this occurrence only (`type: 0`).
+
+- **`Permanent`**
+
+  Never show this warning again (`type: 1`).
+
+#### Trait Implementations
+
+##### `impl Clone for IdleIgnoreScope`
+
+- <span id="idleignorescope-clone"></span>`fn clone(&self) -> IdleIgnoreScope` — [`IdleIgnoreScope`](#idleignorescope)
+
+##### `impl Copy for IdleIgnoreScope`
+
+##### `impl Debug for IdleIgnoreScope`
+
+- <span id="idleignorescope-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for IdleIgnoreScope`
+
+##### `impl Hash for IdleIgnoreScope`
+
+- <span id="idleignorescope-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for IdleIgnoreScope`
+
+- <span id="idleignorescope-partialeq-eq"></span>`fn eq(&self, other: &IdleIgnoreScope) -> bool` — [`IdleIgnoreScope`](#idleignorescope)
+
+### `StandardCommand`
+
+```rust
+enum StandardCommand {
+    Pause,
+    Resume,
+    Stop,
+    RefreshNozzle,
+    CloseAirFilter,
+    AutoStopAmsDry,
+}
+```
+
+A print-lifecycle command that carries nothing but its name and `sequence_id` [REF-MQTT-LIFECYCLE].
+
+#### Variants
+
+- **`Pause`**
+
+  Pause the running job (`pause`).
+
+- **`Resume`**
+
+  Resume a paused job (`resume`).
+
+- **`Stop`**
+
+  Stop the job (`stop`).
+
+- **`RefreshNozzle`**
+
+  Re-read the nozzle information (`refresh_nozzle`).
+
+- **`CloseAirFilter`**
+
+  Turn off air purification (`close_air_filt`).
+
+- **`AutoStopAmsDry`**
+
+  The error dialog's "stop drying" (`auto_stop_ams_dry`).
+
+#### Implementations
+
+- <span id="standardcommand-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The wire command name.
+
+#### Trait Implementations
+
+##### `impl Clone for StandardCommand`
+
+- <span id="standardcommand-clone"></span>`fn clone(&self) -> StandardCommand` — [`StandardCommand`](#standardcommand)
+
+##### `impl Copy for StandardCommand`
+
+##### `impl Debug for StandardCommand`
+
+- <span id="standardcommand-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for StandardCommand`
+
+##### `impl Hash for StandardCommand`
+
+- <span id="standardcommand-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for StandardCommand`
+
+- <span id="standardcommand-partialeq-eq"></span>`fn eq(&self, other: &StandardCommand) -> bool` — [`StandardCommand`](#standardcommand)
+
+### `CalibrationRequest`
+
+```rust
+type CalibrationRequest = super::Print<CalibrationPayload>;
+```
+
+Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
+
+### `CleanPrintErrorRequest`
+
+```rust
+type CleanPrintErrorRequest = super::Print<CleanPrintErrorPayload>;
+```
+
+Clears the printer's current error state so it can resume operation.
+
+### `HmsActionRequest`
+
+```rust
+type HmsActionRequest = super::Print<HmsActionPayload>;
+```
+
+Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it.
+
+### `IdleIgnoreRequest`
+
+```rust
+type IdleIgnoreRequest = super::Print<IdleIgnorePayload>;
+```
+
+Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`).
+
+### `PrintSpeedRequest`
+
+```rust
+type PrintSpeedRequest = super::Print<PrintSpeedPayload>;
+```
+
+Changes the active print speed profile (silent, standard, sport, ludicrous).
+
+### `SkipObjectsRequest`
+
+```rust
+type SkipObjectsRequest = super::Print<SkipObjectsPayload>;
+```
+
+Tells the printer to skip specific objects in a multi-object print.
+
+### `StandardControlRequest`
+
+```rust
+type StandardControlRequest = super::Print<StandardControlPayload>;
+```
+
+Sends a name-only print lifecycle command (pause, resume, stop, ...) to the printer.
+
 ### `UiopRequest`
 
 ```rust
-struct UiopRequest {
-    pub system: UiopPayload,
-}
+type UiopRequest = super::System<UiopPayload>;
 ```
 
 Closes the error dialog on the printer's screen (BambuStudio `command_clean_print_error_uiop`).
 
 Separate from [`CleanPrintErrorRequest`](#cleanprinterrorrequest), which clears the error latch: BambuStudio sends
 this once whenever its own copy of the dialog closes.
-
-#### Fields
-
-- **`system`**: `UiopPayload`
-
-  The `system` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="uioprequest-close-print-error"></span>`fn close_print_error(error_code: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `uiop` request closing the dialog for `error_code`.
-
-#### Trait Implementations
-
-##### `impl Clone for UiopRequest`
-
-- <span id="uioprequest-clone"></span>`fn clone(&self) -> UiopRequest` — [`UiopRequest`](#uioprequest)
-
-##### `impl Debug for UiopRequest`
-
-- <span id="uioprequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for UiopRequest`
-
-- <span id="uioprequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 

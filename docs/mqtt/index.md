@@ -37,6 +37,47 @@ directly — it wraps `MqttClient` with higher-level methods and safety checks.
 
 ## Types
 
+### `EchoKey`
+
+```rust
+struct EchoKey {
+    pub command: String,
+    pub sequence_id: u32,
+}
+```
+
+The `(command, sequence_id)` pair that ties a command to its echo [REF-MQTT-ACK].
+
+Both halves are required: background `push_status` telemetry carries its own independent
+`sequence_id` counter under the same shape, so a number match alone can be a different
+message.
+
+#### Fields
+
+- **`command`**: `String`
+
+  The wire command name.
+
+- **`sequence_id`**: `u32`
+
+  The `sequence_id`, decoded from whichever form (decimal string or number) it was sent in.
+
+#### Trait Implementations
+
+##### `impl Clone for EchoKey`
+
+- <span id="echokey-clone"></span>`fn clone(&self) -> EchoKey` — [`EchoKey`](client/index.md#echokey)
+
+##### `impl Debug for EchoKey`
+
+- <span id="echokey-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for EchoKey`
+
+##### `impl PartialEq for EchoKey`
+
+- <span id="echokey-partialeq-eq"></span>`fn eq(&self, other: &EchoKey) -> bool` — [`EchoKey`](client/index.md#echokey)
+
 ### `MqttClient<IO: AsyncIo>`
 
 ```rust
@@ -49,7 +90,7 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 #### Implementations
 
-- <span id="mqttclient-connect"></span>`async fn connect(stream: IO, identity: &PrinterIdentity) -> Result<Self, Error>` — [`PrinterIdentity`](../identity/index.md#printeridentity), [`Error`](../error/index.md#error)
+- <span id="mqttclient-connect"></span>`async fn connect(stream: IO, serial: &str, access_code: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
 
   Executes a secure local network connection handshake and subscription loop with the printer.
 
@@ -67,7 +108,7 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 - <span id="mqttclient-serial"></span>`fn serial(&self) -> &str`
 
-  Returns the serial number this client authenticated with (`connect()`'s `serial` argument).
+  Returns the serial number this client authenticated with.
 
 - <span id="mqttclient-publish-command"></span>`async fn publish_command<T: TimerProvider>(&mut self, payload: &[u8], timer: &T) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -116,24 +157,27 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 - <span id="mqttclient-is-poisoned"></span>`fn is_poisoned(&self) -> bool`
 
-  Returns true once a write has failed and left the stream possibly desynced.
+  Returns true once either side of the stream is permanently desynced.
 
-  A poisoned client is permanently unusable: every later `publish_command`, `send_ping`,
-  and automatic PUBACK returns `ConnectionAborted` forever, because a failed write may have
-  put a partial frame on the wire and, unlike a read, has no resumable progress state.
-  Without this accessor a retry loop could not tell that error apart from a transient one
-  and would spin against a client that can never recover; the correct response is to drop
-  the connection and reconnect (`PrinterClient::disconnect_mqtt()`).
+  The write side poisons when a write fails: it may have put a partial frame on the wire and,
+  unlike a read, has no resumable progress state, so every later `publish_command`,
+  `send_ping` and automatic PUBACK returns `ConnectionAborted`. The read side poisons on a
+  malformed length prefix or an oversized frame, after which every read returns
+  `InvalidInput`. Either way the client can never recover; the correct response is to drop
+  the connection and reconnect (`PrinterClient::disconnect_mqtt()`), not to retry.
 
-- <span id="mqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="mqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Liveness>` — [`Liveness`](client/index.md#liveness)
 
-  Platform-agnostic timer tick update.
+  Advances the liveness clocks by `elapsed_secs` and reports the first violated condition.
 
-  Evaluates two independent liveness conditions:
-  1. **Write zombie**: A published command has gone unanswered for 10+ seconds
-     [REF-MQTT-ZOMBIE].
-  2. **Connection staleness**: No packets of any kind received for 60+ seconds,
-     indicating a silently dropped connection — independent of (1) [REF-MQTT-CONN].
+  Two independent conditions, checked in this order:
+
+  1. [`Liveness::WriteZombie`]: a published command has gone [`MQTT_ZOMBIE_TIMEOUT_SECS`](client/index.md#mqtt-zombie-timeout-secs)
+     with no answer [REF-MQTT-ZOMBIE].
+  2. [`Liveness::Stale`]: no packets of any kind for `MQTT_STALE_CONNECTION_SECS` (60s),
+     a silently dropped connection [REF-MQTT-CONN].
+
+  Both mean the connection should be dropped and re-established.
 
 - <span id="mqttclient-in-flight-count"></span>`fn in_flight_count(&self) -> usize`
 
@@ -172,435 +216,57 @@ Incoming MQTT message details parsed from the wire.
 
 - <span id="mqttmessage-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-### `AirductRequest`
+### `ClampedTaskId`
 
 ```rust
-struct AirductRequest {
-    pub print: AirductPayload,
-}
+struct ClampedTaskId();
 ```
 
-Switches the enclosure airduct damper between cooling, heating, and laser modes.
+A task or sequence id already reduced into the range firmware accepts (below `i32::MAX`).
 
-#### Fields
-
-- **`print`**: `AirductPayload`
-
-  The `print` namespace envelope required by the wire protocol.
+Every request constructor takes `impl Into<ClampedTaskId>`; the only way to make one is the
+clamping `From<u64>`, so an out-of-range id can't reach the wire. Serializes as a decimal
+string, the form the printer expects.
 
 #### Implementations
 
-- <span id="airductrequest-new"></span>`fn new(mode: AirductMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`AirductMode`](commands/hardware/index.md#airductmode), [`ClampedTaskId`](commands/index.md#clampedtaskid)
+- <span id="clampedtaskid-get"></span>`const fn get(self) -> u32`
 
-  Builds a `set_airduct` request for the given damper mode.
-
-#### Trait Implementations
-
-##### `impl Clone for AirductRequest`
-
-- <span id="airductrequest-clone"></span>`fn clone(&self) -> AirductRequest` — [`AirductRequest`](commands/hardware/index.md#airductrequest)
-
-##### `impl Debug for AirductRequest`
-
-- <span id="airductrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AirductRequest`
-
-- <span id="airductrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `AmsChangeFilamentRequest`
-
-```rust
-struct AmsChangeFilamentRequest {
-    pub print: AmsChangeFilamentPayload,
-}
-```
-
-Loads or unloads filament from an AMS slot or external spool to the toolhead.
-
-#### Fields
-
-- **`print`**: `AmsChangeFilamentPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds an `ams_change_filament` request to load or unload filament.
-
-  Pass `extruder_id: None` on any printer without a Filament Track Switch — the wire
-  payload is then byte-identical to the pre-FTS form. See
-  [`AmsChangeFilamentPayload::extruder_id`](commands/ams/index.md#amschangefilamentpayload) for why an FTS machine requires it.
+  The clamped value.
 
 #### Trait Implementations
 
-##### `impl Clone for AmsChangeFilamentRequest`
+##### `impl Clone for ClampedTaskId`
 
-- <span id="amschangefilamentrequest-clone"></span>`fn clone(&self) -> AmsChangeFilamentRequest` — [`AmsChangeFilamentRequest`](commands/ams/index.md#amschangefilamentrequest)
+- <span id="clampedtaskid-clone"></span>`fn clone(&self) -> ClampedTaskId` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
 
-##### `impl Debug for AmsChangeFilamentRequest`
+##### `impl Copy for ClampedTaskId`
 
-- <span id="amschangefilamentrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+##### `impl Debug for ClampedTaskId`
 
-##### `impl Serialize for AmsChangeFilamentRequest`
+- <span id="clampedtaskid-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-- <span id="amschangefilamentrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+##### `impl Display for ClampedTaskId`
 
-### `AmsControlRequest`
+- <span id="clampedtaskid-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
-```rust
-struct AmsControlRequest {
-    pub print: AmsControlPayload,
-}
-```
+##### `impl Eq for ClampedTaskId`
 
-Sends a resume, pause, or reset command to the AMS feed mechanism.
+##### `impl Hash for ClampedTaskId`
 
-#### Fields
+- <span id="clampedtaskid-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
 
-- **`print`**: `AmsControlPayload`
+##### `impl PartialEq for ClampedTaskId`
 
-  The `print` namespace envelope required by the wire protocol.
+- <span id="clampedtaskid-partialeq-eq"></span>`fn eq(&self, other: &ClampedTaskId) -> bool` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
 
-#### Implementations
+##### `impl Serialize for ClampedTaskId`
 
-- <span id="amscontrolrequest-new"></span>`fn new(operation: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
+- <span id="clampedtaskid-serialize"></span>`fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
 
-  Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
+##### `impl ToString for ClampedTaskId`
 
-#### Trait Implementations
-
-##### `impl Clone for AmsControlRequest`
-
-- <span id="amscontrolrequest-clone"></span>`fn clone(&self) -> AmsControlRequest` — [`AmsControlRequest`](commands/ams/index.md#amscontrolrequest)
-
-##### `impl Debug for AmsControlRequest`
-
-- <span id="amscontrolrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsControlRequest`
-
-- <span id="amscontrolrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `AmsFilamentDryingRequest`
-
-```rust
-struct AmsFilamentDryingRequest {
-    pub print: AmsFilamentDryingPayload,
-}
-```
-
-Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
-
-#### Fields
-
-- **`print`**: `AmsFilamentDryingPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amsfilamentdryingrequest-start"></span>`fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`DryingParams`](commands/ams/index.md#dryingparams), [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a request starting a drying cycle on the unit at `ams_id`.
-
-- <span id="amsfilamentdryingrequest-stop"></span>`fn stop(ams_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a request stopping the drying cycle on the unit at `ams_id`.
-
-  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`): every field
-  but the unit and mode zeroed.
-
-#### Trait Implementations
-
-##### `impl Clone for AmsFilamentDryingRequest`
-
-- <span id="amsfilamentdryingrequest-clone"></span>`fn clone(&self) -> AmsFilamentDryingRequest` — [`AmsFilamentDryingRequest`](commands/ams/index.md#amsfilamentdryingrequest)
-
-##### `impl Debug for AmsFilamentDryingRequest`
-
-- <span id="amsfilamentdryingrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsFilamentDryingRequest`
-
-- <span id="amsfilamentdryingrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `AmsFilamentSettingRequest`
-
-```rust
-struct AmsFilamentSettingRequest {
-    pub print: AmsFilamentSettingPayload,
-}
-```
-
-Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
-
-#### Fields
-
-- **`print`**: `AmsFilamentSettingPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Creates a request payload to update slot parameters.
-
-  **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
-  For standard physical slots, `ams_id` matches the expansion unit index (0-3). For an
-  external spool, pass the virtual `ams_id` (`255` single-nozzle / Ext-R, `254` Ext-L)
-  with `slot_id: 0`. An A2L-attached AMS Lite takes its physical wire id `16` with a local
-  `0..=3` slot, not the normalized `6` telemetry reports it as (bambuddy
-  `ams_set_filament_setting`, matching the firmware's own `ams_mapping2`).
-
-  **`slot_id` is what you pass; `tray_id` is derived.** Both reach the wire, and they
-  differ on a virtual tray: `tray_id` becomes `254` for either external `ams_id` and the
-  slot index otherwise. Deriving it here rather than accepting it means a caller cannot
-  send a `slot_id`/`tray_id` pair that contradicts itself — the same reasoning as
-  `PrinterClient::change_filament()` deriving `target`.
-
-  Confirmed against BambuStudio's `command_ams_filament_settings`
-  (`DeviceManager.cpp:1707-1722`), whose `tag_tray_id` maps either
-  `VIRTUAL_TRAY_MAIN_ID`/`VIRTUAL_TRAY_DEPUTY_ID` to `254` and whose own call sites pass
-  `slot_id: 0` for a virtual tray (`:4853`, `:4877`); and against bambuddy's
-  `ams_set_filament_setting`, which sends `ams_id: 255`, `tray_id: 254`, `slot_id: 0` for
-  a single external slot.
-
-  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
-  addressing differs by command family — this rule is *not* the same one used by
-  `extrusion_cali_sel` (K-profile binding, see
-  `crate::diagnostics::ExtrusionCaliSelRequest::new`):
-  * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
-    `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
-    (`ams_id: 255`) require `tray_id: 254` (confirmed against
-    `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
-    VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
-    `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
-  * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
-    Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
-    `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
-    Ext-R on IDEX machines mis-routes the pressure advance profile to the left
-    carriage (Ext-L) EEPROM, leaving the primary right carriage completely
-    uncalibrated.
-
-  Only the addressing is positional. Everything the command *describes* — the filament,
-  its color, its temperature window, its preset ids — is set through the `with_*` methods
-  below, following the convention [`PrintJobConfig`](commands/print_job/index.md#printjobconfig) already
-  establishes in this crate.
-
-  This replaced a 9-argument constructor. `nozzle_temp_min`/`nozzle_temp_max` were adjacent
-  `u32`s and `ams_id`/`slot_id` adjacent `i32`s, so transposing either pair compiled
-  cleanly and produced a silently wrong command — on a command whose failures are already
-  silent, since the printer acks a corrupted value as `"success"`.
-
-  Fields left unset serialize as empty strings / zero temperatures; `setting_id` is omitted
-  from the wire entirely.
-
-- <span id="amsfilamentsettingrequest-with-filament"></span>`fn with_filament(self, material_type: &str, sub_brands: Option<&str>) -> Self`
-
-  Sets the material type and its sub-brand label.
-
-  `sub_brands` defaults to `"{material_type} Basic"` when `None`. Case is meaningful in
-  both and is left alone — unlike [`with_color`](commands/ams/index.md#amsfilamentsettingrequest).
-
-- <span id="amsfilamentsettingrequest-with-color"></span>`fn with_color(self, color_hex: &str) -> Self`
-
-  Sets the tray color, **normalized to uppercase** with a leading `#` stripped.
-
-  The printer parses lowercase hex letters in `tray_color` as `0` and the corruption is
-  silent: the `ams_filament_setting` ack echoes the value that was sent and reports
-  `result: "success"`, and only the next AMS push status reveals it (measured on a P1S
-  running firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
-
-  The normalization lives here, at the one place the color is set, rather than in each
-  caller — a caller that forgets is exactly how the original bug arrived.
-
-- <span id="amsfilamentsettingrequest-with-temps"></span>`fn with_temps(self, min: u32, max: u32) -> Self`
-
-  Sets the safe nozzle temperature window, in °C.
-
-  Taking both bounds in one call is the point: as two adjacent positional `u32`s they were
-  transposable without a compile error.
-
-- <span id="amsfilamentsettingrequest-with-preset"></span>`fn with_preset(self, preset_code: &str) -> Self`
-
-  Sets the **short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"`.
-
-  A long `"PF"`-prefixed cloud id does not belong here — pass that to
-  [`with_setting_id`](commands/ams/index.md#amsfilamentsettingrequest). See
-  [`AmsFilamentSettingPayload::tray_info_idx`](commands/ams/index.md#amsfilamentsettingpayload) for what the printer does when the two are
-  conflated.
-
-- <span id="amsfilamentsettingrequest-with-setting-id"></span>`fn with_setting_id(self, setting_id: &str) -> Self`
-
-  Attaches the full preset identifier, which is a separate wire field from
-  `tray_info_idx` and is omitted entirely when not set.
-
-  Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
-  code in [`with_preset`](commands/ams/index.md#amsfilamentsettingrequest). See
-  [`AmsFilamentSettingPayload::tray_info_idx`](commands/ams/index.md#amsfilamentsettingpayload) for what the printer does when a long id is
-  put in the short field instead.
-
-#### Trait Implementations
-
-##### `impl Clone for AmsFilamentSettingRequest`
-
-- <span id="amsfilamentsettingrequest-clone"></span>`fn clone(&self) -> AmsFilamentSettingRequest` — [`AmsFilamentSettingRequest`](commands/ams/index.md#amsfilamentsettingrequest)
-
-##### `impl Debug for AmsFilamentSettingRequest`
-
-- <span id="amsfilamentsettingrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsFilamentSettingRequest`
-
-- <span id="amsfilamentsettingrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `AmsGetRfidRequest`
-
-```rust
-struct AmsGetRfidRequest {
-    pub print: AmsGetRfidPayload,
-}
-```
-
-Requests an RFID tag scan on a specific AMS slot.
-
-#### Fields
-
-- **`print`**: `AmsGetRfidPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amsgetrfidrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds an `ams_get_rfid` request.
-
-#### Trait Implementations
-
-##### `impl Clone for AmsGetRfidRequest`
-
-- <span id="amsgetrfidrequest-clone"></span>`fn clone(&self) -> AmsGetRfidRequest` — [`AmsGetRfidRequest`](commands/ams/index.md#amsgetrfidrequest)
-
-##### `impl Debug for AmsGetRfidRequest`
-
-- <span id="amsgetrfidrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsGetRfidRequest`
-
-- <span id="amsgetrfidrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `BuzzerRequest`
-
-```rust
-struct BuzzerRequest {
-    pub print: BuzzerPayload,
-}
-```
-
-Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
-
-#### Fields
-
-- **`print`**: `BuzzerPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="buzzerrequest-new"></span>`fn new(mode_code: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `buzzer_ctrl` request for the given alarm mode.
-
-#### Trait Implementations
-
-##### `impl Clone for BuzzerRequest`
-
-- <span id="buzzerrequest-clone"></span>`fn clone(&self) -> BuzzerRequest` — [`BuzzerRequest`](commands/hardware/index.md#buzzerrequest)
-
-##### `impl Debug for BuzzerRequest`
-
-- <span id="buzzerrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for BuzzerRequest`
-
-- <span id="buzzerrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `CalibrationRequest`
-
-```rust
-struct CalibrationRequest {
-    pub print: CalibrationPayload,
-}
-```
-
-Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
-
-#### Fields
-
-- **`print`**: `CalibrationPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="calibrationrequest-new"></span>`fn new(option_bitmask: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `calibration` request from a capability option bitmask.
-
-#### Trait Implementations
-
-##### `impl Clone for CalibrationRequest`
-
-- <span id="calibrationrequest-clone"></span>`fn clone(&self) -> CalibrationRequest` — [`CalibrationRequest`](commands/control/index.md#calibrationrequest)
-
-##### `impl Debug for CalibrationRequest`
-
-- <span id="calibrationrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for CalibrationRequest`
-
-- <span id="calibrationrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `CleanPrintErrorRequest`
-
-```rust
-struct CleanPrintErrorRequest {
-    pub print: CleanPrintErrorPayload,
-}
-```
-
-Clears the printer's current error state so it can resume operation.
-
-#### Fields
-
-- **`print`**: `CleanPrintErrorPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="cleanprinterrorrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `clean_print_error` request.
-
-#### Trait Implementations
-
-##### `impl Clone for CleanPrintErrorRequest`
-
-- <span id="cleanprinterrorrequest-clone"></span>`fn clone(&self) -> CleanPrintErrorRequest` — [`CleanPrintErrorRequest`](commands/control/index.md#cleanprinterrorrequest)
-
-##### `impl Debug for CleanPrintErrorRequest`
-
-- <span id="cleanprinterrorrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for CleanPrintErrorRequest`
-
-- <span id="cleanprinterrorrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+- <span id="clampedtaskid-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `DryingParams`
 
@@ -671,250 +337,6 @@ least `temp` and `duration_hours`.
 ##### `impl PartialEq for DryingParams`
 
 - <span id="dryingparams-partialeq-eq"></span>`fn eq(&self, other: &DryingParams) -> bool` — [`DryingParams`](commands/ams/index.md#dryingparams)
-
-### `GCodeRequest`
-
-```rust
-struct GCodeRequest {
-    pub print: GCodePayload,
-}
-```
-
-Sends a raw G-code line to the printer for immediate execution.
-
-#### Fields
-
-- **`print`**: `GCodePayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Creates a request envelope wrapping a raw G-code payload.
-
-  **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
-  to ensure the physical controller's stream parser identifies the end-of-command boundary.
-
-#### Trait Implementations
-
-##### `impl Clone for GCodeRequest`
-
-- <span id="gcoderequest-clone"></span>`fn clone(&self) -> GCodeRequest` — [`GCodeRequest`](commands/gcode/index.md#gcoderequest)
-
-##### `impl Debug for GCodeRequest`
-
-- <span id="gcoderequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for GCodeRequest`
-
-- <span id="gcoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `GetAccessCodeRequest`
-
-```rust
-struct GetAccessCodeRequest {
-    pub system: GetAccessCodePayload,
-}
-```
-
-Queries the printer for its own current LAN access code.
-
-Distinct from the access code the caller supplies to authenticate: this re-reads the value
-from the printer over an already-authenticated session, which is how a client notices that a
-rotated code has invalidated its cached credential.
-
-The reply is `system`-wrapped and echoes the request's `sequence_id`, alongside
-`access_code`, `result`, and `reason` — confirmed on a P1S via `bambino-cli ack-probe`
-(issue #140); see `reference/03_mqtt_telemetry.md` for the observed shape.
-
-Treat the returned code as a credential: it must never be logged or written to disk.
-
-#### Fields
-
-- **`system`**: `GetAccessCodePayload`
-
-  The `system` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="getaccesscoderequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `get_access_code` request.
-
-#### Trait Implementations
-
-##### `impl Clone for GetAccessCodeRequest`
-
-- <span id="getaccesscoderequest-clone"></span>`fn clone(&self) -> GetAccessCodeRequest` — [`GetAccessCodeRequest`](commands/status/index.md#getaccesscoderequest)
-
-##### `impl Debug for GetAccessCodeRequest`
-
-- <span id="getaccesscoderequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for GetAccessCodeRequest`
-
-- <span id="getaccesscoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `GetVersionRequest`
-
-```rust
-struct GetVersionRequest {
-    pub info: GetVersionPayload,
-}
-```
-
-Queries the printer for its hardware and firmware version info.
-
-#### Fields
-
-- **`info`**: `GetVersionPayload`
-
-  The `info` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="getversionrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `get_version` request.
-
-#### Trait Implementations
-
-##### `impl Clone for GetVersionRequest`
-
-- <span id="getversionrequest-clone"></span>`fn clone(&self) -> GetVersionRequest` — [`GetVersionRequest`](commands/status/index.md#getversionrequest)
-
-##### `impl Debug for GetVersionRequest`
-
-- <span id="getversionrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for GetVersionRequest`
-
-- <span id="getversionrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `HmsActionRequest`
-
-```rust
-struct HmsActionRequest {
-    pub print: HmsActionPayload,
-}
-```
-
-Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it.
-
-#### Fields
-
-- **`print`**: `HmsActionPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="hmsactionrequest-ignore"></span>`fn ignore(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds an `ignore` request: skip the next re-check of `error_code` and resume.
-
-  Unlike a plain `resume` ("fixed it, re-check"), this stops a fault such as a wrong build
-  plate from being re-detected and re-pausing the print a second later (bambuddy #1869).
-
-- <span id="hmsactionrequest-resume"></span>`fn resume(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds an error-aware `resume` request, the form BambuStudio's error dialog sends.
-
-- <span id="hmsactionrequest-stop"></span>`fn stop(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds an error-aware `stop` request, the form BambuStudio's error dialog sends.
-
-#### Trait Implementations
-
-##### `impl Clone for HmsActionRequest`
-
-- <span id="hmsactionrequest-clone"></span>`fn clone(&self) -> HmsActionRequest` — [`HmsActionRequest`](commands/control/index.md#hmsactionrequest)
-
-##### `impl Debug for HmsActionRequest`
-
-- <span id="hmsactionrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for HmsActionRequest`
-
-- <span id="hmsactionrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `IdleIgnoreRequest`
-
-```rust
-struct IdleIgnoreRequest {
-    pub print: IdleIgnorePayload,
-}
-```
-
-Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`).
-
-#### Fields
-
-- **`print`**: `IdleIgnorePayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="idleignorerequest-new"></span>`fn new(error_code: u32, persistent: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds an `idle_ignore` request; `persistent` selects `type: 1` (never show again).
-
-#### Trait Implementations
-
-##### `impl Clone for IdleIgnoreRequest`
-
-- <span id="idleignorerequest-clone"></span>`fn clone(&self) -> IdleIgnoreRequest` — [`IdleIgnoreRequest`](commands/control/index.md#idleignorerequest)
-
-##### `impl Debug for IdleIgnoreRequest`
-
-- <span id="idleignorerequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for IdleIgnoreRequest`
-
-- <span id="idleignorerequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `LedCtrlRequest`
-
-```rust
-struct LedCtrlRequest {
-    pub system: LedCtrlPayload,
-}
-```
-
-Turns chamber or toolhead LEDs on or off.
-
-#### Fields
-
-- **`system`**: `LedCtrlPayload`
-
-  The `system` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="ledctrlrequest-new"></span>`fn new(led_node: &str, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a simple on/off `ledctrl` request for the given fixture.
-
-- <span id="ledctrlrequest-new-flashing"></span>`fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
-
-#### Trait Implementations
-
-##### `impl Clone for LedCtrlRequest`
-
-- <span id="ledctrlrequest-clone"></span>`fn clone(&self) -> LedCtrlRequest` — [`LedCtrlRequest`](commands/hardware/index.md#ledctrlrequest)
-
-##### `impl Debug for LedCtrlRequest`
-
-- <span id="ledctrlrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for LedCtrlRequest`
-
-- <span id="ledctrlrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `NozzleRack`
 
@@ -1124,272 +546,60 @@ defaults for calibration flags.
 
 - <span id="printjobconfig-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-### `PrintSpeedRequest`
+### `Liveness`
 
 ```rust
-struct PrintSpeedRequest {
-    pub print: PrintSpeedPayload,
+enum Liveness {
+    WriteZombie,
+    Stale,
 }
 ```
 
-Changes the active print speed profile (silent, standard, sport, ludicrous).
+Which liveness condition [`MqttClient::tick_zombie_check`](client/index.md#mqttclient) found violated.
 
-#### Fields
+#### Variants
 
-- **`print`**: `PrintSpeedPayload`
+- **`WriteZombie`**
 
-  The `print` namespace envelope required by the wire protocol.
+  A published command has gone [`MQTT_ZOMBIE_TIMEOUT_SECS`](client/index.md#mqtt-zombie-timeout-secs) with no answer [REF-MQTT-ZOMBIE].
+  
+  The broker may be discarding writes. Telemetry may still be arriving, so the read side can
+  look healthy; it is still the signal to reconnect.
 
-#### Implementations
+- **`Stale`**
 
-- <span id="printspeedrequest-new"></span>`fn new(speed_index_str: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `print_speed` request from a stringified speed index.
-
-#### Trait Implementations
-
-##### `impl Clone for PrintSpeedRequest`
-
-- <span id="printspeedrequest-clone"></span>`fn clone(&self) -> PrintSpeedRequest` — [`PrintSpeedRequest`](commands/control/index.md#printspeedrequest)
-
-##### `impl Debug for PrintSpeedRequest`
-
-- <span id="printspeedrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for PrintSpeedRequest`
-
-- <span id="printspeedrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `ProjectFileRequest`
-
-```rust
-struct ProjectFileRequest {
-    pub print: ProjectFilePayload,
-}
-```
-
-Submits a `.3mf` print job from the SD card for execution.
-
-#### Fields
-
-- **`print`**: `ProjectFilePayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: PrinterModel) -> Self` — [`PrintJobConfig`](commands/print_job/index.md#printjobconfig), [`ClampedTaskId`](commands/index.md#clampedtaskid), [`PrinterModel`](../models/index.md#printermodel)
-
-  Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
-
-  `nozzle_offset_cali` is gated on the model's `supports_nozzle_offset_calibration()`
-  quirk as a hard ceiling, not a default: it is enabled automatically on IDEX and
-  tool-changer platforms when the caller left it `None`, and forced off on every
-  single-nozzle model even when the caller explicitly asked for it — the printer has no
-  second carriage to calibrate.
-
-  **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
-  `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
-  serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
-  to treat the value as the physical carriage index (Target nozzle 1) instead of material
-  routing parameters.
+  Nothing at all has arrived for `MQTT_STALE_CONNECTION_SECS` (60s) [REF-MQTT-CONN]: the link
+  is dead. Reconnect.
 
 #### Trait Implementations
 
-##### `impl Clone for ProjectFileRequest`
+##### `impl Clone for Liveness`
 
-- <span id="projectfilerequest-clone"></span>`fn clone(&self) -> ProjectFileRequest` — [`ProjectFileRequest`](commands/print_job/index.md#projectfilerequest)
+- <span id="liveness-clone"></span>`fn clone(&self) -> Liveness` — [`Liveness`](client/index.md#liveness)
 
-##### `impl Debug for ProjectFileRequest`
+##### `impl Copy for Liveness`
 
-- <span id="projectfilerequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+##### `impl Debug for Liveness`
 
-##### `impl Serialize for ProjectFileRequest`
+- <span id="liveness-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-- <span id="projectfilerequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+##### `impl Display for Liveness`
 
-### `PromptSoundRequest`
+- <span id="liveness-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
-```rust
-struct PromptSoundRequest {
-    pub print: PromptSoundPayload,
-}
-```
+##### `impl Eq for Liveness`
 
-Enables or disables the printer's notification sounds.
+##### `impl Hash for Liveness`
 
-#### Fields
+- <span id="liveness-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
 
-- **`print`**: `PromptSoundPayload`
+##### `impl PartialEq for Liveness`
 
-  The `print` namespace envelope required by the wire protocol.
+- <span id="liveness-partialeq-eq"></span>`fn eq(&self, other: &Liveness) -> bool` — [`Liveness`](client/index.md#liveness)
 
-#### Implementations
+##### `impl ToString for Liveness`
 
-- <span id="promptsoundrequest-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `print_option` request enabling or disabling notification sounds.
-
-#### Trait Implementations
-
-##### `impl Clone for PromptSoundRequest`
-
-- <span id="promptsoundrequest-clone"></span>`fn clone(&self) -> PromptSoundRequest` — [`PromptSoundRequest`](commands/hardware/index.md#promptsoundrequest)
-
-##### `impl Debug for PromptSoundRequest`
-
-- <span id="promptsoundrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for PromptSoundRequest`
-
-- <span id="promptsoundrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `PushAllRequest`
-
-```rust
-struct PushAllRequest {
-    pub pushing: PushAllPayload,
-}
-```
-
-Requests a full state dump from the printer (all telemetry fields at once).
-
-#### Fields
-
-- **`pushing`**: `PushAllPayload`
-
-  The `pushing` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="pushallrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `pushall` request.
-
-#### Trait Implementations
-
-##### `impl Clone for PushAllRequest`
-
-- <span id="pushallrequest-clone"></span>`fn clone(&self) -> PushAllRequest` — [`PushAllRequest`](commands/status/index.md#pushallrequest)
-
-##### `impl Debug for PushAllRequest`
-
-- <span id="pushallrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for PushAllRequest`
-
-- <span id="pushallrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `SkipObjectsRequest`
-
-```rust
-struct SkipObjectsRequest {
-    pub print: SkipObjectsPayload,
-}
-```
-
-Tells the printer to skip specific objects in a multi-object print.
-
-#### Fields
-
-- **`print`**: `SkipObjectsPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="skipobjectsrequest-new"></span>`fn new(object_indices: Vec<u32>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `skip_objects` request from a list of object indices to skip.
-
-#### Trait Implementations
-
-##### `impl Clone for SkipObjectsRequest`
-
-- <span id="skipobjectsrequest-clone"></span>`fn clone(&self) -> SkipObjectsRequest` — [`SkipObjectsRequest`](commands/control/index.md#skipobjectsrequest)
-
-##### `impl Debug for SkipObjectsRequest`
-
-- <span id="skipobjectsrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for SkipObjectsRequest`
-
-- <span id="skipobjectsrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `StandardControlRequest`
-
-```rust
-struct StandardControlRequest {
-    pub print: StandardControlPayload,
-}
-```
-
-Sends a print lifecycle command (pause, resume, stop) to the printer.
-
-#### Fields
-
-- **`print`**: `StandardControlPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="standardcontrolrequest-new"></span>`fn new(command: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
-
-#### Trait Implementations
-
-##### `impl Clone for StandardControlRequest`
-
-- <span id="standardcontrolrequest-clone"></span>`fn clone(&self) -> StandardControlRequest` — [`StandardControlRequest`](commands/control/index.md#standardcontrolrequest)
-
-##### `impl Debug for StandardControlRequest`
-
-- <span id="standardcontrolrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for StandardControlRequest`
-
-- <span id="standardcontrolrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `UiopRequest`
-
-```rust
-struct UiopRequest {
-    pub system: UiopPayload,
-}
-```
-
-Closes the error dialog on the printer's screen (BambuStudio `command_clean_print_error_uiop`).
-
-Separate from [`CleanPrintErrorRequest`](commands/control/index.md#cleanprinterrorrequest), which clears the error latch: BambuStudio sends
-this once whenever its own copy of the dialog closes.
-
-#### Fields
-
-- **`system`**: `UiopPayload`
-
-  The `system` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="uioprequest-close-print-error"></span>`fn close_print_error(error_code: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
-
-  Builds a `uiop` request closing the dialog for `error_code`.
-
-#### Trait Implementations
-
-##### `impl Clone for UiopRequest`
-
-- <span id="uioprequest-clone"></span>`fn clone(&self) -> UiopRequest` — [`UiopRequest`](commands/control/index.md#uioprequest)
-
-##### `impl Debug for UiopRequest`
-
-- <span id="uioprequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for UiopRequest`
-
-- <span id="uioprequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+- <span id="liveness-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `AirductMode`
 
@@ -1576,28 +786,230 @@ Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed i
 
 - <span id="calibrationmode-partialeq-eq"></span>`fn eq(&self, other: &CalibrationMode) -> bool` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
+### `AirductRequest`
+
+```rust
+type AirductRequest = super::Print<AirductPayload>;
+```
+
+Switches the enclosure airduct damper between cooling, heating, and laser modes.
+
+### `AmsChangeFilamentRequest`
+
+```rust
+type AmsChangeFilamentRequest = super::Print<AmsChangeFilamentPayload>;
+```
+
+Loads or unloads filament from an AMS slot or external spool to the toolhead.
+
+### `AmsControlRequest`
+
+```rust
+type AmsControlRequest = super::Print<AmsControlPayload>;
+```
+
+Sends a resume, pause, or reset command to the AMS feed mechanism.
+
+### `AmsFilamentDryingRequest`
+
+```rust
+type AmsFilamentDryingRequest = super::Print<AmsFilamentDryingPayload>;
+```
+
+Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
+
+### `AmsFilamentSettingRequest`
+
+```rust
+type AmsFilamentSettingRequest = super::Print<AmsFilamentSettingPayload>;
+```
+
+Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
+
+### `AmsGetRfidRequest`
+
+```rust
+type AmsGetRfidRequest = super::Print<AmsGetRfidPayload>;
+```
+
+Requests an RFID tag scan on a specific AMS slot.
+
+### `BuzzerRequest`
+
+```rust
+type BuzzerRequest = super::Print<BuzzerPayload>;
+```
+
+Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
+
+### `CalibrationRequest`
+
+```rust
+type CalibrationRequest = super::Print<CalibrationPayload>;
+```
+
+Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
+
+### `CleanPrintErrorRequest`
+
+```rust
+type CleanPrintErrorRequest = super::Print<CleanPrintErrorPayload>;
+```
+
+Clears the printer's current error state so it can resume operation.
+
+### `GCodeRequest`
+
+```rust
+type GCodeRequest = super::Print<GCodePayload>;
+```
+
+Sends a raw G-code line to the printer for immediate execution.
+
+### `GetAccessCodeRequest`
+
+```rust
+type GetAccessCodeRequest = super::System<GetAccessCodePayload>;
+```
+
+Queries the printer for its own current LAN access code.
+
+Distinct from the access code the caller supplies to authenticate: this re-reads the value
+from the printer over an already-authenticated session, which is how a client notices that a
+rotated code has invalidated its cached credential.
+
+The reply is `system`-wrapped and echoes the request's `sequence_id`, alongside
+`access_code`, `result`, and `reason` — confirmed on a P1S via `bambino-cli ack-probe`
+(issue #140); see `reference/03_mqtt_telemetry.md` for the observed shape.
+
+Treat the returned code as a credential: it must never be logged or written to disk.
+
+### `GetVersionRequest`
+
+```rust
+type GetVersionRequest = super::Info<GetVersionPayload>;
+```
+
+Queries the printer for its hardware and firmware version info.
+
+### `HmsActionRequest`
+
+```rust
+type HmsActionRequest = super::Print<HmsActionPayload>;
+```
+
+Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it.
+
+### `IdleIgnoreRequest`
+
+```rust
+type IdleIgnoreRequest = super::Print<IdleIgnorePayload>;
+```
+
+Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`).
+
+### `LedCtrlRequest`
+
+```rust
+type LedCtrlRequest = super::System<LedCtrlPayload>;
+```
+
+Turns chamber or toolhead LEDs on or off.
+
+### `PrintSpeedRequest`
+
+```rust
+type PrintSpeedRequest = super::Print<PrintSpeedPayload>;
+```
+
+Changes the active print speed profile (silent, standard, sport, ludicrous).
+
+### `ProjectFileRequest`
+
+```rust
+type ProjectFileRequest = super::Print<ProjectFilePayload>;
+```
+
+Submits a `.3mf` print job from the SD card for execution.
+
+### `PromptSoundRequest`
+
+```rust
+type PromptSoundRequest = super::Print<PromptSoundPayload>;
+```
+
+Enables or disables the printer's notification sounds.
+
+### `PushAllRequest`
+
+```rust
+type PushAllRequest = super::Pushing<PushAllPayload>;
+```
+
+Requests a full state dump from the printer (all telemetry fields at once).
+
+### `SkipObjectsRequest`
+
+```rust
+type SkipObjectsRequest = super::Print<SkipObjectsPayload>;
+```
+
+Tells the printer to skip specific objects in a multi-object print.
+
+### `StandardControlRequest`
+
+```rust
+type StandardControlRequest = super::Print<StandardControlPayload>;
+```
+
+Sends a name-only print lifecycle command (pause, resume, stop, ...) to the printer.
+
+### `UiopRequest`
+
+```rust
+type UiopRequest = super::System<UiopPayload>;
+```
+
+Closes the error dialog on the printer's screen (BambuStudio `command_clean_print_error_uiop`).
+
+Separate from [`CleanPrintErrorRequest`](commands/control/index.md#cleanprinterrorrequest), which clears the error latch: BambuStudio sends
+this once whenever its own copy of the dialog closes.
+
 
 ---
 
 ## Functions
 
-### `clamp_task_id`
+### `echo_key`
 
 ```rust
-fn clamp_task_id(raw_id: u64) -> u32
+fn echo_key(payload: &[u8]) -> Option<EchoKey>
 ```
 
-Wraps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) into the strict boundary limits of a 32-bit signed integer (`2147483647`) via modulo, not saturation.
+**Types:** [`EchoKey`](client/index.md#echokey)
 
-**Why this is critical [REF-MQTT-ENV]:**
-The printer's onboard G-code parsing routine clamps subtask identifiers to standard 32-bit
-signed integer limits. If a connecting client uses an un-clamped millisecond epoch (13-digit integer),
-the memory allocation registers on the motion board will overflow. This causes the printer to lock
-indefinitely in an `IDLE` state and reject all subsequent print dispatches.
+Reads the [`EchoKey`](client/index.md#echokey) from the first top-level wrapper (`print`/`system`/`pushing`/`info`) that carries one.
 
-The modulo semantics are deliberate (`client/mod.rs`'s `next_sequence_id()` wants
-continuation across the wraparound, not a reset to a fixed ceiling) — `clamp_task_id(TASK_ID_MAX)
-== 0`, asserted by `test_clamp_task_id_wraps_near_max` below.
+The one reader for both directions: an outgoing payload when a command is published, and an
+incoming echo when deciding whether it answers the command that armed the write-zombie
+timer. Accepting both `sequence_id` forms on both sides keeps a numerically-echoed id from
+resolving a command handle while leaving its write-zombie armed.
+
+### `report_topic`
+
+```rust
+fn report_topic(serial: &str) -> String
+```
+
+The topic the printer publishes its reports and command echoes on.
+
+### `request_topic`
+
+```rust
+fn request_topic(serial: &str) -> String
+```
+
+The topic commands are published to.
 
 ### `resolve_rack_nozzle_mapping`
 
@@ -1641,6 +1053,13 @@ measurements and the two corrections upstream made to them.
 ---
 
 ## Constants
+
+### `MQTT_ZOMBIE_TIMEOUT_SECS`
+```rust
+const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10u32;
+```
+
+Seconds a published command may go unanswered before [`MqttClient::tick_zombie_check`](client/index.md#mqttclient) reports [`Liveness::WriteZombie`](client/index.md#liveness).
 
 ### `MQTTS_PORT`
 ```rust

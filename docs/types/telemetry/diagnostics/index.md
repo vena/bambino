@@ -32,12 +32,22 @@ Controller information segment detailing current temperature coordinates.
 
 - **`temp`**: `Option<u32>`
 
-  Composite-packed integer temperature value [REF-THER-DECODE].
-  Use `PrinterTelemetry::unpack_temperature()` on this value cast to `f64`.
+  Composite-packed integer temperature value [REF-THER-DECODE]; decode with
+  [`temperatures()`](#ctcinfo).
 
 - **`target`**: `Option<u32>`
 
   Explicit CTC target temperature (authoritative on new-gen models).
+
+#### Implementations
+
+- <span id="ctcinfo-temperatures"></span>`fn temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../../client/index.md#heatertemps)
+
+  The chamber controller's temperatures: `temp` unpacked, with `target` overriding the packed target when present.
+
+  `target` is the authoritative target on new-gen models (bambuddy reads it separately,
+  `bambu_mqtt.py:2652`); BambuStudio derives both halves from the packed `temp`. `None` when
+  `temp` is absent.
 
 #### Trait Implementations
 

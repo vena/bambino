@@ -132,6 +132,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
      model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
      [`Error::DiskWriteFailure`](../../error/index.md#error); a final reply other than `226`/`426` is [`Error::FtpReply`](../../error/index.md#error).
 
+  A payload larger than [`MAX_TRANSFER_BYTES`](../index.md#max-transfer-bytes) is refused
+  with [`Error::InvalidArgument`](../../error/index.md#error) before anything is sent: `download_file` would refuse to
+  read it back.
+
 - <span id="ftpsclient-download-file"></span>`async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error>` — [`Error`](../../error/index.md#error)
 
   Downloads the contents of a remote file from MicroSD storage via the RETR command.

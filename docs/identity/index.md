@@ -63,8 +63,14 @@ Address, serial number, and access code identifying one printer on the LAN.
 
   Builds an identity, deriving `model` from `serial` via [`resolve_model`](../models/index.md#resolve-model).
 
-  For callers who need a specific `model` regardless of what the serial
-  prefix implies, construct the struct literal directly instead.
+  To use a specific model regardless of what the serial prefix implies, chain
+  [`with_model`](#printeridentity); for a discovered printer, use
+  [`SsdpDevice::into_identity`](../discovery/index.md), which keeps the
+  model discovery resolved from its headers.
+
+- <span id="printeridentity-with-model"></span>`fn with_model(self, model: PrinterModel) -> Self` — [`PrinterModel`](../models/index.md#printermodel)
+
+  Replaces the model `new()` derived from the serial.
 
 - <span id="printeridentity-try-new"></span>`fn try_new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
 

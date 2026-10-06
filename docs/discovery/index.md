@@ -135,6 +135,17 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
   Security link state (e.g. "secure").
 
+#### Implementations
+
+- <span id="ssdpdevice-into-identity"></span>`fn into_identity(self, access_code: impl Into<String>) -> crate::identity::PrinterIdentity` — [`PrinterIdentity`](../identity/index.md#printeridentity)
+
+  The identity to connect to this printer with, keeping the model discovery resolved.
+
+  Unlike `PrinterIdentity::new(dev.ip, dev.serial, ..)`, which re-resolves the model from
+  the serial alone, this keeps [`model`](parser/index.md#ssdpdevice) — resolved from the serial *and* the
+  `DevModel`/NT/ST headers — so a printer with an unrecognized serial prefix doesn't fall
+  back to the conservative `Unknown` quirks.
+
 #### Trait Implementations
 
 ##### `impl Clone for SsdpDevice`

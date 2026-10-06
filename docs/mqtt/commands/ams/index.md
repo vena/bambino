@@ -10,32 +10,38 @@ AMS-related MQTT command payloads (filament change, drying, RFID scan, settings)
 
 - [Types](#types)
   - [`AmsChangeFilamentPayload`](#amschangefilamentpayload)
-  - [`AmsChangeFilamentRequest`](#amschangefilamentrequest)
   - [`AmsControlPayload`](#amscontrolpayload)
-  - [`AmsControlRequest`](#amscontrolrequest)
   - [`AmsFilamentDryingPayload`](#amsfilamentdryingpayload)
-  - [`AmsFilamentDryingRequest`](#amsfilamentdryingrequest)
   - [`AmsFilamentSettingPayload`](#amsfilamentsettingpayload)
-  - [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest)
   - [`AmsGetRfidPayload`](#amsgetrfidpayload)
-  - [`AmsGetRfidRequest`](#amsgetrfidrequest)
+  - [`ChangeTemps`](#changetemps)
   - [`DryingParams`](#dryingparams)
+  - [`FilamentSpec`](#filamentspec)
+  - [`AmsControlOp`](#amscontrolop)
+  - [`AmsChangeFilamentRequest`](#amschangefilamentrequest)
+  - [`AmsControlRequest`](#amscontrolrequest)
+  - [`AmsFilamentDryingRequest`](#amsfilamentdryingrequest)
+  - [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest)
+  - [`AmsGetRfidRequest`](#amsgetrfidrequest)
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
 | [`AmsChangeFilamentPayload`](#amschangefilamentpayload) | struct | Triggers filament load or unload sequences on physical AMS units or virtual external spools [REF-AMS-MAP]. |
-| [`AmsChangeFilamentRequest`](#amschangefilamentrequest) | struct | Loads or unloads filament from an AMS slot or external spool to the toolhead. |
 | [`AmsControlPayload`](#amscontrolpayload) | struct | Commands standard AMS controllers to resume, pause, or reset physical material feeds. |
-| [`AmsControlRequest`](#amscontrolrequest) | struct | Sends a resume, pause, or reset command to the AMS feed mechanism. |
 | [`AmsFilamentDryingPayload`](#amsfilamentdryingpayload) | struct | Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER]. |
-| [`AmsFilamentDryingRequest`](#amsfilamentdryingrequest) | struct | Starts or stops a filament drying cycle on an AMS unit with a built-in heater. |
 | [`AmsFilamentSettingPayload`](#amsfilamentsettingpayload) | struct | Overwrites physical attributes or custom slicer presets assigned to a specific tray. |
-| [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest) | struct | Sets filament properties (type, color, temperature range) on an AMS tray or external spool. |
 | [`AmsGetRfidPayload`](#amsgetrfidpayload) | struct | Triggers physical filament feeder movement to scan proprietary RFID tag properties. |
-| [`AmsGetRfidRequest`](#amsgetrfidrequest) | struct | Requests an RFID tag scan on a specific AMS slot. |
+| [`ChangeTemps`](#changetemps) | struct | The nozzle temperatures an `ams_change_filament` carries, °C; `-1` lets the firmware decide. |
 | [`DryingParams`](#dryingparams) | struct | Everything a drying-cycle start carries besides the unit and the mode. |
+| [`FilamentSpec`](#filamentspec) | struct | The description an `ams_filament_setting` can't do without. |
+| [`AmsControlOp`](#amscontrolop) | enum | An `ams_control` operation on the AMS feed mechanism. |
+| [`AmsChangeFilamentRequest`](#amschangefilamentrequest) | type | Loads or unloads filament from an AMS slot or external spool to the toolhead. |
+| [`AmsControlRequest`](#amscontrolrequest) | type | Sends a resume, pause, or reset command to the AMS feed mechanism. |
+| [`AmsFilamentDryingRequest`](#amsfilamentdryingrequest) | type | Starts or stops a filament drying cycle on an AMS unit with a built-in heater. |
+| [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest) | type | Sets filament properties (type, color, temperature range) on an AMS tray or external spool. |
+| [`AmsGetRfidRequest`](#amsgetrfidrequest) | type | Requests an RFID tag scan on a specific AMS slot. |
 
 ## Types
 
@@ -49,7 +55,7 @@ struct AmsChangeFilamentPayload {
     pub target: i32,
     pub curr_temp: i32,
     pub tar_temp: i32,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
     pub extruder_id: Option<u8>,
 }
 ```
@@ -72,12 +78,8 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 
 - **`target`**: `i32`
 
-  Load/unload destination slot (confirmed against BambuStudio's
-  `command_ams_change_filament`, `DeviceManager.cpp:1602-1638`): `255` on unload, the
-  `ams_id` itself for AMS-HT/external-spool units (`ams_id >= 16`), or the flat global
-  tray ID (`ams_id*4 + slot_id`) for a standard unit. Only coincidentally mirrors
-  `slot_id` when `ams_id == 0` — see `PrinterClient::change_filament()`, which derives
-  this field so callers can't misconfigure it.
+  Load/unload destination slot, derived by [`AmsChangeFilamentRequest::load`](#amschangefilamentrequest)/`unload` —
+  see there.
 
 - **`curr_temp`**: `i32`
 
@@ -87,7 +89,7 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 
   Target nozzle temperature (-1 = let firmware decide).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -119,53 +121,13 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 
 - <span id="amschangefilamentpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `AmsChangeFilamentRequest`
-
-```rust
-struct AmsChangeFilamentRequest {
-    pub print: AmsChangeFilamentPayload,
-}
-```
-
-Loads or unloads filament from an AMS slot or external spool to the toolhead.
-
-#### Fields
-
-- **`print`**: `AmsChangeFilamentPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an `ams_change_filament` request to load or unload filament.
-
-  Pass `extruder_id: None` on any printer without a Filament Track Switch — the wire
-  payload is then byte-identical to the pre-FTS form. See
-  [`AmsChangeFilamentPayload::extruder_id`](#amschangefilamentpayload) for why an FTS machine requires it.
-
-#### Trait Implementations
-
-##### `impl Clone for AmsChangeFilamentRequest`
-
-- <span id="amschangefilamentrequest-clone"></span>`fn clone(&self) -> AmsChangeFilamentRequest` — [`AmsChangeFilamentRequest`](#amschangefilamentrequest)
-
-##### `impl Debug for AmsChangeFilamentRequest`
-
-- <span id="amschangefilamentrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsChangeFilamentRequest`
-
-- <span id="amschangefilamentrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `AmsControlPayload`
 
 ```rust
 struct AmsControlPayload {
     pub command: &'static str,
-    pub param: String,
-    pub sequence_id: String,
+    pub param: &'static str,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -177,11 +139,11 @@ Commands standard AMS controllers to resume, pause, or reset physical material f
 
   Wire command name, always `"ams_control"`.
 
-- **`param`**: `String`
+- **`param`**: `&'static str`
 
-  Target physical operation (e.g., "resume", "pause").
+  Target operation — see [`AmsControlOp`](#amscontrolop).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -199,42 +161,6 @@ Commands standard AMS controllers to resume, pause, or reset physical material f
 
 - <span id="amscontrolpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `AmsControlRequest`
-
-```rust
-struct AmsControlRequest {
-    pub print: AmsControlPayload,
-}
-```
-
-Sends a resume, pause, or reset command to the AMS feed mechanism.
-
-#### Fields
-
-- **`print`**: `AmsControlPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amscontrolrequest-new"></span>`fn new(operation: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
-
-#### Trait Implementations
-
-##### `impl Clone for AmsControlRequest`
-
-- <span id="amscontrolrequest-clone"></span>`fn clone(&self) -> AmsControlRequest` — [`AmsControlRequest`](#amscontrolrequest)
-
-##### `impl Debug for AmsControlRequest`
-
-- <span id="amscontrolrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsControlRequest`
-
-- <span id="amscontrolrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `AmsFilamentDryingPayload`
 
 ```rust
@@ -249,7 +175,7 @@ struct AmsFilamentDryingPayload {
     pub rotate_tray: bool,
     pub cooling_temp: u32,
     pub close_power_conflict: bool,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -305,7 +231,7 @@ incident #1447).
 
   Whether to override the AMS unit's power-conflict interlock.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -323,55 +249,12 @@ incident #1447).
 
 - <span id="amsfilamentdryingpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `AmsFilamentDryingRequest`
-
-```rust
-struct AmsFilamentDryingRequest {
-    pub print: AmsFilamentDryingPayload,
-}
-```
-
-Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
-
-#### Fields
-
-- **`print`**: `AmsFilamentDryingPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amsfilamentdryingrequest-start"></span>`fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`DryingParams`](#dryingparams), [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a request starting a drying cycle on the unit at `ams_id`.
-
-- <span id="amsfilamentdryingrequest-stop"></span>`fn stop(ams_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a request stopping the drying cycle on the unit at `ams_id`.
-
-  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`): every field
-  but the unit and mode zeroed.
-
-#### Trait Implementations
-
-##### `impl Clone for AmsFilamentDryingRequest`
-
-- <span id="amsfilamentdryingrequest-clone"></span>`fn clone(&self) -> AmsFilamentDryingRequest` — [`AmsFilamentDryingRequest`](#amsfilamentdryingrequest)
-
-##### `impl Debug for AmsFilamentDryingRequest`
-
-- <span id="amsfilamentdryingrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsFilamentDryingRequest`
-
-- <span id="amsfilamentdryingrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `AmsFilamentSettingPayload`
 
 ```rust
 struct AmsFilamentSettingPayload {
     pub command: &'static str,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
     pub ams_id: i32,
     pub slot_id: i32,
     pub tray_id: i32,
@@ -393,7 +276,7 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
   Wire command name, always `"ams_filament_setting"`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -484,137 +367,6 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
 - <span id="amsfilamentsettingpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `AmsFilamentSettingRequest`
-
-```rust
-struct AmsFilamentSettingRequest {
-    pub print: AmsFilamentSettingPayload,
-}
-```
-
-Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
-
-#### Fields
-
-- **`print`**: `AmsFilamentSettingPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Creates a request payload to update slot parameters.
-
-  **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
-  For standard physical slots, `ams_id` matches the expansion unit index (0-3). For an
-  external spool, pass the virtual `ams_id` (`255` single-nozzle / Ext-R, `254` Ext-L)
-  with `slot_id: 0`. An A2L-attached AMS Lite takes its physical wire id `16` with a local
-  `0..=3` slot, not the normalized `6` telemetry reports it as (bambuddy
-  `ams_set_filament_setting`, matching the firmware's own `ams_mapping2`).
-
-  **`slot_id` is what you pass; `tray_id` is derived.** Both reach the wire, and they
-  differ on a virtual tray: `tray_id` becomes `254` for either external `ams_id` and the
-  slot index otherwise. Deriving it here rather than accepting it means a caller cannot
-  send a `slot_id`/`tray_id` pair that contradicts itself — the same reasoning as
-  `PrinterClient::change_filament()` deriving `target`.
-
-  Confirmed against BambuStudio's `command_ams_filament_settings`
-  (`DeviceManager.cpp:1707-1722`), whose `tag_tray_id` maps either
-  `VIRTUAL_TRAY_MAIN_ID`/`VIRTUAL_TRAY_DEPUTY_ID` to `254` and whose own call sites pass
-  `slot_id: 0` for a virtual tray (`:4853`, `:4877`); and against bambuddy's
-  `ams_set_filament_setting`, which sends `ams_id: 255`, `tray_id: 254`, `slot_id: 0` for
-  a single external slot.
-
-  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
-  addressing differs by command family — this rule is *not* the same one used by
-  `extrusion_cali_sel` (K-profile binding, see
-  `crate::diagnostics::ExtrusionCaliSelRequest::new`):
-  * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
-    `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
-    (`ams_id: 255`) require `tray_id: 254` (confirmed against
-    `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
-    VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
-    `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
-  * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
-    Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
-    `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
-    Ext-R on IDEX machines mis-routes the pressure advance profile to the left
-    carriage (Ext-L) EEPROM, leaving the primary right carriage completely
-    uncalibrated.
-
-  Only the addressing is positional. Everything the command *describes* — the filament,
-  its color, its temperature window, its preset ids — is set through the `with_*` methods
-  below, following the convention [`PrintJobConfig`](../print_job/index.md#printjobconfig) already
-  establishes in this crate.
-
-  This replaced a 9-argument constructor. `nozzle_temp_min`/`nozzle_temp_max` were adjacent
-  `u32`s and `ams_id`/`slot_id` adjacent `i32`s, so transposing either pair compiled
-  cleanly and produced a silently wrong command — on a command whose failures are already
-  silent, since the printer acks a corrupted value as `"success"`.
-
-  Fields left unset serialize as empty strings / zero temperatures; `setting_id` is omitted
-  from the wire entirely.
-
-- <span id="amsfilamentsettingrequest-with-filament"></span>`fn with_filament(self, material_type: &str, sub_brands: Option<&str>) -> Self`
-
-  Sets the material type and its sub-brand label.
-
-  `sub_brands` defaults to `"{material_type} Basic"` when `None`. Case is meaningful in
-  both and is left alone — unlike [`with_color`](#amsfilamentsettingrequest).
-
-- <span id="amsfilamentsettingrequest-with-color"></span>`fn with_color(self, color_hex: &str) -> Self`
-
-  Sets the tray color, **normalized to uppercase** with a leading `#` stripped.
-
-  The printer parses lowercase hex letters in `tray_color` as `0` and the corruption is
-  silent: the `ams_filament_setting` ack echoes the value that was sent and reports
-  `result: "success"`, and only the next AMS push status reveals it (measured on a P1S
-  running firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
-
-  The normalization lives here, at the one place the color is set, rather than in each
-  caller — a caller that forgets is exactly how the original bug arrived.
-
-- <span id="amsfilamentsettingrequest-with-temps"></span>`fn with_temps(self, min: u32, max: u32) -> Self`
-
-  Sets the safe nozzle temperature window, in °C.
-
-  Taking both bounds in one call is the point: as two adjacent positional `u32`s they were
-  transposable without a compile error.
-
-- <span id="amsfilamentsettingrequest-with-preset"></span>`fn with_preset(self, preset_code: &str) -> Self`
-
-  Sets the **short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"`.
-
-  A long `"PF"`-prefixed cloud id does not belong here — pass that to
-  [`with_setting_id`](#amsfilamentsettingrequest). See
-  [`AmsFilamentSettingPayload::tray_info_idx`](#amsfilamentsettingpayload) for what the printer does when the two are
-  conflated.
-
-- <span id="amsfilamentsettingrequest-with-setting-id"></span>`fn with_setting_id(self, setting_id: &str) -> Self`
-
-  Attaches the full preset identifier, which is a separate wire field from
-  `tray_info_idx` and is omitted entirely when not set.
-
-  Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
-  code in [`with_preset`](#amsfilamentsettingrequest). See
-  [`AmsFilamentSettingPayload::tray_info_idx`](#amsfilamentsettingpayload) for what the printer does when a long id is
-  put in the short field instead.
-
-#### Trait Implementations
-
-##### `impl Clone for AmsFilamentSettingRequest`
-
-- <span id="amsfilamentsettingrequest-clone"></span>`fn clone(&self) -> AmsFilamentSettingRequest` — [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest)
-
-##### `impl Debug for AmsFilamentSettingRequest`
-
-- <span id="amsfilamentsettingrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AmsFilamentSettingRequest`
-
-- <span id="amsfilamentsettingrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `AmsGetRfidPayload`
 
 ```rust
@@ -622,7 +374,7 @@ struct AmsGetRfidPayload {
     pub command: &'static str,
     pub ams_id: i32,
     pub slot_id: i32,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -642,7 +394,7 @@ Triggers physical filament feeder movement to scan proprietary RFID tag properti
 
   Target slot index within the AMS unit.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -660,41 +412,52 @@ Triggers physical filament feeder movement to scan proprietary RFID tag properti
 
 - <span id="amsgetrfidpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `AmsGetRfidRequest`
+### `ChangeTemps`
 
 ```rust
-struct AmsGetRfidRequest {
-    pub print: AmsGetRfidPayload,
+struct ChangeTemps {
+    pub current: i32,
+    pub target: i32,
 }
 ```
 
-Requests an RFID tag scan on a specific AMS slot.
+The nozzle temperatures an `ams_change_filament` carries, °C; `-1` lets the firmware decide.
 
 #### Fields
 
-- **`print`**: `AmsGetRfidPayload`
+- **`current`**: `i32`
 
-  The `print` namespace envelope required by the wire protocol.
+  Current nozzle temperature (`curr_temp`).
+
+- **`target`**: `i32`
+
+  Target nozzle temperature (`tar_temp`).
 
 #### Implementations
 
-- <span id="amsgetrfidrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds an `ams_get_rfid` request.
+- <span id="changetemps-const-firmware"></span>`const FIRMWARE: Self`
 
 #### Trait Implementations
 
-##### `impl Clone for AmsGetRfidRequest`
+##### `impl Clone for ChangeTemps`
 
-- <span id="amsgetrfidrequest-clone"></span>`fn clone(&self) -> AmsGetRfidRequest` — [`AmsGetRfidRequest`](#amsgetrfidrequest)
+- <span id="changetemps-clone"></span>`fn clone(&self) -> ChangeTemps` — [`ChangeTemps`](#changetemps)
 
-##### `impl Debug for AmsGetRfidRequest`
+##### `impl Copy for ChangeTemps`
 
-- <span id="amsgetrfidrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+##### `impl Debug for ChangeTemps`
 
-##### `impl Serialize for AmsGetRfidRequest`
+- <span id="changetemps-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-- <span id="amsgetrfidrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+##### `impl Eq for ChangeTemps`
+
+##### `impl Hash for ChangeTemps`
+
+- <span id="changetemps-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for ChangeTemps`
+
+- <span id="changetemps-partialeq-eq"></span>`fn eq(&self, other: &ChangeTemps) -> bool` — [`ChangeTemps`](#changetemps)
 
 ### `DryingParams`
 
@@ -765,4 +528,151 @@ least `temp` and `duration_hours`.
 ##### `impl PartialEq for DryingParams`
 
 - <span id="dryingparams-partialeq-eq"></span>`fn eq(&self, other: &DryingParams) -> bool` — [`DryingParams`](#dryingparams)
+
+### `FilamentSpec<'a>`
+
+```rust
+struct FilamentSpec<'a> {
+    pub preset: &'a str,
+    pub material: &'a str,
+    pub nozzle_temp_min: u32,
+    pub nozzle_temp_max: u32,
+}
+```
+
+The description an `ams_filament_setting` can't do without.
+
+Required by [`AmsFilamentSettingRequest::new`]: sending the command without them writes an
+empty material with a 0–0 °C nozzle window to the tray, and the printer acks it as success.
+
+#### Fields
+
+- **`preset`**: `&'a str`
+
+  **Short-format** filament preset code, e.g. `"GFA01"` — see
+  [`AmsFilamentSettingPayload::tray_info_idx`](#amsfilamentsettingpayload).
+
+- **`material`**: `&'a str`
+
+  Material type, e.g. `"PLA"`.
+
+- **`nozzle_temp_min`**: `u32`
+
+  Minimum safe nozzle temperature, °C.
+
+- **`nozzle_temp_max`**: `u32`
+
+  Maximum safe nozzle temperature, °C.
+
+#### Trait Implementations
+
+##### `impl Clone for FilamentSpec<'a>`
+
+- <span id="filamentspec-clone"></span>`fn clone(&self) -> FilamentSpec<'a>` — [`FilamentSpec`](#filamentspec)
+
+##### `impl Copy for FilamentSpec<'a>`
+
+##### `impl Debug for FilamentSpec<'a>`
+
+- <span id="filamentspec-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FilamentSpec<'a>`
+
+##### `impl PartialEq for FilamentSpec<'a>`
+
+- <span id="filamentspec-partialeq-eq"></span>`fn eq(&self, other: &FilamentSpec<'a>) -> bool` — [`FilamentSpec`](#filamentspec)
+
+### `AmsControlOp`
+
+```rust
+enum AmsControlOp {
+    Resume,
+    Pause,
+    Reset,
+}
+```
+
+An `ams_control` operation on the AMS feed mechanism.
+
+#### Variants
+
+- **`Resume`**
+
+  Resume feeding (`resume`).
+
+- **`Pause`**
+
+  Pause feeding (`pause`).
+
+- **`Reset`**
+
+  Reset the feed state (`reset`).
+
+#### Implementations
+
+- <span id="amscontrolop-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The wire `param` value.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsControlOp`
+
+- <span id="amscontrolop-clone"></span>`fn clone(&self) -> AmsControlOp` — [`AmsControlOp`](#amscontrolop)
+
+##### `impl Copy for AmsControlOp`
+
+##### `impl Debug for AmsControlOp`
+
+- <span id="amscontrolop-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsControlOp`
+
+##### `impl Hash for AmsControlOp`
+
+- <span id="amscontrolop-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for AmsControlOp`
+
+- <span id="amscontrolop-partialeq-eq"></span>`fn eq(&self, other: &AmsControlOp) -> bool` — [`AmsControlOp`](#amscontrolop)
+
+### `AmsChangeFilamentRequest`
+
+```rust
+type AmsChangeFilamentRequest = super::Print<AmsChangeFilamentPayload>;
+```
+
+Loads or unloads filament from an AMS slot or external spool to the toolhead.
+
+### `AmsControlRequest`
+
+```rust
+type AmsControlRequest = super::Print<AmsControlPayload>;
+```
+
+Sends a resume, pause, or reset command to the AMS feed mechanism.
+
+### `AmsFilamentDryingRequest`
+
+```rust
+type AmsFilamentDryingRequest = super::Print<AmsFilamentDryingPayload>;
+```
+
+Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
+
+### `AmsFilamentSettingRequest`
+
+```rust
+type AmsFilamentSettingRequest = super::Print<AmsFilamentSettingPayload>;
+```
+
+Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
+
+### `AmsGetRfidRequest`
+
+```rust
+type AmsGetRfidRequest = super::Print<AmsGetRfidPayload>;
+```
+
+Requests an RFID tag scan on a specific AMS slot.
 

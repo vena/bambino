@@ -94,6 +94,7 @@ Fully decoded representation of an active diagnostic entry from the `hms` teleme
 
 ```rust
 struct DecodedPrintError {
+    pub code: u32,
     pub short_code: String,
     pub module_id: u8,
     pub is_genuine_fault: bool,
@@ -103,6 +104,11 @@ struct DecodedPrintError {
 Fully decoded representation of the primary system `print_error` register.
 
 #### Fields
+
+- **`code`**: `u32`
+
+  The raw `print_error` register value this was decoded from — what the error-dialog
+  commands (`PrinterClient::ignore_error_and_resume` and friends) take.
 
 - **`short_code`**: `String`
 

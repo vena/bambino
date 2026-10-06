@@ -30,11 +30,8 @@ for composite packed temperatures, home/status flags, and door sensors.
 - [Types](#types)
   - [`TelemetryReport`](#telemetryreport)
 - [Functions](#functions)
-  - [`decode_nozzle_temperatures`](#decode-nozzle-temperatures)
-  - [`fun2_bit`](#fun2-bit)
   - [`is_developer_mode`](#is-developer-mode)
 - [Constants](#constants)
-  - [`FUN2_REMOTE_DRY_BIT`](#fun2-remote-dry-bit)
 
 ## Quick Reference
 
@@ -47,10 +44,7 @@ for composite packed temperatures, home/status flags, and door sensors.
 | [`stage`](stage/index.md) | mod | Typed decoding for the `stg_cur` / `stg` stage-ID space. |
 | [`xcam`](xcam/index.md) | mod | AI failure-detection and print-option settings (`print.xcam`). |
 | [`TelemetryReport`](#telemetryreport) | struct | Unified top-level telemetry report received from the printer's local MQTT broker. |
-| [`decode_nozzle_temperatures`](#decode-nozzle-temperatures) | fn | Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived. |
-| [`fun2_bit`](#fun2-bit) | fn | Reads one bit of a `fun2` capability hex string, LSB-first from the right. |
 | [`is_developer_mode`](#is-developer-mode) | fn | Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1]. |
-| [`FUN2_REMOTE_DRY_BIT`](#fun2-remote-dry-bit) | const | `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp:4469`). |
 
 ## Modules
 
@@ -761,6 +755,23 @@ Climate parts collection nested within `device` parameters.
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
   — see its doc comment.
 
+#### Implementations
+
+- <span id="airductcollection-part-percent"></span>`fn part_percent(&self, id: u32) -> Option<u8>`
+
+  The speed of the fan reported as part `id`, as a percentage (0-100).
+
+  Two wire shapes, both real, and the fix for each broke the other once (#31, then #184),
+  so order matters:
+
+  1. A negative state is a firmware sentinel for "off/unknown" and reads `None`. It must be
+     rejected *before* the mask, since `-1 & 0xFF == 255`, which would clamp to a bogus 100%.
+  2. A non-negative state may be bit-packed, with the percentage in the low byte and flags
+     above it. BambuStudio's `DevFan::ParseV3_0` applies `get_flag_bits(state, 0, 8)`
+     unconditionally to every airduct part, and bambuddy independently does the same
+     `int(part["state"]) & 0xFF`. Without the mask a packed `306` clamps to 100 instead of
+     decoding to its real 50.
+
 #### Trait Implementations
 
 ##### `impl Clone for AirductCollection`
@@ -874,6 +885,12 @@ Bed info segment with composite-packed temperature.
 - **`temp`**: `Option<u32>`
 
   Composite-packed bed temperature [REF-THER-DECODE].
+
+#### Implementations
+
+- <span id="bedinfo-temperatures"></span>`fn temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../client/index.md#heatertemps)
+
+  The bed's temperatures unpacked from `temp`; `None` when it is absent.
 
 #### Trait Implementations
 
@@ -994,7 +1011,7 @@ Appears at two locations on the wire:
   A fixture payload carries the identical value in both fields, and both
   pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
   never consult this field either. Parsed for wire-format completeness only —
-  `decode_bed_temperatures()` deliberately does not read it.
+  The bed-temperature decode deliberately does not read it.
 
 #### Trait Implementations
 
@@ -1163,7 +1180,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`temp`**: `Option<u32>`
 
-  Composite-packed temperature (use `unpack_temperature()` to decode).
+  Composite-packed temperature; decode with [`temperatures()`](device/index.md#extruderinfo).
 
 - **`snow`**: `Option<u32>`
 
@@ -1225,9 +1242,9 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 #### Implementations
 
-- <span id="extruderinfo-temperatures"></span>`fn temperatures(&self) -> (u16, u16)`
+- <span id="extruderinfo-temperatures"></span>`fn temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../client/index.md#heatertemps)
 
-  Unpacks the composite temperature into (actual, target) degrees Celsius.
+  Unpacks the composite `temp`; `None` when it is absent.
 
 - <span id="extruderinfo-current-ams-slot"></span>`fn current_ams_slot(&self) -> Option<(u8, u8)>`
 
@@ -1545,12 +1562,22 @@ Controller information segment detailing current temperature coordinates.
 
 - **`temp`**: `Option<u32>`
 
-  Composite-packed integer temperature value [REF-THER-DECODE].
-  Use `PrinterTelemetry::unpack_temperature()` on this value cast to `f64`.
+  Composite-packed integer temperature value [REF-THER-DECODE]; decode with
+  [`temperatures()`](diagnostics/index.md#ctcinfo).
 
 - **`target`**: `Option<u32>`
 
   Explicit CTC target temperature (authoritative on new-gen models).
+
+#### Implementations
+
+- <span id="ctcinfo-temperatures"></span>`fn temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../client/index.md#heatertemps)
+
+  The chamber controller's temperatures: `temp` unpacked, with `target` overriding the packed target when present.
+
+  `target` is the authoritative target on new-gen models (bambuddy reads it separately,
+  `bambu_mqtt.py:2652`); BambuStudio derives both halves from the packed `temp`. `None` when
+  `temp` is absent.
 
 #### Trait Implementations
 
@@ -1776,6 +1803,14 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 #### Implementations
 
+- <span id="lightreport-led-node"></span>`fn led_node(&self) -> Option<LedNode>` — [`LedNode`](../control/index.md#lednode)
+
+  The fixture this entry reports, or `None` for an absent or unrecognized node.
+
+- <span id="lightreport-light-mode"></span>`fn light_mode(&self) -> Option<LightMode>` — [`LightMode`](../control/index.md#lightmode)
+
+  The fixture's mode, or `None` for an absent or unrecognized mode.
+
 - <span id="lightreport-is-on"></span>`fn is_on(&self) -> Option<bool>`
 
   Whether the light is lit: `true` for `"on"` and `"flashing"`, `false` for `"off"`,
@@ -1987,7 +2022,7 @@ struct PrinterTelemetry {
     pub stg_cur: Option<i32>,
     pub print_error: Option<u32>,
     pub hms: Option<Vec<super::diagnostics::HmsEntry>>,
-    pub sdcard: bool,
+    pub sdcard: Option<bool>,
     pub wifi_signal: Option<String>,
     pub net: Option<NetInfo>,
     pub cooling_fan_speed: Option<String>,
@@ -2050,16 +2085,19 @@ raw field and re-implementing the decode:
 | Instead of the raw field | Use |
 | :--- | :--- |
 | `stg_cur`, `stg` | [`current_stage`](report/index.md#printertelemetry) (gated on `gcode_state` [REF-MQTT-IDLEBUG]), [`stage_queue`](report/index.md#printertelemetry) |
-| `home_flag` bits 8–9, `sdcard` | [`sdcard_state`](report/index.md#printertelemetry) |
+| `aux` bits 12–13, `home_flag` bits 8–9, `sdcard` | [`sdcard_status`](report/index.md#printertelemetry) |
+| `gcode_state` | [`print_status`](report/index.md#printertelemetry) |
 | `home_flag` bit 23, `stat` | [`is_door_open_from_home_flag`](report/index.md#printertelemetry), [`is_door_open_from_stat`](report/index.md#printertelemetry) |
 | `home_flag` bit 3 | [`is_220v_power`](report/index.md#printertelemetry) |
 | `net.conf`, `wifi_signal` | [`is_ethernet_active`](report/index.md#printertelemetry), with [`is_ethernet_active_via_wifi_signal`](report/index.md#printertelemetry) as the fallback |
 | `gcode_start_time` | [`gcode_start_time_secs`](report/index.md#printertelemetry) |
-| `chamber_temper` (packed) | [`unpack_temperature`](report/index.md#printertelemetry) |
+| `chamber_temper` (packed) | [`chamber_temperatures`](report/index.md#printertelemetry) |
 | `bed_temper` / `device.bed` | [`TelemetryReport::bed_temperatures`](#telemetryreport) |
+| `nozzle_temper` / `device.extruder` | [`TelemetryReport::nozzle_temperatures`](#telemetryreport) |
+| `*_fan_speed` | [`TelemetryReport::fan_percent`](#telemetryreport) |
 | `device`, `fun`, `fun2` | [`TelemetryReport::device`](#telemetryreport), [`fun`](#telemetryreport), [`fun2_bit`](#telemetryreport) (both wire locations) |
 | `ipcam.*` toggles | [`IpcamTelemetry::recording`](diagnostics/index.md#ipcamtelemetry), [`timelapse_enabled`](diagnostics/index.md#ipcamtelemetry) |
-| `lights_report[].mode` | [`LightReport::is_on`](report/index.md#lightreport) |
+| `lights_report[]` | [`LightReport::is_on`](report/index.md#lightreport), [`LightReport::led_node`](report/index.md#lightreport), [`LightReport::light_mode`](report/index.md#lightreport) |
 | `xcam.cfg`, `xcam.halt_print_sensitivity` | the `XcamTelemetry` detector accessors, [`halt_print_sensitivity_level`](xcam/index.md#xcamtelemetry) |
 
 #### Fields
@@ -2147,7 +2185,7 @@ raw field and re-implementing the decode:
   
   Transmitted as a signed 32-bit int on the wire [REF-HOMEFLAG]; bit 31 set produces a
   negative JSON number that a bare `u32` target rejects, failing the whole telemetry
-  message's deserialize. Masked into `u32` via `deserialize_signed_as_u32`.
+  message's deserialize. Masked into `u32` via `deserialize_permissive_opt_flags`.
 
 - **`stat`**: `Option<String>`
 
@@ -2172,11 +2210,13 @@ raw field and re-implementing the decode:
 
   Active hardware fault and diagnostic alert entries [REF-DIAG-HMS].
 
-- **`sdcard`**: `bool`
+- **`sdcard`**: `Option<bool>`
 
-  Permissive indicator tracking physical MicroSD card insertion.
+  Top-level MicroSD presence flag, sent as a bool, an integer or a string such as `"HAS_SDCARD_NORMAL"`.
   
-  Evaluated via custom deserializer to absorb structural variations between firmwares.
+  `None` when this frame doesn't carry it — distinct from `Some(false)`, "no card". It
+  cannot report a degraded card; prefer [`sdcard_status`](report/index.md#printertelemetry), which reads
+  the richer bit fields first.
 
 - **`wifi_signal`**: `Option<String>`
 
@@ -2207,7 +2247,7 @@ raw field and re-implementing the decode:
   Hotend target temperature register.
   
   Wire sends both integers and floats depending on model. Never composite-packed —
-  unlike `chamber_temper`, no `unpack_temperature()` call is needed here.
+  unlike `chamber_temper`, no unpacking is needed here.
 
 - **`nozzle_temper`**: `Option<f64>`
 
@@ -2350,6 +2390,10 @@ raw field and re-implementing the decode:
 - **`remain_time`**: `Option<i32>`
 
   Alternative remaining time field (minutes).
+  
+  Prefer [`mc_remaining_time`](report/index.md#printertelemetry): it is the field BambuStudio reads
+  for the ETA (`DeviceManager.cpp:3081-3086`) and the one `PrinterClient::print_progress`
+  tracks. This one is kept for completeness; nothing in either upstream client prefers it.
 
 - **`cfg`**: `Option<String>`
 
@@ -2491,6 +2535,10 @@ raw field and re-implementing the decode:
   A `Some(PrintStage::Idle)` during a run is not a bug and not completion: after the last
   queued stage finishes, `stg_cur` reads idle for the tail of the run.
 
+- <span id="printertelemetry-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](../control/index.md#printstatus)
+
+  Classifies `gcode_state`; `None` when this frame doesn't carry it.
+
 - <span id="printertelemetry-current-stage-ungated"></span>`fn current_stage_ungated(&self) -> Option<PrintStage>` — [`PrintStage`](stage/index.md#printstage)
 
   Decodes `stg_cur` with no [REF-MQTT-IDLEBUG] gate applied.
@@ -2506,13 +2554,13 @@ raw field and re-implementing the decode:
   absent queue is unambiguous. Returns an empty `Vec` when `stg` is absent; the queue also
   legitimately empties to `[]` at `FINISH`.
 
-- <span id="printertelemetry-unpack-temperature"></span>`fn unpack_temperature(raw_val: f64) -> (u16, u16)`
+- <span id="printertelemetry-chamber-temperatures"></span>`fn chamber_temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../client/index.md#heatertemps)
 
-  Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
+  The chamber's temperatures, unpacked from `chamber_temper`; `None` when this frame doesn't carry it.
 
-  Accepts `f64` because the wire sends both integers and floats depending on model.
-  Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
-  composite-packed: upper 16 bits = target, lower 16 bits = actual.
+  Values above 500 are composite-packed `(target << 16) | actual` on models with an active
+  chamber heater; at or below 500 the value is the reading itself with target `0`, which is
+  what every model without a heater sends, so the unpack is correct on both.
 
 - <span id="printertelemetry-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
 
@@ -2545,9 +2593,24 @@ raw field and re-implementing the decode:
 
 - <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](report/index.md#sdcardstate)
 
-  Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
-  [`SdcardState`](report/index.md#sdcardstate)'s doc comment for verification sources. Returns `None` before any
-  telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
+  Evaluates the SD-card presence/health state from `home_flag` bits 8–9 alone. See
+  [`SdcardState`](report/index.md#sdcardstate)'s doc comment for verification sources, and prefer
+  [`sdcard_status`](report/index.md#printertelemetry), which also reads `aux` and the `sdcard` flag.
+  Returns `None` when this frame doesn't carry `home_flag` — distinct from `Some(NoSdcard)`.
+
+- <span id="printertelemetry-sdcard-status"></span>`fn sdcard_status(&self) -> Option<SdcardState>` — [`SdcardState`](report/index.md#sdcardstate)
+
+  The SD-card state from whichever signal this frame carries, in BambuStudio's precedence.
+
+  BambuStudio reads all three and lets the later one win (`DeviceManager.cpp`): the
+  top-level `sdcard` flag (`DevStorage::ParseV1_0`), then `home_flag` bits 8–9
+  (`parse_home_flag`, `:1075`), then — on "np" firmware — `aux` bits 12–13 (`:4514`). This
+  returns the first present of `aux`, `home_flag`, `sdcard`, which is the same answer.
+
+  bambuddy reads only `sdcard`, saying heartbeat pushes clear `home_flag` bits 8–9 with a
+  card inserted (`bambu_mqtt.py:4915-4927`). BambuStudio, the authoritative source, reads the
+  bits on every frame that carries `home_flag`, so they are followed here; see
+  `reference/03_mqtt_telemetry.md` for the disagreement.
 
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
@@ -2588,6 +2651,101 @@ raw field and re-implementing the decode:
 ##### `impl Serialize for PrinterTelemetry`
 
 - <span id="printertelemetry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `HeaterTemps`
+
+```rust
+struct HeaterTemps {
+    pub actual: u16,
+    pub target: u16,
+}
+```
+
+One heater's actual and target temperature, in °C.
+
+#### Fields
+
+- **`actual`**: `u16`
+
+  Measured temperature.
+
+- **`target`**: `u16`
+
+  Target temperature; `0` when the heater is off or the wire carries no target.
+
+#### Trait Implementations
+
+##### `impl Clone for HeaterTemps`
+
+- <span id="heatertemps-clone"></span>`fn clone(&self) -> HeaterTemps` — [`HeaterTemps`](../../client/index.md#heatertemps)
+
+##### `impl Copy for HeaterTemps`
+
+##### `impl Debug for HeaterTemps`
+
+- <span id="heatertemps-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for HeaterTemps`
+
+- <span id="heatertemps-default"></span>`fn default() -> HeaterTemps` — [`HeaterTemps`](../../client/index.md#heatertemps)
+
+##### `impl Eq for HeaterTemps`
+
+##### `impl Hash for HeaterTemps`
+
+- <span id="heatertemps-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for HeaterTemps`
+
+- <span id="heatertemps-partialeq-eq"></span>`fn eq(&self, other: &HeaterTemps) -> bool` — [`HeaterTemps`](../../client/index.md#heatertemps)
+
+### `NozzleTemps`
+
+```rust
+struct NozzleTemps {
+    pub id: u8,
+    pub actual: u16,
+    pub target: u16,
+}
+```
+
+One nozzle's temperatures, in °C.
+
+#### Fields
+
+- **`id`**: `u8`
+
+  Nozzle id: `0` on single-nozzle models; `0` (right) and `1` (left) on IDEX.
+
+- **`actual`**: `u16`
+
+  Measured temperature.
+
+- **`target`**: `u16`
+
+  Target temperature.
+
+#### Trait Implementations
+
+##### `impl Clone for NozzleTemps`
+
+- <span id="nozzletemps-clone"></span>`fn clone(&self) -> NozzleTemps` — [`NozzleTemps`](../../client/index.md#nozzletemps)
+
+##### `impl Copy for NozzleTemps`
+
+##### `impl Debug for NozzleTemps`
+
+- <span id="nozzletemps-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for NozzleTemps`
+
+##### `impl Hash for NozzleTemps`
+
+- <span id="nozzletemps-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for NozzleTemps`
+
+- <span id="nozzletemps-partialeq-eq"></span>`fn eq(&self, other: &NozzleTemps) -> bool` — [`NozzleTemps`](../../client/index.md#nozzletemps)
 
 ### `XcamDetector`
 
@@ -2759,15 +2917,6 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   Returns whether displacement detection is enabled, or `None` when `cfg` is absent.
 
-- <span id="xcamtelemetry-merge-from"></span>`fn merge_from(&mut self, incoming: &XcamTelemetry)` — [`XcamTelemetry`](xcam/index.md#xcamtelemetry)
-
-  Merges a freshly-parsed `XcamTelemetry` into `self` field-by-field.
-
-  Mirrors `IpcamTelemetry::merge_from` and exists for the same reason:
-  a frame that carries only part of the object must not blank the rest of a cached copy.
-  Present fields overwrite; absent ones leave the cached value alone. `extra` merges per key
-  rather than being replaced, so an unmodeled key seen once survives later partial frames.
-
 #### Trait Implementations
 
 ##### `impl Clone for XcamTelemetry`
@@ -2814,29 +2963,42 @@ top-level domains depending on which micro-system published the frame.
 
 #### Implementations
 
-- <span id="telemetryreport-bed-temperatures"></span>`fn bed_temperatures(&self) -> (u16, u16)`
+- <span id="telemetryreport-bed-temperatures"></span>`fn bed_temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../client/index.md#heatertemps)
 
-  Returns the bed's (actual, target) temperatures in °C.
+  Returns the bed's temperatures, or `None` when this report carries none.
 
   Handles the different wire formats across printer generations automatically:
   new-gen composite-packed `device.bed`, pushall-nested `print.device.bed`, and
-  old-gen direct `bed_temper`/`bed_target_temper` fields. Returns (0, 0) if absent.
+  old-gen direct `bed_temper`/`bed_target_temper` fields.
 
   # Example
 
   ```rust,ignore
-  let (actual, target) = report.bed_temperatures();
-  println!("Bed: {}°C (target {}°C)", actual, target);
+  if let Some(bed) = report.bed_temperatures() {
+      println!("Bed: {}°C (target {}°C)", bed.actual, bed.target);
+  }
   ```
+
+- <span id="telemetryreport-nozzle-temperatures"></span>`fn nozzle_temperatures(&self) -> Vec<NozzleTemps>` — [`NozzleTemps`](../../client/index.md#nozzletemps)
+
+  Returns one entry per nozzle this report carries temperatures for, empty when none.
+
+  Prefers per-extruder `device.extruder.info`; falls back to the flat
+  `nozzle_temper`/`nozzle_target_temper` fields, including their IDEX routing quirk — see
+  `PrinterClient::nozzle_temperatures`.
+
+- <span id="telemetryreport-fan-percent"></span>`fn fan_percent(&self, fan: FanTarget) -> Option<u8>` — [`FanTarget`](../control/index.md#fantarget)
+
+  Returns `fan`'s speed as a percentage (0-100), or `None` when this report doesn't carry it.
 
 - <span id="telemetryreport-device"></span>`fn device(&self) -> Option<&DeviceTelemetry>` — [`DeviceTelemetry`](device/index.md#devicetelemetry)
 
   Returns the `DeviceTelemetry` sub-object, checking both wire locations it can arrive at.
 
-  Mirrors `bed_temperatures()`'s first-found-wins fallback: top-level `device` (incremental
-  updates) is checked first, falling back to pushall-nested `print.device` (H2/P2/X2
-  models). Returns `None` if neither location is present. Use this instead of manually
-  checking both locations for nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
+  Top-level `device` (incremental updates) is checked first, falling back to
+  pushall-nested `print.device` (H2/P2/X2 models). Returns `None` if neither location is
+  present. Use this instead of manually checking both locations for
+  nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
 
 - <span id="telemetryreport-fun"></span>`fn fun(&self) -> Option<&str>`
 
@@ -2846,12 +3008,16 @@ top-level domains depending on which micro-system published the frame.
   Mirrors `device()`'s fallback order — top-level `fun` is checked first,
   falling back to `print.fun` [REF-MQTT-ENV §3.2.1].
 
+- <span id="telemetryreport-is-developer-mode"></span>`fn is_developer_mode(&self) -> Option<bool>`
+
+  Whether Developer LAN Mode is on, from [`fun()`](#telemetryreport) — see [`is_developer_mode`](#is-developer-mode).
+
 - <span id="telemetryreport-fun2"></span>`fn fun2(&self) -> Option<&str>`
 
   Returns the `fun2` capability bitfield, checking both wire locations.
 
   Same first-found-wins order as [`fun`](#telemetryreport). Prefer [`fun2_bit`](#telemetryreport)
-  over parsing this yourself — see that method for why the string can't go through
+  over parsing this yourself — see [`hex_bit`](#hex-bit) for why the string can't go through
   `u64::from_str_radix`.
 
 - <span id="telemetryreport-fun2-bit"></span>`fn fun2_bit(&self, bit: u32) -> Option<bool>`
@@ -2880,6 +3046,10 @@ top-level domains depending on which micro-system published the frame.
   `None` means the printer never reported `fun2`, which is not the same as reporting `0` —
   older firmware omits the field entirely, and treating that as "unsupported" would refuse
   drying on hardware that has always accepted it.
+
+- <span id="telemetryreport-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](../control/index.md#printstatus)
+
+  Returns the printer's activity classification from `print.gcode_state`.
 
 #### Trait Implementations
 
@@ -3497,13 +3667,13 @@ enum SdcardState {
 }
 ```
 
-SD-card presence/health state, decoded from `home_flag` bits 8–9.
+SD-card presence/health state, decoded from a two-bit field (`aux` bits 12–13 or `home_flag` bits 8–9).
 
-Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
-`m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
-`const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard` boolean field can never
-report a degraded state — only this bitmask distinguishes "no card," "normal," "abnormal,"
-and "read-only."
+Confirmed against BambuStudio's `MachineObject::parse_home_flag`
+(`DeviceManager.cpp:1075`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
+corroborated by pybambu's `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard`
+boolean field can never report a degraded state — only the bit fields distinguish "no card,"
+"normal," "abnormal," and "read-only."
 
 #### Variants
 
@@ -4125,44 +4295,41 @@ merge. `id` is the holder's address (`"254"`/`"255"`), or empty if a push omitte
 
 ## Functions
 
-### `decode_nozzle_temperatures`
+### `hex_bit`
 
 ```rust
-fn decode_nozzle_temperatures(device: Option<&DeviceTelemetry>, nozzle_temper: Option<f64>, nozzle_target_temper: Option<f64>) -> Vec<(u8, u16, u16)>
+fn hex_bit(hex: &str, bit: u32) -> Option<bool>
 ```
 
-**Types:** [`DeviceTelemetry`](device/index.md#devicetelemetry)
+Reads one bit of an unbounded-length hex capability string (`fun`, `fun2`), LSB-first from the right.
 
-Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
+`fun2` "may have infinite length" per BambuStudio's own comment (`DeviceManager.cpp:4464`),
+which is why this walks hex digits from the right instead of parsing into an integer — a
+string longer than 16 digits would fail that parse outright and report every capability as
+absent.
 
-Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
-(composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`](device/index.md#extruderinfo)).
-Falls back to the flat `nozzle_temper`/`nozzle_target_temper` fields when absent: a single
-entry `(0, actual, target)` for a single-nozzle model, or — for a dual-nozzle (IDEX) model
-with no live extruder temps yet — the wire's undocumented routing quirk: `nozzle_temper` is
-nozzle 1 (left)'s actual reading and `nozzle_target_temper` is nozzle 0 (right)'s target,
-each nozzle only getting half of its own reading from the flat fields.
+Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): whitespace, a `0x`/`0X`
+prefix and any non-hex characters are ignored, and an index past the end of the string reads
+`false` rather than failing. Returns `None` only when no hex digits remain after filtering.
 
-### `fun2_bit`
+### `unpack_temperature`
 
 ```rust
-fn fun2_bit(hex: &str, bit: u32) -> Option<bool>
+fn unpack_temperature(raw: f64) -> HeaterTemps
 ```
 
-Reads one bit of a `fun2` capability hex string, LSB-first from the right.
+**Types:** [`HeaterTemps`](../../client/index.md#heatertemps)
 
-The counterpart to [`is_developer_mode`](#is-developer-mode) for the second capability field, and the free
-function behind [`fun2_bit`](#fun2-bit) — use this when holding a `fun2` string on its
-own rather than a whole report.
+Resolves a composite-packed temperature into actual and target [REF-THER-DECODE].
 
-`fun2` "may have infinite length" per BambuStudio's own comment
-(`DeviceManager.cpp:4464`), which is why this walks hex digits from the right instead of
-going through `u64::from_str_radix` the way [`is_developer_mode`](#is-developer-mode) does for `fun` — a string
-longer than 16 digits would fail that parse outright and report every capability as absent.
+Accepts `f64` because the wire sends both integers and floats depending on model. Values
+≤ 500 are direct temperatures (target `0`). Values > 500 are composite-packed: upper 16 bits
+target, lower 16 bits actual.
 
-Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): a `0x` prefix and any
-non-hex characters are ignored, and an index past the end of the string reads `false` rather
-than failing. Returns `None` only when no hex digits remain after filtering.
+Apply it only to the packed fields — `chamber_temper`, [`ExtruderInfo::temp`](device/index.md#extruderinfo),
+[`BedInfo::temp`](device/index.md#bedinfo) and [`CtcInfo::temp`](diagnostics/index.md#ctcinfo) — and prefer their `temperatures()` accessors, which
+do it for you. The flat `bed_temper`/`nozzle_temper` fields are never packed: a legitimate
+reading above 500 there would decode as nonsense.
 
 ### `is_developer_mode`
 
@@ -4173,9 +4340,9 @@ fn is_developer_mode(fun_hex: &str) -> Option<bool>
 Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].
 
 Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required),
-`Some(false)` when disabled, or `None` if the hex string is unparseable.
-The `fun` field is a variable-length hex string (up to 64 bits). Bit 29
+`Some(false)` when disabled, or `None` if the string carries no hex digits. Bit 29
 (`0x20000000`) is the `MQTT_SIGNATURE_REQUIRED` flag — when clear, developer mode is on.
+Read with [`hex_bit`](#hex-bit), so a `0x` prefix, whitespace or a string longer than 16 digits all work.
 
 
 ---

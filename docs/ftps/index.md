@@ -20,6 +20,7 @@ The [`parser`](../ams/parser/index.md) submodule handles UNIX-style directory li
 | [`client`](client/index.md) | mod | # Implicit FTPS Client Implementation |
 | [`parser`](parser/index.md) | mod | # UNIX Directory Listing Parsing Engine for FTPS |
 | [`FTPS_PORT`](#ftps-port) | const | Implicit-TLS FTPS port every Bambu printer serves its storage on. |
+| [`MAX_TRANSFER_BYTES`](#max-transfer-bytes) | const | Largest file `FtpsClient` uploads or downloads, in bytes (512 MiB). |
 
 ## Modules
 
@@ -142,6 +143,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
      transient `426` reply — this guards against silent SD card write truncation on every
      model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
      [`Error::DiskWriteFailure`](../error/index.md#error); a final reply other than `226`/`426` is [`Error::FtpReply`](../error/index.md#error).
+
+  A payload larger than [`MAX_TRANSFER_BYTES`](#max-transfer-bytes) is refused
+  with [`Error::InvalidArgument`](../error/index.md#error) before anything is sent: `download_file` would refuse to
+  read it back.
 
 - <span id="ftpsclient-download-file"></span>`async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error>` — [`Error`](../error/index.md#error)
 
@@ -549,4 +554,11 @@ const FTPS_PORT: u16 = 990u16;
 ```
 
 Implicit-TLS FTPS port every Bambu printer serves its storage on.
+
+### `MAX_TRANSFER_BYTES`
+```rust
+const MAX_TRANSFER_BYTES: usize = 536_870_912usize;
+```
+
+Largest file `FtpsClient` uploads or downloads, in bytes (512 MiB).
 

@@ -15,7 +15,7 @@ Top-level telemetry report envelope (`print` and `device` wire locations).
 | [`PrintPauseList`](#printpauselist) | struct | The pause schedule for a running job, reported as `print.p_list`. |
 | [`PrintPausePoint`](#printpausepoint) | struct | One scheduled pause in a running job's pause list. |
 | [`PrinterTelemetry`](#printertelemetry) | struct | Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays. |
-| [`SdcardState`](#sdcardstate) | enum | SD-card presence/health state, decoded from `home_flag` bits 8–9. |
+| [`SdcardState`](#sdcardstate) | enum | SD-card presence/health state, decoded from a two-bit field (`aux` bits 12–13 or `home_flag` bits 8–9). |
 
 ## Types
 
@@ -41,6 +41,14 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
   Current state (e.g. "on", "off", "flashing"); see [`is_on`](#lightreport).
 
 #### Implementations
+
+- <span id="lightreport-led-node"></span>`fn led_node(&self) -> Option<LedNode>` — [`LedNode`](../../control/index.md#lednode)
+
+  The fixture this entry reports, or `None` for an absent or unrecognized node.
+
+- <span id="lightreport-light-mode"></span>`fn light_mode(&self) -> Option<LightMode>` — [`LightMode`](../../control/index.md#lightmode)
+
+  The fixture's mode, or `None` for an absent or unrecognized mode.
 
 - <span id="lightreport-is-on"></span>`fn is_on(&self) -> Option<bool>`
 
@@ -253,7 +261,7 @@ struct PrinterTelemetry {
     pub stg_cur: Option<i32>,
     pub print_error: Option<u32>,
     pub hms: Option<Vec<super::diagnostics::HmsEntry>>,
-    pub sdcard: bool,
+    pub sdcard: Option<bool>,
     pub wifi_signal: Option<String>,
     pub net: Option<NetInfo>,
     pub cooling_fan_speed: Option<String>,
@@ -316,16 +324,19 @@ raw field and re-implementing the decode:
 | Instead of the raw field | Use |
 | :--- | :--- |
 | `stg_cur`, `stg` | [`current_stage`](#printertelemetry) (gated on `gcode_state` [REF-MQTT-IDLEBUG]), [`stage_queue`](#printertelemetry) |
-| `home_flag` bits 8–9, `sdcard` | [`sdcard_state`](#printertelemetry) |
+| `aux` bits 12–13, `home_flag` bits 8–9, `sdcard` | [`sdcard_status`](#printertelemetry) |
+| `gcode_state` | [`print_status`](#printertelemetry) |
 | `home_flag` bit 23, `stat` | [`is_door_open_from_home_flag`](#printertelemetry), [`is_door_open_from_stat`](#printertelemetry) |
 | `home_flag` bit 3 | [`is_220v_power`](#printertelemetry) |
 | `net.conf`, `wifi_signal` | [`is_ethernet_active`](#printertelemetry), with [`is_ethernet_active_via_wifi_signal`](#printertelemetry) as the fallback |
 | `gcode_start_time` | [`gcode_start_time_secs`](#printertelemetry) |
-| `chamber_temper` (packed) | [`unpack_temperature`](#printertelemetry) |
+| `chamber_temper` (packed) | [`chamber_temperatures`](#printertelemetry) |
 | `bed_temper` / `device.bed` | [`TelemetryReport::bed_temperatures`](../index.md#telemetryreport) |
+| `nozzle_temper` / `device.extruder` | [`TelemetryReport::nozzle_temperatures`](../index.md#telemetryreport) |
+| `*_fan_speed` | [`TelemetryReport::fan_percent`](../index.md#telemetryreport) |
 | `device`, `fun`, `fun2` | [`TelemetryReport::device`](../index.md#telemetryreport), [`fun`](../index.md#telemetryreport), [`fun2_bit`](../index.md#telemetryreport) (both wire locations) |
 | `ipcam.*` toggles | [`IpcamTelemetry::recording`](../diagnostics/index.md#ipcamtelemetry), [`timelapse_enabled`](../diagnostics/index.md#ipcamtelemetry) |
-| `lights_report[].mode` | [`LightReport::is_on`](#lightreport) |
+| `lights_report[]` | [`LightReport::is_on`](#lightreport), [`LightReport::led_node`](#lightreport), [`LightReport::light_mode`](#lightreport) |
 | `xcam.cfg`, `xcam.halt_print_sensitivity` | the `XcamTelemetry` detector accessors, [`halt_print_sensitivity_level`](../xcam/index.md#xcamtelemetry) |
 
 #### Fields
@@ -413,7 +424,7 @@ raw field and re-implementing the decode:
   
   Transmitted as a signed 32-bit int on the wire [REF-HOMEFLAG]; bit 31 set produces a
   negative JSON number that a bare `u32` target rejects, failing the whole telemetry
-  message's deserialize. Masked into `u32` via `deserialize_signed_as_u32`.
+  message's deserialize. Masked into `u32` via `deserialize_permissive_opt_flags`.
 
 - **`stat`**: `Option<String>`
 
@@ -438,11 +449,13 @@ raw field and re-implementing the decode:
 
   Active hardware fault and diagnostic alert entries [REF-DIAG-HMS].
 
-- **`sdcard`**: `bool`
+- **`sdcard`**: `Option<bool>`
 
-  Permissive indicator tracking physical MicroSD card insertion.
+  Top-level MicroSD presence flag, sent as a bool, an integer or a string such as `"HAS_SDCARD_NORMAL"`.
   
-  Evaluated via custom deserializer to absorb structural variations between firmwares.
+  `None` when this frame doesn't carry it — distinct from `Some(false)`, "no card". It
+  cannot report a degraded card; prefer [`sdcard_status`](#printertelemetry), which reads
+  the richer bit fields first.
 
 - **`wifi_signal`**: `Option<String>`
 
@@ -473,7 +486,7 @@ raw field and re-implementing the decode:
   Hotend target temperature register.
   
   Wire sends both integers and floats depending on model. Never composite-packed —
-  unlike `chamber_temper`, no `unpack_temperature()` call is needed here.
+  unlike `chamber_temper`, no unpacking is needed here.
 
 - **`nozzle_temper`**: `Option<f64>`
 
@@ -616,6 +629,10 @@ raw field and re-implementing the decode:
 - **`remain_time`**: `Option<i32>`
 
   Alternative remaining time field (minutes).
+  
+  Prefer [`mc_remaining_time`](#printertelemetry): it is the field BambuStudio reads
+  for the ETA (`DeviceManager.cpp:3081-3086`) and the one `PrinterClient::print_progress`
+  tracks. This one is kept for completeness; nothing in either upstream client prefers it.
 
 - **`cfg`**: `Option<String>`
 
@@ -757,6 +774,10 @@ raw field and re-implementing the decode:
   A `Some(PrintStage::Idle)` during a run is not a bug and not completion: after the last
   queued stage finishes, `stg_cur` reads idle for the tail of the run.
 
+- <span id="printertelemetry-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](../../control/index.md#printstatus)
+
+  Classifies `gcode_state`; `None` when this frame doesn't carry it.
+
 - <span id="printertelemetry-current-stage-ungated"></span>`fn current_stage_ungated(&self) -> Option<PrintStage>` — [`PrintStage`](../stage/index.md#printstage)
 
   Decodes `stg_cur` with no [REF-MQTT-IDLEBUG] gate applied.
@@ -772,13 +793,13 @@ raw field and re-implementing the decode:
   absent queue is unambiguous. Returns an empty `Vec` when `stg` is absent; the queue also
   legitimately empties to `[]` at `FINISH`.
 
-- <span id="printertelemetry-unpack-temperature"></span>`fn unpack_temperature(raw_val: f64) -> (u16, u16)`
+- <span id="printertelemetry-chamber-temperatures"></span>`fn chamber_temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../../client/index.md#heatertemps)
 
-  Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
+  The chamber's temperatures, unpacked from `chamber_temper`; `None` when this frame doesn't carry it.
 
-  Accepts `f64` because the wire sends both integers and floats depending on model.
-  Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
-  composite-packed: upper 16 bits = target, lower 16 bits = actual.
+  Values above 500 are composite-packed `(target << 16) | actual` on models with an active
+  chamber heater; at or below 500 the value is the reading itself with target `0`, which is
+  what every model without a heater sends, so the unpack is correct on both.
 
 - <span id="printertelemetry-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
 
@@ -811,9 +832,24 @@ raw field and re-implementing the decode:
 
 - <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](#sdcardstate)
 
-  Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
-  [`SdcardState`](#sdcardstate)'s doc comment for verification sources. Returns `None` before any
-  telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
+  Evaluates the SD-card presence/health state from `home_flag` bits 8–9 alone. See
+  [`SdcardState`](#sdcardstate)'s doc comment for verification sources, and prefer
+  [`sdcard_status`](#printertelemetry), which also reads `aux` and the `sdcard` flag.
+  Returns `None` when this frame doesn't carry `home_flag` — distinct from `Some(NoSdcard)`.
+
+- <span id="printertelemetry-sdcard-status"></span>`fn sdcard_status(&self) -> Option<SdcardState>` — [`SdcardState`](#sdcardstate)
+
+  The SD-card state from whichever signal this frame carries, in BambuStudio's precedence.
+
+  BambuStudio reads all three and lets the later one win (`DeviceManager.cpp`): the
+  top-level `sdcard` flag (`DevStorage::ParseV1_0`), then `home_flag` bits 8–9
+  (`parse_home_flag`, `:1075`), then — on "np" firmware — `aux` bits 12–13 (`:4514`). This
+  returns the first present of `aux`, `home_flag`, `sdcard`, which is the same answer.
+
+  bambuddy reads only `sdcard`, saying heartbeat pushes clear `home_flag` bits 8–9 with a
+  card inserted (`bambu_mqtt.py:4915-4927`). BambuStudio, the authoritative source, reads the
+  bits on every frame that carries `home_flag`, so they are followed here; see
+  `reference/03_mqtt_telemetry.md` for the disagreement.
 
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
@@ -866,13 +902,13 @@ enum SdcardState {
 }
 ```
 
-SD-card presence/health state, decoded from `home_flag` bits 8–9.
+SD-card presence/health state, decoded from a two-bit field (`aux` bits 12–13 or `home_flag` bits 8–9).
 
-Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
-`m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
-`const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard` boolean field can never
-report a degraded state — only this bitmask distinguishes "no card," "normal," "abnormal,"
-and "read-only."
+Confirmed against BambuStudio's `MachineObject::parse_home_flag`
+(`DeviceManager.cpp:1075`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
+corroborated by pybambu's `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard`
+boolean field can never report a degraded state — only the bit fields distinguish "no card,"
+"normal," "abnormal," and "read-only."
 
 #### Variants
 

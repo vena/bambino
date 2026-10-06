@@ -29,7 +29,9 @@ enum Error {
     TimerFailure(crate::io::TimerError),
     TlsHandshakeFailed,
     ProtocolViolation(std::borrow::Cow<'static, str>),
-    Serialization,
+    Serialization(std::borrow::Cow<'static, str>),
+    NotConfigured(std::borrow::Cow<'static, str>),
+    Liveness(crate::mqtt::Liveness),
     AccessDenied,
     Timeout,
     DiskWriteFailure,
@@ -68,10 +70,26 @@ This enum wraps all protocol, serialization, and transport-level failures. `Netw
 - **`ProtocolViolation`**
 
   Emitted when a printer violates expected protocol states or emits illegal data lines.
+  
+  The printer's fault, not the caller's: a misconfigured client is [`Error::NotConfigured`](#error),
+  a bad argument [`Error::InvalidArgument`](#error), a missing capability [`Error::ModelMismatch`](#error).
 
 - **`Serialization`**
 
-  Serializer and Deserializer mismatches during telemetry JSON parsing.
+  A payload failed to serialize (outbound) or deserialize (inbound), with serde's message.
+
+- **`NotConfigured`**
+
+  The client was not configured for the channel a call needs (no `.with_ftps()`, no camera,
+  no address on a `from_mqtt()` client).
+  
+  A code change fixes this, not a retry or a reconnect.
+
+- **`Liveness`**
+
+  The MQTT connection failed a liveness check — see [`Liveness`](../mqtt/index.md).
+  
+  Both conditions mean the connection is unusable; reconnect rather than retry.
 
 - **`AccessDenied`**
 

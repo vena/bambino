@@ -32,7 +32,10 @@ The client applies model-aware safety checks automatically:
 - [Types](#types)
   - [`PrinterClient`](#printerclient)
 - [Constants](#constants)
+  - [`DEFAULT_COMMAND_TIMEOUT`](#default-command-timeout)
+  - [`DEFAULT_CONNECT_TIMEOUT`](#default-connect-timeout)
   - [`KEEPALIVE_TICK_SECS`](#keepalive-tick-secs)
+  - [`SEQUENCE_ID_FLOOR`](#sequence-id-floor)
 
 ## Quick Reference
 
@@ -42,9 +45,12 @@ The client applies model-aware safety checks automatically:
 | [`command`](command/index.md) | mod | # Command Handles and Outcomes |
 | [`drying`](drying/index.md) | mod | # Drying Cycle Builder |
 | [`dummy`](dummy/index.md) | mod | Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters. |
-| [`types`](#types) | mod | Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration). |
+| [`types`](#types) | mod | Client-facing helper types (telemetry events, print progress, calibration options). |
 | [`PrinterClient`](#printerclient) | struct | High-level client for controlling a Bambu Lab printer. |
+| [`DEFAULT_COMMAND_TIMEOUT`](#default-command-timeout) | const | Default command timeout; override with [`PrinterClient::with_command_timeout`](#printerclient). |
+| [`DEFAULT_CONNECT_TIMEOUT`](#default-connect-timeout) | const | Default bound on each channel's dial+TLS+handshake; override with [`PrinterClient::with_connect_timeout`](#printerclient). |
 | [`KEEPALIVE_TICK_SECS`](#keepalive-tick-secs) | const | How often to call [`PrinterClient::keepalive_tick`]: half the 30s keepalive this client advertises in CONNECT, so a missed tick still leaves margin before the broker's 45s cutoff. |
+| [`SEQUENCE_ID_FLOOR`](#sequence-id-floor) | const | Lowest `sequence_id` this client mints, above every range another party on the shared report topic is known to use. |
 
 ## Modules
 
@@ -52,12 +58,187 @@ The client applies model-aware safety checks automatically:
 - [`command`](command/index.md) — # Command Handles and Outcomes
 - [`drying`](drying/index.md) — # Drying Cycle Builder
 - [`dummy`](dummy/index.md) — Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters.
-- [`types`](types/index.md#types) — Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration).
+- [`types`](types/index.md#types) — Client-facing helper types (telemetry events, print progress, calibration options).
 
 
 ---
 
 ## Types
+
+### `CalibrationOption`
+
+```rust
+struct CalibrationOption();
+```
+
+Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE].
+
+Combine flags with `|` (or collect an iterator of them) to trigger several routines at once,
+e.g. `CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION`. Only the
+named constants can be built, so a value never carries bits no routine owns.
+
+#### Implementations
+
+- <span id="calibrationoption-const-bed-leveling"></span>`const BED_LEVELING: Self`
+
+- <span id="calibrationoption-const-vibration-compensation"></span>`const VIBRATION_COMPENSATION: Self`
+
+- <span id="calibrationoption-const-motor-noise-cancellation"></span>`const MOTOR_NOISE_CANCELLATION: Self`
+
+- <span id="calibrationoption-const-nozzle-height"></span>`const NOZZLE_HEIGHT: Self`
+
+- <span id="calibrationoption-const-heatbed-thermal"></span>`const HEATBED_THERMAL: Self`
+
+- <span id="calibrationoption-empty"></span>`const fn empty() -> Self`
+
+  No routines.
+
+- <span id="calibrationoption-bits"></span>`const fn bits(self) -> u32`
+
+  The wire `option` bitmask.
+
+- <span id="calibrationoption-contains"></span>`const fn contains(self, other: Self) -> bool`
+
+  Whether every routine in `other` is also in `self`.
+
+- <span id="calibrationoption-is-empty"></span>`const fn is_empty(self) -> bool`
+
+  Whether no routine is selected.
+
+#### Trait Implementations
+
+##### `impl BitOr for CalibrationOption`
+
+- <span id="calibrationoption-bitor-type-output"></span>`type Output = CalibrationOption`
+
+- <span id="calibrationoption-bitor"></span>`fn bitor(self, rhs: Self) -> Self`
+
+##### `impl BitOrAssign for CalibrationOption`
+
+- <span id="calibrationoption-bitorassign-bitor-assign"></span>`fn bitor_assign(&mut self, rhs: Self)`
+
+##### `impl Clone for CalibrationOption`
+
+- <span id="calibrationoption-clone"></span>`fn clone(&self) -> CalibrationOption` — [`CalibrationOption`](../types/control/index.md#calibrationoption)
+
+##### `impl Copy for CalibrationOption`
+
+##### `impl Debug for CalibrationOption`
+
+- <span id="calibrationoption-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for CalibrationOption`
+
+- <span id="calibrationoption-default"></span>`fn default() -> CalibrationOption` — [`CalibrationOption`](../types/control/index.md#calibrationoption)
+
+##### `impl Eq for CalibrationOption`
+
+##### `impl FromIterator<CalibrationOption> for CalibrationOption`
+
+- <span id="calibrationoption-fromiterator-from-iter"></span>`fn from_iter<I: IntoIterator<Item = CalibrationOption>>(iter: I) -> Self`
+
+##### `impl Hash for CalibrationOption`
+
+- <span id="calibrationoption-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for CalibrationOption`
+
+- <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](../types/control/index.md#calibrationoption)
+
+### `HeaterTemps`
+
+```rust
+struct HeaterTemps {
+    pub actual: u16,
+    pub target: u16,
+}
+```
+
+One heater's actual and target temperature, in °C.
+
+#### Fields
+
+- **`actual`**: `u16`
+
+  Measured temperature.
+
+- **`target`**: `u16`
+
+  Target temperature; `0` when the heater is off or the wire carries no target.
+
+#### Trait Implementations
+
+##### `impl Clone for HeaterTemps`
+
+- <span id="heatertemps-clone"></span>`fn clone(&self) -> HeaterTemps` — [`HeaterTemps`](#heatertemps)
+
+##### `impl Copy for HeaterTemps`
+
+##### `impl Debug for HeaterTemps`
+
+- <span id="heatertemps-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for HeaterTemps`
+
+- <span id="heatertemps-default"></span>`fn default() -> HeaterTemps` — [`HeaterTemps`](#heatertemps)
+
+##### `impl Eq for HeaterTemps`
+
+##### `impl Hash for HeaterTemps`
+
+- <span id="heatertemps-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for HeaterTemps`
+
+- <span id="heatertemps-partialeq-eq"></span>`fn eq(&self, other: &HeaterTemps) -> bool` — [`HeaterTemps`](#heatertemps)
+
+### `NozzleTemps`
+
+```rust
+struct NozzleTemps {
+    pub id: u8,
+    pub actual: u16,
+    pub target: u16,
+}
+```
+
+One nozzle's temperatures, in °C.
+
+#### Fields
+
+- **`id`**: `u8`
+
+  Nozzle id: `0` on single-nozzle models; `0` (right) and `1` (left) on IDEX.
+
+- **`actual`**: `u16`
+
+  Measured temperature.
+
+- **`target`**: `u16`
+
+  Target temperature.
+
+#### Trait Implementations
+
+##### `impl Clone for NozzleTemps`
+
+- <span id="nozzletemps-clone"></span>`fn clone(&self) -> NozzleTemps` — [`NozzleTemps`](#nozzletemps)
+
+##### `impl Copy for NozzleTemps`
+
+##### `impl Debug for NozzleTemps`
+
+- <span id="nozzletemps-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for NozzleTemps`
+
+##### `impl Hash for NozzleTemps`
+
+- <span id="nozzletemps-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for NozzleTemps`
+
+- <span id="nozzletemps-partialeq-eq"></span>`fn eq(&self, other: &NozzleTemps) -> bool` — [`NozzleTemps`](#nozzletemps)
 
 ### `Capabilities<'a>`
 
@@ -337,6 +518,22 @@ camera error is still visible instead of being swallowed or masking the success.
 
   Camera channel result — see the struct docs for what each state means.
 
+#### Implementations
+
+- <span id="connectalloutcome-errors"></span>`fn errors(&self) -> impl Iterator<Item = (Channel, &Error)>` — [`Error`](../error/index.md#error)
+
+  Every channel that was attempted and failed, with its error.
+
+  A view over the per-channel fields for the "did everything I configured connect?"
+  question; channels not attempted (`None`) aren't failures and don't appear.
+
+- <span id="connectalloutcome-into-result"></span>`fn into_result(self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+
+  `Ok(())` if no attempted channel failed, else the first failure in MQTT, FTPS, camera order.
+
+  For callers that treat a partial connect as a failed one. The per-channel fields stay
+  available for those that don't.
+
 #### Trait Implementations
 
 ##### `impl Clone for ConnectAllOutcome`
@@ -472,7 +669,7 @@ client
   longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
   attached box must have a heater.
 
-  [`Error::ProtocolViolation`](../error/index.md#error) for an `ams_id` outside the documented address space.
+  [`Error::InvalidArgument`](../error/index.md#error) for an `ams_id` outside the documented address space.
 
   [`Error::InvalidArgument`](../error/index.md#error) when the temperature falls outside the unit's
   [`dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not
@@ -497,56 +694,46 @@ client
 
 #### Trait Implementations
 
-### `CalibrationOption`
+### `PreheatHandles`
 
 ```rust
-struct CalibrationOption(u32);
+struct PreheatHandles {
+    pub airduct: Option<super::CommandHandle>,
+    pub chamber: Option<super::CommandHandle>,
+}
 ```
 
-Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE].
+The commands [`preheat_chamber()`](#printerclient) sent; `None` for one it didn't send.
 
-Combine flags with bitwise OR to trigger multiple calibration routines simultaneously
-(e.g., `CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION`).
+#### Fields
 
-#### Implementations
+- **`airduct`**: `Option<super::CommandHandle>`
 
-- <span id="calibrationoption-const-bed-leveling"></span>`const BED_LEVELING: Self`
+  The `set_airduct` command moving the flap.
 
-- <span id="calibrationoption-const-vibration-compensation"></span>`const VIBRATION_COMPENSATION: Self`
+- **`chamber`**: `Option<super::CommandHandle>`
 
-- <span id="calibrationoption-const-motor-noise-cancellation"></span>`const MOTOR_NOISE_CANCELLATION: Self`
-
-- <span id="calibrationoption-const-nozzle-height"></span>`const NOZZLE_HEIGHT: Self`
-
-- <span id="calibrationoption-const-heatbed-thermal"></span>`const HEATBED_THERMAL: Self`
+  The `M141` setting the chamber target.
 
 #### Trait Implementations
 
-##### `impl BitOr for CalibrationOption`
+##### `impl Clone for PreheatHandles`
 
-- <span id="calibrationoption-bitor-type-output"></span>`type Output = CalibrationOption`
+- <span id="preheathandles-clone"></span>`fn clone(&self) -> PreheatHandles` — [`PreheatHandles`](#preheathandles)
 
-- <span id="calibrationoption-bitor"></span>`fn bitor(self, rhs: Self) -> Self`
+##### `impl Debug for PreheatHandles`
 
-##### `impl Clone for CalibrationOption`
+- <span id="preheathandles-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-- <span id="calibrationoption-clone"></span>`fn clone(&self) -> CalibrationOption` — [`CalibrationOption`](types/index.md#calibrationoption)
+##### `impl Default for PreheatHandles`
 
-##### `impl Copy for CalibrationOption`
+- <span id="preheathandles-default"></span>`fn default() -> PreheatHandles` — [`PreheatHandles`](#preheathandles)
 
-##### `impl Debug for CalibrationOption`
+##### `impl Eq for PreheatHandles`
 
-- <span id="calibrationoption-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+##### `impl PartialEq for PreheatHandles`
 
-##### `impl Eq for CalibrationOption`
-
-##### `impl Hash for CalibrationOption`
-
-- <span id="calibrationoption-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
-
-##### `impl PartialEq for CalibrationOption`
-
-- <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](types/index.md#calibrationoption)
+- <span id="preheathandles-partialeq-eq"></span>`fn eq(&self, other: &PreheatHandles) -> bool` — [`PreheatHandles`](#preheathandles)
 
 ### `PrintProgress`
 
@@ -655,14 +842,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
     `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
   * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
 
-  The wire's `target` field is derived internally rather than caller-supplied —
-  confirmed against BambuStudio's `command_ams_change_filament`
-  (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
-  any AMS-HT/external-spool unit or an A2L-attached AMS Lite (wire `ams_id >= 16`), or the flat global tray ID
-  (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
-  match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
-  class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
-  `ams_id: 0`, the sole worked example in the reference doc.
+  The wire's `target` field is derived, not caller-supplied — see
+  [`AmsChangeFilamentRequest::load`](../mqtt/index.md).
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) for an address no unit answers to.
 
   `extruder_id` names the hotend to feed — `Some(0)` for right/main, `Some(1)` for
   left/deputy. Pass `None` on any printer without a Filament Track Switch, where the
@@ -742,14 +927,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
     Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     `tray_id: 254`.
 
-  Takes the unit and its **local** slot, and derives the global `tray_id` the wire carries
-  with `resolve_global_tray_id`: `ams_id * 4 + slot`
-  on a standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1`
-  example is unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's
-  `GetTrayIndexMap`, `DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT
-  (slot 0 only) or an external holder (slot ignored), which gives the cheat-sheet pairs
-  above. Taking the global id from the caller used to let `(2, 1)` bind unit 0's tray 1
-  while claiming unit 2 (#397).
+  Takes the unit and its **local** slot; the global `tray_id` the wire carries is derived by
+  [`CaliSelAddress`](../diagnostics/kprofile/index.md#caliseladdress). Taking the global id
+  from the caller used to let `(2, 1)` bind unit 0's tray 1 while claiming unit 2 (#397).
 
 - <span id="superprinterclient-get-version"></span>`async fn get_version(&mut self) -> Result<VersionInfo, Error>` — [`VersionInfo`](../types/version/index.md#versioninfo), [`Error`](../error/index.md#error)
 
@@ -757,7 +937,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sends a `get_version` command and waits for the response, buffering any
   telemetry messages that arrive in the interim. Wrap in a platform-specific
-  timeout if you need a shorter deadline than `command_timeout_secs`.
+  timeout if you need a shorter deadline than the command timeout.
 
 - <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self, filament_id: Option<&str>, nozzle_diameter: Option<&str>) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
 
@@ -807,7 +987,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Requires prior camera configuration via [`.with_camera()`](#printerclient),
   [`.attach_camera()`](#printerclient) or
-  [`.with_attached_camera()`](#printerclient). Returns `Error::ProtocolViolation`
+  [`.with_attached_camera()`](#printerclient). Returns `Error::ModelMismatch`
   immediately for RTSPS models — see `ensure_camera()`'s doc
   comment.
 
@@ -820,7 +1000,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`poll_telemetry()`](#printerclient)'s relationship to
   [`.mqtt()`](#printerclient).
 
-- <span id="superprinterclient-disconnect-camera"></span>`async fn disconnect_camera(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-disconnect-camera"></span>`async fn disconnect_camera(&mut self)`
 
   Disconnects the camera session, if one exists, and clears it from the client.
 
@@ -862,7 +1042,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   sequence counter is reseeded (under a timer with a real clock), and a `pushall` refills
   the cache.
 
-- <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self)`
 
   Disconnects the MQTT session, if one exists, and clears it from the client.
 
@@ -896,11 +1076,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Overrides the default MQTT port (8883).
 
-- <span id="superprinterclient-with-connect-timeout"></span>`fn with_connect_timeout(self, secs: u64) -> Self`
+- <span id="superprinterclient-with-connect-timeout"></span>`fn with_connect_timeout(self, timeout: Option<Duration>) -> Self`
 
-  Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
-  Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
-  convention. Non-consuming — chain onto any construction path.
+  Sets the bound on each channel's dial+TLS+handshake; `None` disables it.
+
+  The default is [`DEFAULT_CONNECT_TIMEOUT`](#default-connect-timeout) (10s). Needs a
+  real clock ([`with_timer()`](#printerclient)) to fire. Keeps the type parameters;
+  chain onto any construction path.
 
   This is the only connect budget on every backend. `EspIdfTlsConnector` has its own
   handshake deadline for direct use, but it is disabled unless set, so it doesn't cap this
@@ -922,6 +1104,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   connected FTPS session: this builder is synchronous and cannot close it, so the session is
   dropped without `close_notify` (see `.claude/rules/tls-session-teardown.md`).
 
+  On a [`from_mqtt()`](#printerclient) client, which has no ip or access code to
+  dial with, the first FTPS call returns [`Error::NotConfigured`](../error/index.md#error); use
+  [`with_attached_ftps()`](#printerclient) there.
+
 - <span id="superprinterclient-with-ftps-port"></span>`fn with_ftps_port(self, port: u16) -> Self`
 
   Overrides the default FTPS port (990).
@@ -940,7 +1126,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   embassy — so against a printer that insisted on TLS 1.3 they fail closed, and this
   bypass is the only way through. It skips the version check only; certificate
   verification is configured on the `TlsConnector` and is unaffected.
-  Non-consuming — chain onto any construction path.
+  Keeps the type parameters; chain onto any construction path.
 
 - <span id="superprinterclient-connect-ftps"></span>`async fn connect_ftps(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -984,7 +1170,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   - **Camera** — attempted only if `.with_camera()` supplied a config *and* the model's
     [`CameraProtocol`](../camera/index.md#cameraprotocol) is `BinaryJpeg`. Note the deliberate difference from
     [`connect_camera()`](#printerclient), which returns
-    [`Error::ProtocolViolation`](../error/index.md#error) on an RTSPS model: here an RTSPS camera is a channel
+    [`Error::ModelMismatch`](../error/index.md#error) on an RTSPS model: here an RTSPS camera is a channel
     that does not apply to this printer, not a failure, so reporting it as an error
     would hand every P2S/X2D consumer a guaranteed `Err` on an otherwise clean connect.
     Those models use `camera::rtsps::build_rtsps_url()` and have no client-managed
@@ -992,7 +1178,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   # Timeouts
 
-  `connect_timeout_secs` is applied **per channel**, matching the individual
+  The connect timeout is applied **per channel**, matching the individual
   `ensure_*` methods, so a slow or unreachable camera can never cause an otherwise
   healthy MQTT dial to be reported as timed out. Because the channels run concurrently
   the worst-case wall clock for the whole call is still one timeout, not three. A
@@ -1034,7 +1220,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
 
   Call [`disconnect_camera()`](#printerclient) first on a client with a connected
-  camera session, for the same reason as `.with_ftps()`.
+  camera session, for the same reason as `.with_ftps()`. On a
+  [`from_mqtt()`](#printerclient) client the first camera call returns
+  [`Error::NotConfigured`](../error/index.md#error); use [`with_attached_camera()`](#printerclient) there.
 
 - <span id="superprinterclient-with-attached-camera"></span>`fn with_attached_camera<NewCameraRawIO, NewCameraTls>(self, tls: NewCameraTls, camera: BinaryCameraStream<<NewCameraTls as >::Stream>) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, NewCameraRawIO, NewCameraTls, super::PreConnected<NewCameraRawIO>>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`PrinterClient`](#printerclient)
 
@@ -1104,19 +1292,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
   every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
 
-- <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](types/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
 
-  Translates percentage input to standard PWM ranges (0 to 255) in the G-code envelope.
-  For models with unique secondary cooling configurations (like the X2D), directs commands
-  to the correct target port ID.
+  Translates the percentage to the 0-255 PWM range of `M106`, on the fan's own port
+  ([`FanTarget::write_port`](../types/control/index.md#fantarget)).
 
-- <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+  # Errors
 
-  Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
+  [`Error::ModelMismatch`](../error/index.md#error) when this model doesn't have the fan.
 
-- <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: crate::mqtt::commands::AirductMode) -> Result<CommandHandle, Error>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: LedNode, turn_on: bool) -> Result<CommandHandle, Error>` — [`LedNode`](../types/control/index.md#lednode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns an LED fixture on or off [REF-MQTT-LIFECYCLE].
+
+- <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: AirductMode) -> Result<CommandHandle, Error>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
 
@@ -1128,15 +1319,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Supported on models with onboard speakers (A1, A1 Mini, A2L).
 
-- <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error>` — [`BuzzerMode`](types/index.md#buzzermode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error>` — [`BuzzerMode`](../types/control/index.md#buzzermode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
 
   Supported on models with a physical fire alarm buzzer (H2 series).
 
-- <span id="superprinterclient-is-axis-homed"></span>`fn is_axis_homed(&self, axis: char) -> Option<bool>`
+- <span id="superprinterclient-is-axis-homed"></span>`fn is_axis_homed(&self, axis: Axis) -> Option<bool>` — [`Axis`](../quirks/index.md#axis)
 
-  Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
+  Returns whether `axis` was homed as of the last-observed `home_flag` telemetry.
 
   `None` means no telemetry carrying `home_flag` has been observed **on the current MQTT
   connection** (via [`poll_telemetry()`](#printerclient)) — not "unhomed". A
@@ -1182,36 +1373,43 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns the [`CommandHandle`](command/index.md#commandhandle) of the published `gcode_line` command.
 
-- <span id="superprinterclient-home-axes"></span>`async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-home-all"></span>`async fn home_all(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
-  Dispatches safe homing operations to prevent hardware collisions.
+  Homes every axis with a bare `G28`, the firmware's own safe parking sequence [REF-MOTO-GCODE].
 
-  **Z-Axis Homing Crash Hazards [REF-MOTO-GCODE]:**
-  * **Bed-on-Z models** (X1, X2D, P1, H2, P2S series) must strictly be homed using a bare `G28`
-    to execute the safe firmware-defined toolhead parking sequence. Specifying axis constraints
-    (such as `G28 Z`) bypasses this and risks driving the bed directly into a misplaced toolhead.
-  * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
-    highly recommended for standard configurations.
+  The right call on every model. On bed-slingers (A1, A1 Mini, A2L) a targeted
+  [`home_z_only()`](#printerclient) is also available.
 
-- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: char, distance: f32, feedrate: u32) -> Result<Option<CommandHandle>, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-home-z-only"></span>`async fn home_z_only(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Homes only Z (`G28 Z`) — refused on bed-on-Z models [REF-MOTO-GCODE].
+
+  **Bed-on-Z models** (X1, X2D, P1, H2, P2S series) must be homed with a bare `G28`
+  ([`home_all()`](#printerclient)), which runs the firmware's toolhead parking sequence.
+  `G28 Z` skips it and risks driving the bed into a misplaced toolhead, so those models get
+  [`Error::ModelMismatch`](../error/index.md#error) and nothing is sent. Bed-slingers (A1, A1 Mini, A2L) accept it.
+
+- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: Axis, distance: f32, feedrate: u32) -> Result<Option<CommandHandle>, Error>` — [`Axis`](../quirks/index.md#axis), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dispatches a manual relative axis movement block.
 
   **Relative Axis Movement Safety [REF-MOTO-GCODE]:**
-  For relative movements on the Z-axis, this method wraps the move in a client-side
-  `z_max` distance cap (bounding how far a single command can travel — not true
-  position-aware crash prevention, since the printer reports no absolute axis position
-  over MQTT) and safe reference-mode push/pop blocks (`M1002 push_ref_mode` /
-  `M1002 pop_ref_mode`) to prevent frame shifting, inside BambuStudio's `M211 S` /
-  `M211 X1 Y1 Z1` … `M211 R` save-enable-restore of the soft-endstop state. Per real H2D
-  hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
-  software travel limits on G-code received over MQTT regardless of `M211` state — it is
-  not a source of crash protection here. X/Y moves get the same kind of client-side
-  `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
+  Each move is capped client-side at the axis's travel in the model's
+  [`build_volume()`](../quirks/index.md#modelquirks) — a bound on one command's
+  distance, not position-aware crash prevention, since the printer reports no absolute axis
+  position over MQTT. A Z move is additionally wrapped in reference-mode push/pop
+  (`M1002 push_ref_mode` / `M1002 pop_ref_mode`) to prevent frame shifting, inside
+  BambuStudio's `M211 S` / `M211 X1 Y1 Z1` … `M211 R` save-enable-restore of the
+  soft-endstop state. Per real H2D hardware testing (bambuddy #2579, confirmed 2026-07-16)
+  firmware does not enforce software travel limits on G-code received over MQTT regardless
+  of `M211` state — it is not a source of crash protection here.
 
   A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
-  returns `Ok(None)`. This avoids surfacing the Z-axis travel-limit error for a request
-  that isn't actually out of range.
+  returns `Ok(None)`.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when `distance` is non-finite or exceeds the axis's travel.
 
 - <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -1224,7 +1422,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Blocks until a `G28` homing cycle observed via telemetry has completed.
 
-  Standalone — does not require this client to have issued [`home_axes()`](#printerclient).
+  Standalone — does not require this client to have issued [`home_all()`](#printerclient).
   Resolves correctly whether homing was triggered by this client, the touchscreen, slicer
   software, or another `PrinterClient` instance, since it only relies on `home_flag`
   telemetry observed via [`poll_telemetry()`](#printerclient).
@@ -1234,9 +1432,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   resolve instantly, and a call where nothing ever homes times out rather than
   returning early.
 
-  Like `poll_until` (`src/client/mod.rs`), `wait_for_homing_inner`'s own
-  wall-clock timeout (`HOMING_WAIT_TIMEOUT_SECS`) and message-count valve
-  (`POLL_UNTIL_MAX_MESSAGES`) only run *after* each `poll_telemetry().await` below
+  Times out after [`HOMING_WAIT_TIMEOUT`](#homing-wait-timeout), independent of the command timeout. Like
+  `poll_until` (`src/client/mod.rs`), that deadline (or, without a real clock, the
+  message-count valve) is only checked *after* each `poll_telemetry().await` below
   has already returned — neither protects against that single call stalling
   forever on a connection that stops delivering bytes mid-homing (printer powered
   off, network drop). That protection is a distinct, lower layer: the underlying
@@ -1275,17 +1473,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-ignore-error-and-resume"></span>`async fn ignore_error_and_resume(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-ignore-error-and-resume"></span>`async fn ignore_error_and_resume(&mut self, error_code: impl Into<u32>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Ignores `error_code` and resumes the paused print (the error dialog's "Ignore and resume").
 
   Sends `ignore`, which skips the firmware's next re-check of that one fault. A plain
   [`resume_print`](#printerclient) means "fixed it, re-check", so a fault such as a wrong
   build plate is re-detected and pauses the print again a second later (bambuddy #1869).
-  `error_code` is the raw `print_error` register value; the cached `job_id` is echoed back,
-  or an empty string before any telemetry carried one. [REF-MQTT-LIFECYCLE]
+  `error_code` is the `print_error` register value: pass the
+  `DecodedPrintError` from
+  [`active_fault()`](#printerclient), or its raw `code`. The cached `job_id` is echoed
+  back, or an empty string before any telemetry carried one. [REF-MQTT-LIFECYCLE]
 
-- <span id="superprinterclient-resume-print-after-error"></span>`async fn resume_print_after_error(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-resume-print-after-error"></span>`async fn resume_print_after_error(&mut self, error_code: impl Into<u32>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Resumes naming the fault being answered — BambuStudio's error-dialog form of `resume`.
 
@@ -1294,21 +1494,21 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Takes the same `error_code` and cached `job_id` as
   [`ignore_error_and_resume`](#printerclient). [REF-MQTT-LIFECYCLE]
 
-- <span id="superprinterclient-stop-print-after-error"></span>`async fn stop_print_after_error(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-stop-print-after-error"></span>`async fn stop_print_after_error(&mut self, error_code: impl Into<u32>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Stops naming the fault being answered — BambuStudio's error-dialog form of `stop`.
 
   An opt-in alternative to [`stop_print`](#printerclient), on the same terms as
   [`resume_print_after_error`](#printerclient). [REF-MQTT-LIFECYCLE]
 
-- <span id="superprinterclient-dismiss-error"></span>`async fn dismiss_error(&mut self, error_code: u32, persistent: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-dismiss-error"></span>`async fn dismiss_error(&mut self, error_code: impl Into<u32>, scope: IdleIgnoreScope) -> Result<CommandHandle, Error>` — [`IdleIgnoreScope`](../mqtt/commands/control/index.md#idleignorescope), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dismisses a non-pausing warning without resuming anything (`idle_ignore`).
 
-  `persistent` suppresses the same warning permanently (`type: 1`) instead of just this
-  occurrence. [REF-MQTT-LIFECYCLE]
+  `scope` dismisses this occurrence or suppresses the warning permanently.
+  [REF-MQTT-LIFECYCLE]
 
-- <span id="superprinterclient-close-error-dialog"></span>`async fn close_error_dialog(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-close-error-dialog"></span>`async fn close_error_dialog(&mut self, error_code: impl Into<u32>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Closes the `print_error` dialog on the printer's own screen (`system.uiop`).
 
@@ -1332,7 +1532,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `ams_filament_drying` for one unit. Whether the two are equivalent is not known, so this
   is offered alongside it rather than in place of it.
 
-- <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error>` — [`PrintSpeed`](types/index.md#printspeed), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error>` — [`PrintSpeed`](../types/control/index.md#printspeed), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
 
@@ -1358,7 +1558,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   capture, including hardware the vendor documents as supporting the feature, so gating on
   it would break skip-objects outright. bambuddy parses it and likewise does not gate on it.
 
-- <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<CommandHandle, Error>` — [`CalibrationOption`](types/index.md#calibrationoption), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<CommandHandle, Error>` — [`CalibrationOption`](../types/control/index.md#calibrationoption), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Triggers automated physical calibration routines on the printer chassis [REF-MQTT-LIFECYCLE].
 
@@ -1393,8 +1593,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The firmware accepts every option bit, acknowledges the command `"result": "success"`,
   and silently queues nothing for a routine the hardware doesn't run — so the wire never
   reports the skip. This method masks the request against
-  [`supported_calibration_mask()`](../quirks/index.md#modelquirks)
-  instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
+  [`supported_calibration()`](../quirks/index.md#modelquirks)
+  instead of trusting that ack: unsupported routines are dropped with a `log::warn!` and the
   remaining routines still run.
 
   **Vibration compensation (bit 2) is kept on every model.** Both upstreams send the bit
@@ -1442,7 +1642,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`.attach_ftps()`](#printerclient). A session that a transport failure poisoned is
   disconnected and redialed here rather than handed back.
 
-- <span id="superprinterclient-disconnect-ftps"></span>`async fn disconnect_ftps(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-disconnect-ftps"></span>`async fn disconnect_ftps(&mut self)`
 
   Disconnects the FTPS session, if one exists, keeping its configuration for a reconnect.
 
@@ -1450,9 +1650,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   into this client's FTPS configuration, so the next [`ftps()`](#printerclient) or
   [`connect_ftps()`](#printerclient) dials a fresh session, as the camera channel does.
 
-  Idempotent — a no-op if no FTPS session is active. Always returns `Ok(())`; kept
-  fallible for API symmetry with [`connect_ftps()`](#printerclient) and to leave room
-  for a fallible teardown step in the future without a breaking signature change.
+  Idempotent — a no-op if no FTPS session is active. Infallible: a close failure on the way
+  out is logged and swallowed, since the connection is going away either way.
 
 - <span id="superprinterclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error>` — [`TelemetryEvent`](types/index.md#telemetryevent), [`Error`](../error/index.md#error)
 
@@ -1528,10 +1727,31 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Transport errors from reading the wire are returned as-is; the command then resolves as
   [`CommandOutcome::ConnectionLost`](command/index.md#commandoutcome) once the session is re-established.
 
-- <span id="superprinterclient-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](types/index.md#printstatus)
+- <span id="superprinterclient-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](../types/control/index.md#printstatus)
 
   Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `gcode_state` has been observed yet.
+
+- <span id="superprinterclient-subtask-name"></span>`fn subtask_name(&self) -> Option<&str>`
+
+  Returns the active job's name (`subtask_name`) as of the last-observed telemetry; `None` before any carried it.
+
+- <span id="superprinterclient-legacy-nozzle"></span>`fn legacy_nozzle(&self) -> (Option<&str>, Option<&str>)`
+
+  Returns the legacy single-nozzle `(nozzle_diameter, nozzle_type)` strings as of the last-observed telemetry.
+
+  Pre-IDEX models report the fitted nozzle this way; newer ones report per-nozzle entries
+  under [`device()`](#printerclient) instead.
+
+- <span id="superprinterclient-sdcard-status"></span>`fn sdcard_status(&self) -> Option<SdcardState>` — [`SdcardState`](../types/telemetry/report/index.md#sdcardstate)
+
+  Returns the SD-card state as of the last-observed telemetry that carried one — see [`PrinterTelemetry::sdcard_status`](../types/telemetry/report/index.md#printertelemetry).
+
+- <span id="superprinterclient-device"></span>`fn device(&self) -> Option<&DeviceTelemetry>` — [`DeviceTelemetry`](../types/telemetry/device/index.md#devicetelemetry)
+
+  Returns the merged `device` telemetry (nozzles, extruders, airduct, chamber controller) as of the last-observed telemetry.
+
+  `None` before any telemetry carried a `device` object, from either wire location.
 
 - <span id="superprinterclient-is-door-open"></span>`fn is_door_open(&self) -> Option<bool>`
 
@@ -1565,10 +1785,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Each field independently tracks its own "last observed" value — see [`PrintProgress`](types/index.md#printprogress)'s doc
   comment.
 
-- <span id="superprinterclient-bed-temperatures"></span>`fn bed_temperatures(&self) -> (u16, u16)`
+- <span id="superprinterclient-bed-temperatures"></span>`fn bed_temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](#heatertemps)
 
-  Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
-  Returns `(0, 0)` before any telemetry carrying bed temperature has been observed.
+  Returns the bed's temperatures as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)); `None` before any telemetry carrying them.
 
   Shares its cross-model decode logic with
   `TelemetryReport::bed_temperatures()` —
@@ -1634,21 +1853,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `None` means no telemetry carrying `print.vir_slot` has been observed yet — including on
   single-nozzle models, which send [`vt_tray()`](#printerclient) instead.
 
-- <span id="superprinterclient-nozzle-temperatures"></span>`fn nozzle_temperatures(&self) -> Vec<(u8, u16, u16)>`
+- <span id="superprinterclient-nozzle-temperatures"></span>`fn nozzle_temperatures(&self) -> Vec<NozzleTemps>` — [`NozzleTemps`](#nozzletemps)
 
-  Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)) as `(id, actual, target)` tuples in °C.
+  Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)), one entry per nozzle; empty before any telemetry carrying them.
+
   Single-nozzle models return one entry (`id` 0); IDEX models return one entry per physical
-  nozzle. See [`decode_nozzle_temperatures`](../types/telemetry/index.md#decode-nozzle-temperatures) for the cross-model decode (including the
-  undocumented IDEX flat-field routing quirk).
+  nozzle. Same decode as
+  `TelemetryReport::nozzle_temperatures()`,
+  including the undocumented IDEX flat-field routing quirk.
 
-- <span id="superprinterclient-chamber-temperature"></span>`fn chamber_temperature(&self) -> Option<(u16, u16)>`
+- <span id="superprinterclient-chamber-temperature"></span>`fn chamber_temperature(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](#heatertemps)
 
-  Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
+  Returns the chamber's temperatures as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
-  Returns `None` on models without an active chamber temperature sensor/heater
-  (`ModelQuirks::has_chamber_temperature_sensor()` returns `false`, e.g. A1/A1 Mini/A2L/P1P/
-  P1S). `Some((0, 0))` before any telemetry carrying `chamber_temper` has been observed on a
-  chamber-equipped model.
+  `None` on models without a chamber temperature sensor
+  (`ModelQuirks::has_chamber_temperature_sensor()` is `false`, e.g. A1/A1 Mini/A2L/P1P/
+  P1S), and before any telemetry carrying `chamber_temper` has been observed.
 
 - <span id="superprinterclient-hms"></span>`fn hms(&self) -> Option<&[HmsEntry]>` — [`HmsEntry`](../types/telemetry/diagnostics/index.md#hmsentry)
 
@@ -1675,32 +1895,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Empty when nothing is cached or nothing currently decodes as a genuine fault — there's no caller
   action that would differ between those two cases.
 
-- <span id="superprinterclient-part-cooling-fan-speed"></span>`fn part_cooling_fan_speed(&self) -> Option<u8>`
+- <span id="superprinterclient-fan-speed"></span>`fn fan_speed(&self, fan: FanTarget) -> Option<u8>` — [`FanTarget`](../types/control/index.md#fantarget)
 
-  Returns the part-cooling fan speed (Port 1) as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
+  Returns `fan`'s speed as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)); `None` before any telemetry carrying it.
 
-- <span id="superprinterclient-auxiliary-left-fan-speed"></span>`fn auxiliary_left_fan_speed(&self) -> Option<u8>`
-
-  Returns the primary left-side auxiliary fan speed (Port 2) as a percentage (0-100).
-
-- <span id="superprinterclient-chamber-exhaust-fan-speed"></span>`fn chamber_exhaust_fan_speed(&self) -> Option<u8>`
-
-  Returns the chamber exhaust/filtration fan speed (Port 3) as a percentage (0-100).
+  [`FanTarget::AuxiliaryLeft2`](../types/control/index.md#fantarget) (X2D/P2S, port 10) reports at a different wire location
+  than the other three — `device.airduct.parts[id=160].state`, already a percentage
+  [REF-CLIM-FANS] — which this handles.
 
 - <span id="superprinterclient-heatbreak-fan-speed"></span>`fn heatbreak_fan_speed(&self) -> Option<u8>`
 
   Returns the toolhead heatbreak fan speed as a percentage (0-100).
+
   Not independently controllable (no corresponding `FanTarget` variant/M106 port) — read-only
   telemetry.
 
-- <span id="superprinterclient-auxiliary-left2-fan-speed"></span>`fn auxiliary_left2_fan_speed(&self) -> Option<u8>`
-
-  Returns the X2D/P2S second left-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryLeft2`) as a percentage (0-100).
-  Reported at a different wire location than the other four fans —
-  `device.airduct.parts[id=160].state` — already a direct percentage, no 0-15 step conversion
-  [REF-CLIM-FANS].
-
-- <span id="superprinterclient-print-speed"></span>`fn print_speed(&self) -> Option<PrintSpeed>` — [`PrintSpeed`](types/index.md#printspeed)
+- <span id="superprinterclient-print-speed"></span>`fn print_speed(&self) -> Option<PrintSpeed>` — [`PrintSpeed`](../types/control/index.md#printspeed)
 
   Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` before any telemetry carrying `spd_lvl` has been observed, or if the observed value is
@@ -1726,6 +1936,29 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
   `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it.
 
+- <span id="superprinterclient-poll-telemetry-until"></span>`async fn poll_telemetry_until(&mut self, timeout: core::time::Duration, done: impl FnMut(&Self) -> bool) -> Result<bool, Error>` — [`Error`](../error/index.md#error)
+
+  Polls telemetry until `done` holds for this client's cache, or `timeout` passes; returns whether `done` was reached.
+
+  `done` is checked before each poll, so an already-satisfied condition returns at once
+  without touching the wire. Events read along the way update the cache as
+  [`poll_telemetry()`](#printerclient) always does, and are otherwise dropped — use
+  `poll_telemetry()` directly to see them.
+
+  `timeout` is measured on this client's timer and checked between messages, so on a link
+  that goes silent the wait can overrun it by up to one read deadline (30s). Without a real
+  clock ([`with_timer()`](#printerclient)) the elapsed time can't be measured and the
+  wait ends after the same 200-message backstop `get_version()` uses.
+
+- <span id="superprinterclient-refresh-state"></span>`async fn refresh_state(&mut self, timeout: core::time::Duration) -> Result<bool, Error>` — [`Error`](../error/index.md#error)
+
+  Requests a full state dump and waits until the cache holds a `gcode_state`, or `timeout` passes; returns whether it does.
+
+  A `pushall` reply carries `gcode_state`, so this waits for the reply on a cold cache; on a
+  cache that already holds one it returns at once without waiting for the new dump. For
+  a field that only some frames carry (an AMS unit's type, say), follow this with
+  [`poll_telemetry_until()`](#printerclient) on that field.
+
 - <span id="superprinterclient-poll-raw"></span>`async fn poll_raw(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage), [`Error`](../error/index.md#error)
 
   Pulls the next raw MQTT message without deserialization.
@@ -1743,7 +1976,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   voltage-dependent — 110°C on a 220V-region unit, 120°C on a 110V-region unit, per the
   official spec sheet. This is
   derived from the most recently observed `home_flag` telemetry
-  (`self.cache.last_home_flag`, bit 3 — see `PrinterTelemetry::is_220v_power`);
+  (`self.core.cache.last_home_flag`, bit 3 — see `PrinterTelemetry::is_220v_power`);
   before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
   region is unknown and the X1C/X1 conservatively clamp to 110°C.
 
@@ -1758,14 +1991,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
 
   * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on
-    IDEX). **Tool-changer exception (H2C):** per `reference/04_toolhead_thermal_motion.md`
-    §4's "Nozzle & Carriage Kinematics", H2C addresses its dedicated fixed hotend as `0`
-    (same `M104 T0` convention as every other model) but its 6 passive tool-changer rack
-    slots as `16..=21` — NOT a simple `0..physical_nozzle_count()` linear index, despite
-    `physical_nozzle_count()` returning `7` for this model. The reference doc only
-    confirms `16..=21` for the rack slots' telemetry-side `stat` field, not that
-    `M104 T16`-style writes are actually meaningful for a passively-stored (unmounted)
-    tool — validation below is deliberately permissive on H2C for exactly that reason.
+    IDEX). On a tool changer (H2C) the fixed hotend is `0` and the rack slots are
+    [`RACK_NOZZLE_IDS`](../quirks/index.md#rack-nozzle-ids) — see
+    [`ModelQuirks::is_valid_nozzle_id`](../quirks/index.md#modelquirks).
 
   Values exceeding the model's maximum nozzle temperature are clamped automatically.
 
@@ -1786,7 +2014,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`preheat_chamber()`](#printerclient) to drive both together, or call
   [`set_airduct_mode()`](#printerclient) yourself.
 
-- <span id="superprinterclient-preheat-chamber"></span>`async fn preheat_chamber(&mut self, target_temp: u16) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-preheat-chamber"></span>`async fn preheat_chamber(&mut self, target_temp: u16) -> Result<PreheatHandles, Error>` — [`PreheatHandles`](#preheathandles), [`Error`](../error/index.md#error)
 
   Sets the chamber target *and* the airduct flap that has to agree with it.
 
@@ -1807,9 +2035,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `target_temp` still returns the same `ModelMismatch` the primitive would, and the flap is
   left alone — the caller wanted heat this model cannot make.
 
-  Returns the handle of the `M141` when one is sent, or of the `set_airduct` command when
-  `target_temp` is `0` on a flap-only model. When both are sent, only the `M141`'s handle is
-  returned.
+  Returns the handle of each command sent, so a caller can await the flap's outcome as well
+  as the heater's — the flap is the command this method exists for.
 
 - <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity)
 
@@ -1852,17 +2079,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   reaching it wraps back to `SEQUENCE_ID_FLOOR` rather than to 0, so a long session never
   drifts into the low range the printer's own `push_status` counter and other clients use.
 
-- <span id="printerclient-set-command-timeout"></span>`fn set_command_timeout(&mut self, secs: u64)`
+- <span id="printerclient-set-command-timeout"></span>`fn set_command_timeout(&mut self, timeout: Option<Duration>)`
 
-  Sets the timeout (in seconds) used by command-response methods like [`get_version()`](#printerclient) and [`get_k_profiles()`](#printerclient).
-
-  Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
-  the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
+  Sets the timeout used by command-response methods like [`get_version()`](#printerclient) and [`get_k_profiles()`](#printerclient); `None` disables it.
 
   The same value is the deadline after which a fire-and-forget command with no echo
   resolves as [`CommandOutcome::TimedOut`](command/index.md#commandoutcome), measured from its publish. A command keeps the
   deadline in force when it was sent; changing this later does not move it. The default is
-  10 seconds, the same window write-zombie detection allows for an echo.
+  [`DEFAULT_COMMAND_TIMEOUT`](#default-command-timeout) (10 seconds), the same window write-zombie detection allows
+  for an echo.
+
+  The timeout needs a real clock ([`with_timer()`](#printerclient)). Without one, and with
+  `None`, a wait is bounded only by the printer answering or the connection failing.
+
+- <span id="printerclient-with-command-timeout"></span>`fn with_command_timeout(self, timeout: Option<Duration>) -> Self`
+
+  Builder form of [`set_command_timeout()`](#printerclient).
 
 - <span id="printerclient-request-pushall"></span>`async fn request_pushall(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -1951,6 +2183,606 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The default [`PrinterClient`](#printerclient) request flow awaits each command in turn and isn't affected.
 
 #### Trait Implementations
+
+### `AirductMode`
+
+```rust
+enum AirductMode {
+    Cooling,
+    Heating,
+    Laser,
+}
+```
+
+Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+
+`Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
+`Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
+`Laser` (2): configuration for laser engraving module operation.
+
+#### Variants
+
+- **`Cooling`**
+
+  Closes internal recirculation dampers, routes hot air out through exhaust.
+
+- **`Heating`**
+
+  Seals enclosure, closes exhaust flaps for heat retention.
+
+- **`Laser`**
+
+  Laser engraving module configuration.
+
+#### Trait Implementations
+
+##### `impl Clone for AirductMode`
+
+- <span id="airductmode-clone"></span>`fn clone(&self) -> AirductMode` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode)
+
+##### `impl Copy for AirductMode`
+
+##### `impl Debug for AirductMode`
+
+- <span id="airductmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AirductMode`
+
+##### `impl PartialEq for AirductMode`
+
+- <span id="airductmode-partialeq-eq"></span>`fn eq(&self, other: &AirductMode) -> bool` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode)
+
+### `IdleIgnoreScope`
+
+```rust
+enum IdleIgnoreScope {
+    Once,
+    Permanent,
+}
+```
+
+How long an `idle_ignore` dismissal lasts.
+
+#### Variants
+
+- **`Once`**
+
+  Dismiss this occurrence only (`type: 0`).
+
+- **`Permanent`**
+
+  Never show this warning again (`type: 1`).
+
+#### Trait Implementations
+
+##### `impl Clone for IdleIgnoreScope`
+
+- <span id="idleignorescope-clone"></span>`fn clone(&self) -> IdleIgnoreScope` — [`IdleIgnoreScope`](../mqtt/commands/control/index.md#idleignorescope)
+
+##### `impl Copy for IdleIgnoreScope`
+
+##### `impl Debug for IdleIgnoreScope`
+
+- <span id="idleignorescope-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for IdleIgnoreScope`
+
+##### `impl Hash for IdleIgnoreScope`
+
+- <span id="idleignorescope-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for IdleIgnoreScope`
+
+- <span id="idleignorescope-partialeq-eq"></span>`fn eq(&self, other: &IdleIgnoreScope) -> bool` — [`IdleIgnoreScope`](../mqtt/commands/control/index.md#idleignorescope)
+
+### `Axis`
+
+```rust
+enum Axis {
+    X,
+    Y,
+    Z,
+}
+```
+
+A motion axis.
+
+#### Variants
+
+- **`X`**
+
+  X.
+
+- **`Y`**
+
+  Y.
+
+- **`Z`**
+
+  Z.
+
+#### Implementations
+
+- <span id="axis-const-all"></span>`const ALL: [Axis; 3]`
+
+- <span id="axis-letter"></span>`const fn letter(self) -> char`
+
+  The G-code letter for this axis.
+
+#### Trait Implementations
+
+##### `impl Clone for Axis`
+
+- <span id="axis-clone"></span>`fn clone(&self) -> Axis` — [`Axis`](../quirks/index.md#axis)
+
+##### `impl Copy for Axis`
+
+##### `impl Debug for Axis`
+
+- <span id="axis-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for Axis`
+
+- <span id="axis-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for Axis`
+
+##### `impl FromStr for Axis`
+
+- <span id="axis-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="axis-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+  Parses `x`/`y`/`z`, case-insensitively.
+
+##### `impl Hash for Axis`
+
+- <span id="axis-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for Axis`
+
+- <span id="axis-partialeq-eq"></span>`fn eq(&self, other: &Axis) -> bool` — [`Axis`](../quirks/index.md#axis)
+
+##### `impl ToString for Axis`
+
+- <span id="axis-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `BuzzerMode`
+
+```rust
+enum BuzzerMode {
+    Silent,
+    Alarm,
+    Chirp,
+}
+```
+
+Buzzer alarm/attention chime mode [REF-MQTT-LIFECYCLE]; supported on models with a physical fire alarm buzzer (H2 series).
+
+#### Variants
+
+- **`Silent`**
+
+  Silent/disarmed.
+
+- **`Alarm`**
+
+  Alarm triggered.
+
+- **`Chirp`**
+
+  Beeping attention chime.
+
+#### Implementations
+
+- <span id="buzzermode-code"></span>`const fn code(self) -> i32`
+
+  The `buzzer_ctrl` `mode` code: `0` silent, `1` alarm, `2` chirp.
+
+#### Trait Implementations
+
+##### `impl Clone for BuzzerMode`
+
+- <span id="buzzermode-clone"></span>`fn clone(&self) -> BuzzerMode` — [`BuzzerMode`](../types/control/index.md#buzzermode)
+
+##### `impl Copy for BuzzerMode`
+
+##### `impl Debug for BuzzerMode`
+
+- <span id="buzzermode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for BuzzerMode`
+
+##### `impl Hash for BuzzerMode`
+
+- <span id="buzzermode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for BuzzerMode`
+
+- <span id="buzzermode-partialeq-eq"></span>`fn eq(&self, other: &BuzzerMode) -> bool` — [`BuzzerMode`](../types/control/index.md#buzzermode)
+
+### `FanTarget`
+
+```rust
+enum FanTarget {
+    PartCooling,
+    AuxiliaryLeft,
+    ChamberExhaust,
+    AuxiliaryLeft2,
+}
+```
+
+Target onboard cooling fans [REF-CLIM-FANS].
+
+#### Variants
+
+- **`PartCooling`**
+
+  Primary part cooling fan (Port 1).
+
+- **`AuxiliaryLeft`**
+
+  Primary left-side auxiliary fan (Port 2).
+
+- **`ChamberExhaust`**
+
+  Chamber exhaust/filtration fan (Port 3).
+
+- **`AuxiliaryLeft2`**
+
+  Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+  
+  Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
+  "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
+  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](../types/control/index.md#fantarget)'s
+  primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
+  Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
+  part cooling fan" throughout (issue #60).
+
+#### Implementations
+
+- <span id="fantarget-const-all"></span>`const ALL: &'static [FanTarget]`
+
+- <span id="fantarget-write-port"></span>`const fn write_port(self) -> u16`
+
+  The M106 `P` port that drives this fan.
+
+- <span id="fantarget-airduct-part-id"></span>`const fn airduct_part_id(self) -> Option<u32>`
+
+  The `device.airduct.parts[].id` this fan reports under, for the one fan read from there.
+
+  A different address space from [`write_port`](../types/control/index.md#fantarget): the three other fans
+  report through `print.*_fan_speed` strings instead and return `None`.
+
+- <span id="fantarget-is-supported-by"></span>`fn is_supported_by(self, quirks: &crate::quirks::ModelQuirks) -> bool` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+
+  Whether `quirks` says this model has the fan.
+
+#### Trait Implementations
+
+##### `impl Clone for FanTarget`
+
+- <span id="fantarget-clone"></span>`fn clone(&self) -> FanTarget` — [`FanTarget`](../types/control/index.md#fantarget)
+
+##### `impl Copy for FanTarget`
+
+##### `impl Debug for FanTarget`
+
+- <span id="fantarget-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FanTarget`
+
+##### `impl Hash for FanTarget`
+
+- <span id="fantarget-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for FanTarget`
+
+- <span id="fantarget-partialeq-eq"></span>`fn eq(&self, other: &FanTarget) -> bool` — [`FanTarget`](../types/control/index.md#fantarget)
+
+### `LedNode`
+
+```rust
+enum LedNode {
+    Chamber,
+    Chamber2,
+    Work,
+}
+```
+
+A printer LED fixture addressed by `ledctrl` and reported in `lights_report`.
+
+#### Variants
+
+- **`Chamber`**
+
+  The chamber light (`chamber_light`).
+
+- **`Chamber2`**
+
+  The second chamber light on models with two (`chamber_light2`).
+
+- **`Work`**
+
+  The work light (`work_light`).
+
+#### Implementations
+
+- <span id="lednode-const-all"></span>`const ALL: &'static [LedNode]`
+
+- <span id="lednode-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The value's wire spelling.
+
+#### Trait Implementations
+
+##### `impl Clone for LedNode`
+
+- <span id="lednode-clone"></span>`fn clone(&self) -> LedNode` — [`LedNode`](../types/control/index.md#lednode)
+
+##### `impl Copy for LedNode`
+
+##### `impl Debug for LedNode`
+
+- <span id="lednode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for LedNode`
+
+- <span id="lednode-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for LedNode`
+
+##### `impl FromStr for LedNode`
+
+- <span id="lednode-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="lednode-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+##### `impl Hash for LedNode`
+
+- <span id="lednode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for LedNode`
+
+- <span id="lednode-partialeq-eq"></span>`fn eq(&self, other: &LedNode) -> bool` — [`LedNode`](../types/control/index.md#lednode)
+
+##### `impl ToString for LedNode`
+
+- <span id="lednode-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `LightMode`
+
+```rust
+enum LightMode {
+    On,
+    Off,
+    Flashing,
+}
+```
+
+An LED fixture's mode, as sent in `ledctrl` and reported in `lights_report`.
+
+#### Variants
+
+- **`On`**
+
+  Lit.
+
+- **`Off`**
+
+  Dark.
+
+- **`Flashing`**
+
+  Cycling on a flash timing.
+
+#### Implementations
+
+- <span id="lightmode-const-all"></span>`const ALL: &'static [LightMode]`
+
+- <span id="lightmode-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The value's wire spelling.
+
+#### Trait Implementations
+
+##### `impl Clone for LightMode`
+
+- <span id="lightmode-clone"></span>`fn clone(&self) -> LightMode` — [`LightMode`](../types/control/index.md#lightmode)
+
+##### `impl Copy for LightMode`
+
+##### `impl Debug for LightMode`
+
+- <span id="lightmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for LightMode`
+
+- <span id="lightmode-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for LightMode`
+
+##### `impl FromStr for LightMode`
+
+- <span id="lightmode-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="lightmode-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+##### `impl Hash for LightMode`
+
+- <span id="lightmode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for LightMode`
+
+- <span id="lightmode-partialeq-eq"></span>`fn eq(&self, other: &LightMode) -> bool` — [`LightMode`](../types/control/index.md#lightmode)
+
+##### `impl ToString for LightMode`
+
+- <span id="lightmode-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `PrintSpeed`
+
+```rust
+enum PrintSpeed {
+    Silent,
+    Standard,
+    Sport,
+    Ludicrous,
+}
+```
+
+Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
+
+#### Variants
+
+- **`Silent`**
+
+  50% max acceleration and feedrate limits.
+
+- **`Standard`**
+
+  100% nominal feedrate limit.
+
+- **`Sport`**
+
+  124% nominal feedrate limit.
+
+- **`Ludicrous`**
+
+  166% nominal feedrate limit.
+
+#### Implementations
+
+- <span id="printspeed-const-all"></span>`const ALL: &'static [PrintSpeed]`
+
+- <span id="printspeed-from-level"></span>`fn from_level(level: u8) -> Option<Self>`
+
+  Classifies a raw `spd_lvl` telemetry value (`1`-`4`, the same values `print_speed` sends); `None` for an out-of-range level.
+
+- <span id="printspeed-level"></span>`const fn level(self) -> u8`
+
+  The wire level, `1`-`4` — the inverse of [`from_level`](../types/control/index.md#printspeed).
+
+#### Trait Implementations
+
+##### `impl Clone for PrintSpeed`
+
+- <span id="printspeed-clone"></span>`fn clone(&self) -> PrintSpeed` — [`PrintSpeed`](../types/control/index.md#printspeed)
+
+##### `impl Copy for PrintSpeed`
+
+##### `impl Debug for PrintSpeed`
+
+- <span id="printspeed-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PrintSpeed`
+
+##### `impl Hash for PrintSpeed`
+
+- <span id="printspeed-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for PrintSpeed`
+
+- <span id="printspeed-partialeq-eq"></span>`fn eq(&self, other: &PrintSpeed) -> bool` — [`PrintSpeed`](../types/control/index.md#printspeed)
+
+### `PrintStatus`
+
+```rust
+enum PrintStatus {
+    Idle,
+    Preparing,
+    Slicing,
+    Running,
+    Paused,
+    Finished,
+    Failed,
+    Unknown,
+}
+```
+
+Decoded classification of the printer's high-level `gcode_state` telemetry field.
+
+`Unknown` covers an unrecognized wire value; callers needing to tell that apart from a known
+state should inspect the raw `gcode_state` string directly.
+
+#### Variants
+
+- **`Idle`**
+
+  No print job active or loaded (wire: `"IDLE"`).
+
+- **`Preparing`**
+
+  Print preparing to start — homing, bed leveling, or priming, physical
+  motion in progress (wire: `"PREPARE"`).
+
+- **`Slicing`**
+
+  Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
+  
+  Distinct from [`Preparing`](../types/control/index.md#printstatus): nothing is moving yet. It is still a
+  busy state — a job is in flight — so treat it like the other active states when
+  deciding whether the printer can accept new work.
+
+- **`Running`**
+
+  Print job actively executing (wire: `"RUNNING"`).
+
+- **`Paused`**
+
+  Print job paused, resumable (wire: `"PAUSE"`).
+
+- **`Finished`**
+
+  Print job completed successfully (wire: `"FINISH"`).
+
+- **`Failed`**
+
+  Print job aborted by an error condition (wire: `"FAILED"`).
+
+- **`Unknown`**
+
+  Unrecognized wire value — see the enum's doc comment.
+
+#### Implementations
+
+- <span id="printstatus-from-gcode-state"></span>`fn from_gcode_state(state: &str) -> Self`
+
+  Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"SLICING"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
+
+- <span id="printstatus-as-str"></span>`const fn as_str(self) -> Option<&'static str>`
+
+  The `gcode_state` wire value for this status; `None` for [`Unknown`](../types/control/index.md#printstatus).
+
+- <span id="printstatus-is-busy"></span>`fn is_busy(self) -> bool`
+
+  True while a job is in flight — preparing, slicing, running or paused — so the printer
+  shouldn't be given new work or motion that could collide with a part.
+
+  `Unknown` is not busy, so a caller gating on safety must treat a missing status
+  (`PrinterClient::print_status() == None`) or `Unknown` as "can't confirm idle" itself.
+
+#### Trait Implementations
+
+##### `impl Clone for PrintStatus`
+
+- <span id="printstatus-clone"></span>`fn clone(&self) -> PrintStatus` — [`PrintStatus`](../types/control/index.md#printstatus)
+
+##### `impl Copy for PrintStatus`
+
+##### `impl Debug for PrintStatus`
+
+- <span id="printstatus-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PrintStatus`
+
+##### `impl Hash for PrintStatus`
+
+- <span id="printstatus-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for PrintStatus`
+
+- <span id="printstatus-partialeq-eq"></span>`fn eq(&self, other: &PrintStatus) -> bool` — [`PrintStatus`](../types/control/index.md#printstatus)
 
 ### `AckExpectation`
 
@@ -2073,266 +2905,6 @@ The terminal outcome of one published command.
 
 - <span id="commandoutcome-partialeq-eq"></span>`fn eq(&self, other: &CommandOutcome) -> bool` — [`CommandOutcome`](command/index.md#commandoutcome)
 
-### `BuzzerMode`
-
-```rust
-enum BuzzerMode {
-    Silent,
-    Alarm,
-    Chirp,
-}
-```
-
-Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`](#printerclient) [REF-MQTT-LIFECYCLE].
-Supported on models with a physical fire alarm buzzer (H2 series).
-
-#### Variants
-
-- **`Silent`**
-
-  Silent/disarmed.
-
-- **`Alarm`**
-
-  Alarm triggered.
-
-- **`Chirp`**
-
-  Beeping attention chime.
-
-#### Trait Implementations
-
-##### `impl Clone for BuzzerMode`
-
-- <span id="buzzermode-clone"></span>`fn clone(&self) -> BuzzerMode` — [`BuzzerMode`](types/index.md#buzzermode)
-
-##### `impl Copy for BuzzerMode`
-
-##### `impl Debug for BuzzerMode`
-
-- <span id="buzzermode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Eq for BuzzerMode`
-
-##### `impl PartialEq for BuzzerMode`
-
-- <span id="buzzermode-partialeq-eq"></span>`fn eq(&self, other: &BuzzerMode) -> bool` — [`BuzzerMode`](types/index.md#buzzermode)
-
-### `FanTarget`
-
-```rust
-enum FanTarget {
-    PartCooling,
-    AuxiliaryLeft,
-    ChamberExhaust,
-    AuxiliaryLeft2,
-}
-```
-
-Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
-
-#### Variants
-
-- **`PartCooling`**
-
-  Primary part cooling fan (Port 1).
-
-- **`AuxiliaryLeft`**
-
-  Primary left-side auxiliary fan (Port 2).
-
-- **`ChamberExhaust`**
-
-  Chamber exhaust/filtration fan (Port 3).
-
-- **`AuxiliaryLeft2`**
-
-  Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
-  
-  Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
-  "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](types/index.md#fantarget)'s
-  primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
-  Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
-  part cooling fan" throughout (issue #60).
-
-#### Trait Implementations
-
-##### `impl Clone for FanTarget`
-
-- <span id="fantarget-clone"></span>`fn clone(&self) -> FanTarget` — [`FanTarget`](types/index.md#fantarget)
-
-##### `impl Copy for FanTarget`
-
-##### `impl Debug for FanTarget`
-
-- <span id="fantarget-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Eq for FanTarget`
-
-##### `impl Hash for FanTarget`
-
-- <span id="fantarget-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
-
-##### `impl PartialEq for FanTarget`
-
-- <span id="fantarget-partialeq-eq"></span>`fn eq(&self, other: &FanTarget) -> bool` — [`FanTarget`](types/index.md#fantarget)
-
-### `PrintSpeed`
-
-```rust
-enum PrintSpeed {
-    Silent,
-    Standard,
-    Sport,
-    Ludicrous,
-}
-```
-
-Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
-
-#### Variants
-
-- **`Silent`**
-
-  50% max acceleration and feedrate limits.
-
-- **`Standard`**
-
-  100% nominal feedrate limit.
-
-- **`Sport`**
-
-  124% nominal feedrate limit.
-
-- **`Ludicrous`**
-
-  166% nominal feedrate limit.
-
-#### Implementations
-
-- <span id="printspeed-from-level"></span>`fn from_level(level: u8) -> Option<Self>`
-
-  Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](#printerclient) sends).
-  Returns `None` for an out-of-range level.
-
-#### Trait Implementations
-
-##### `impl Clone for PrintSpeed`
-
-- <span id="printspeed-clone"></span>`fn clone(&self) -> PrintSpeed` — [`PrintSpeed`](types/index.md#printspeed)
-
-##### `impl Copy for PrintSpeed`
-
-##### `impl Debug for PrintSpeed`
-
-- <span id="printspeed-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Eq for PrintSpeed`
-
-##### `impl Hash for PrintSpeed`
-
-- <span id="printspeed-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
-
-##### `impl PartialEq for PrintSpeed`
-
-- <span id="printspeed-partialeq-eq"></span>`fn eq(&self, other: &PrintSpeed) -> bool` — [`PrintSpeed`](types/index.md#printspeed)
-
-### `PrintStatus`
-
-```rust
-enum PrintStatus {
-    Idle,
-    Preparing,
-    Slicing,
-    Running,
-    Paused,
-    Finished,
-    Failed,
-    Unknown,
-}
-```
-
-Decoded classification of the printer's high-level `gcode_state` telemetry field.
-
-`Unknown` covers both an unrecognized wire value and a missing field — callers
-needing to tell those apart should inspect the raw `gcode_state` string directly.
-
-#### Variants
-
-- **`Idle`**
-
-  No print job active or loaded (wire: `"IDLE"`).
-
-- **`Preparing`**
-
-  Print preparing to start — homing, bed leveling, or priming, physical
-  motion in progress (wire: `"PREPARE"`).
-
-- **`Slicing`**
-
-  Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
-  
-  Distinct from [`Preparing`](types/index.md#printstatus): nothing is moving yet. It is still a
-  busy state — a job is in flight — so treat it like the other active states when
-  deciding whether the printer can accept new work.
-
-- **`Running`**
-
-  Print job actively executing (wire: `"RUNNING"`).
-
-- **`Paused`**
-
-  Print job paused, resumable (wire: `"PAUSE"`).
-
-- **`Finished`**
-
-  Print job completed successfully (wire: `"FINISH"`).
-
-- **`Failed`**
-
-  Print job aborted by an error condition (wire: `"FAILED"`).
-
-- **`Unknown`**
-
-  Unrecognized wire value, or `gcode_state` field missing entirely — see the enum's doc comment.
-
-#### Implementations
-
-- <span id="printstatus-from-gcode-state"></span>`fn from_gcode_state(state: &str) -> Self`
-
-  Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"SLICING"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
-
-- <span id="printstatus-is-busy"></span>`fn is_busy(self) -> bool`
-
-  True while a job is in flight — preparing, slicing, running or paused — so the printer
-  shouldn't be given new work or motion that could collide with a part.
-
-  `Unknown` is not busy, so a caller gating on safety must treat a missing status
-  (`PrinterClient::print_status() == None`) or `Unknown` as "can't confirm idle" itself.
-
-#### Trait Implementations
-
-##### `impl Clone for PrintStatus`
-
-- <span id="printstatus-clone"></span>`fn clone(&self) -> PrintStatus` — [`PrintStatus`](types/index.md#printstatus)
-
-##### `impl Copy for PrintStatus`
-
-##### `impl Debug for PrintStatus`
-
-- <span id="printstatus-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Eq for PrintStatus`
-
-##### `impl Hash for PrintStatus`
-
-- <span id="printstatus-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
-
-##### `impl PartialEq for PrintStatus`
-
-- <span id="printstatus-partialeq-eq"></span>`fn eq(&self, other: &PrintStatus) -> bool` — [`PrintStatus`](types/index.md#printstatus)
-
 ### `TelemetryEvent`
 
 ```rust
@@ -2404,6 +2976,29 @@ available via [`into_raw`](types/index.md#telemetryevent).
 
 ## Constants
 
+### `HOMING_WAIT_TIMEOUT`
+```rust
+const HOMING_WAIT_TIMEOUT: core::time::Duration;
+```
+
+How long [`PrinterClient::wait_for_homing`](#printerclient) waits for a homing cycle to complete.
+
+Homing took up to ~46s across wire-confirmed P1S runs [REF-HOMEFLAG]; 90s leaves margin.
+
+### `DEFAULT_COMMAND_TIMEOUT`
+```rust
+const DEFAULT_COMMAND_TIMEOUT: core::time::Duration;
+```
+
+Default command timeout; override with [`PrinterClient::with_command_timeout`](#printerclient).
+
+### `DEFAULT_CONNECT_TIMEOUT`
+```rust
+const DEFAULT_CONNECT_TIMEOUT: core::time::Duration;
+```
+
+Default bound on each channel's dial+TLS+handshake; override with [`PrinterClient::with_connect_timeout`](#printerclient).
+
 ### `KEEPALIVE_TICK_SECS`
 ```rust
 const KEEPALIVE_TICK_SECS: u32 = 15u32;
@@ -2411,4 +3006,19 @@ const KEEPALIVE_TICK_SECS: u32 = 15u32;
 
 How often to call [`PrinterClient::keepalive_tick`]: half the 30s keepalive this client
 advertises in CONNECT, so a missed tick still leaves margin before the broker's 45s cutoff.
+
+### `SEQUENCE_ID_FLOOR`
+```rust
+const SEQUENCE_ID_FLOOR: u64 = 30_000u64;
+```
+
+Lowest `sequence_id` this client mints, above every range another party on the shared report topic is known to use.
+
+Every subscriber receives every client's command echoes on the one report topic, so an id
+minted inside someone else's range can be mistaken for theirs, and theirs for ours. The
+printer's `push_status` counter and bambuddy's counter both start near 0 (bambuddy also
+hardcodes `"0"` for pause/resume/stop), and BambuStudio reserves `20000..30000`
+(`DevUtil.h` `STUDIO_START_SEQ_ID`/`STUDIO_END_SEQ_ID`) — it raises an error dialog for any
+echo in that range carrying an `err_code`, so an id of ours landing there would pop dialogs
+in a user's open BambuStudio.
 

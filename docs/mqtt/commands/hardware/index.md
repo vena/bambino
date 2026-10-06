@@ -10,28 +10,30 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
 
 - [Types](#types)
   - [`AirductPayload`](#airductpayload)
-  - [`AirductRequest`](#airductrequest)
   - [`BuzzerPayload`](#buzzerpayload)
-  - [`BuzzerRequest`](#buzzerrequest)
+  - [`FlashTiming`](#flashtiming)
   - [`LedCtrlPayload`](#ledctrlpayload)
-  - [`LedCtrlRequest`](#ledctrlrequest)
   - [`PromptSoundPayload`](#promptsoundpayload)
-  - [`PromptSoundRequest`](#promptsoundrequest)
   - [`AirductMode`](#airductmode)
+  - [`AirductRequest`](#airductrequest)
+  - [`BuzzerRequest`](#buzzerrequest)
+  - [`LedCtrlRequest`](#ledctrlrequest)
+  - [`PromptSoundRequest`](#promptsoundrequest)
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
 | [`AirductPayload`](#airductpayload) | struct | Redirects internal climate airflows using active damper deflection plates. |
-| [`AirductRequest`](#airductrequest) | struct | Switches the enclosure airduct damper between cooling, heating, and laser modes. |
 | [`BuzzerPayload`](#buzzerpayload) | struct | Modifies active alarm or attention chime parameters on the printer cabinet buzzer module. |
-| [`BuzzerRequest`](#buzzerrequest) | struct | Controls the printer's buzzer alarm mode (silent, alarm, or chirp). |
+| [`FlashTiming`](#flashtiming) | struct | Flash cycle timing for [`LedCtrlRequest::new_flashing`](#ledctrlrequest); every field is in milliseconds except `loops`. |
 | [`LedCtrlPayload`](#ledctrlpayload) | struct | Chamber illumination and toolhead LED control configurations. |
-| [`LedCtrlRequest`](#ledctrlrequest) | struct | Turns chamber or toolhead LEDs on or off. |
 | [`PromptSoundPayload`](#promptsoundpayload) | struct | Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`](#buzzerpayload)). |
-| [`PromptSoundRequest`](#promptsoundrequest) | struct | Enables or disables the printer's notification sounds. |
 | [`AirductMode`](#airductmode) | enum | Airduct damper operating mode [REF-MQTT-LIFECYCLE]. |
+| [`AirductRequest`](#airductrequest) | type | Switches the enclosure airduct damper between cooling, heating, and laser modes. |
+| [`BuzzerRequest`](#buzzerrequest) | type | Controls the printer's buzzer alarm mode (silent, alarm, or chirp). |
+| [`LedCtrlRequest`](#ledctrlrequest) | type | Turns chamber or toolhead LEDs on or off. |
+| [`PromptSoundRequest`](#promptsoundrequest) | type | Enables or disables the printer's notification sounds. |
 
 ## Types
 
@@ -42,7 +44,7 @@ struct AirductPayload {
     pub command: &'static str,
     pub mode_id: i32,
     pub submode: i32,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -62,7 +64,7 @@ Redirects internal climate airflows using active damper deflection plates.
 
   Damper submode; always `-1` (unused) — [`AirductRequest::new`](#airductrequest) never sets it otherwise.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -80,42 +82,6 @@ Redirects internal climate airflows using active damper deflection plates.
 
 - <span id="airductpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `AirductRequest`
-
-```rust
-struct AirductRequest {
-    pub print: AirductPayload,
-}
-```
-
-Switches the enclosure airduct damper between cooling, heating, and laser modes.
-
-#### Fields
-
-- **`print`**: `AirductPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="airductrequest-new"></span>`fn new(mode: AirductMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`AirductMode`](#airductmode), [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `set_airduct` request for the given damper mode.
-
-#### Trait Implementations
-
-##### `impl Clone for AirductRequest`
-
-- <span id="airductrequest-clone"></span>`fn clone(&self) -> AirductRequest` — [`AirductRequest`](#airductrequest)
-
-##### `impl Debug for AirductRequest`
-
-- <span id="airductrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for AirductRequest`
-
-- <span id="airductrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `BuzzerPayload`
 
 ```rust
@@ -123,7 +89,7 @@ struct BuzzerPayload {
     pub command: &'static str,
     pub mode: i32,
     pub reason: &'static str,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -143,7 +109,7 @@ Modifies active alarm or attention chime parameters on the printer cabinet buzze
 
   Reason string shown alongside the alarm; always empty in practice, per [`BuzzerRequest::new`](#buzzerrequest).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -161,50 +127,71 @@ Modifies active alarm or attention chime parameters on the printer cabinet buzze
 
 - <span id="buzzerpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `BuzzerRequest`
+### `FlashTiming`
 
 ```rust
-struct BuzzerRequest {
-    pub print: BuzzerPayload,
+struct FlashTiming {
+    pub on_ms: u32,
+    pub off_ms: u32,
+    pub loops: u32,
+    pub interval_ms: u32,
 }
 ```
 
-Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
+Flash cycle timing for [`LedCtrlRequest::new_flashing`](#ledctrlrequest); every field is in milliseconds except `loops`.
 
 #### Fields
 
-- **`print`**: `BuzzerPayload`
+- **`on_ms`**: `u32`
 
-  The `print` namespace envelope required by the wire protocol.
+  Time lit per cycle, in ms.
 
-#### Implementations
+- **`off_ms`**: `u32`
 
-- <span id="buzzerrequest-new"></span>`fn new(mode_code: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
+  Time dark per cycle, in ms.
 
-  Builds a `buzzer_ctrl` request for the given alarm mode.
+- **`loops`**: `u32`
+
+  Number of cycles.
+
+- **`interval_ms`**: `u32`
+
+  Pause between cycles, in ms.
 
 #### Trait Implementations
 
-##### `impl Clone for BuzzerRequest`
+##### `impl Clone for FlashTiming`
 
-- <span id="buzzerrequest-clone"></span>`fn clone(&self) -> BuzzerRequest` — [`BuzzerRequest`](#buzzerrequest)
+- <span id="flashtiming-clone"></span>`fn clone(&self) -> FlashTiming` — [`FlashTiming`](#flashtiming)
 
-##### `impl Debug for BuzzerRequest`
+##### `impl Copy for FlashTiming`
 
-- <span id="buzzerrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+##### `impl Debug for FlashTiming`
 
-##### `impl Serialize for BuzzerRequest`
+- <span id="flashtiming-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-- <span id="buzzerrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+##### `impl Default for FlashTiming`
+
+- <span id="flashtiming-default"></span>`fn default() -> FlashTiming` — [`FlashTiming`](#flashtiming)
+
+##### `impl Eq for FlashTiming`
+
+##### `impl Hash for FlashTiming`
+
+- <span id="flashtiming-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for FlashTiming`
+
+- <span id="flashtiming-partialeq-eq"></span>`fn eq(&self, other: &FlashTiming) -> bool` — [`FlashTiming`](#flashtiming)
 
 ### `LedCtrlPayload`
 
 ```rust
 struct LedCtrlPayload {
     pub command: &'static str,
-    pub sequence_id: String,
-    pub led_node: String,
-    pub led_mode: String,
+    pub sequence_id: super::ClampedTaskId,
+    pub led_node: &'static str,
+    pub led_mode: &'static str,
     pub led_on_time: u32,
     pub led_off_time: u32,
     pub loop_times: u32,
@@ -220,17 +207,17 @@ Chamber illumination and toolhead LED control configurations.
 
   Wire command name, always `"ledctrl"`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
-- **`led_node`**: `String`
+- **`led_node`**: `&'static str`
 
-  Targets specific physical fixtures (e.g. "chamber_light", "chamber_light2").
+  The fixture addressed — see [`LedNode`](../../../types/control/index.md#lednode).
 
-- **`led_mode`**: `String`
+- **`led_mode`**: `&'static str`
 
-  Mode state transitions (e.g., "on", "off", "flashing").
+  The mode set — see [`LightMode`](../../../types/control/index.md#lightmode).
 
 - **`led_on_time`**: `u32`
 
@@ -262,53 +249,13 @@ Chamber illumination and toolhead LED control configurations.
 
 - <span id="ledctrlpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `LedCtrlRequest`
-
-```rust
-struct LedCtrlRequest {
-    pub system: LedCtrlPayload,
-}
-```
-
-Turns chamber or toolhead LEDs on or off.
-
-#### Fields
-
-- **`system`**: `LedCtrlPayload`
-
-  The `system` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="ledctrlrequest-new"></span>`fn new(led_node: &str, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a simple on/off `ledctrl` request for the given fixture.
-
-- <span id="ledctrlrequest-new-flashing"></span>`fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
-
-#### Trait Implementations
-
-##### `impl Clone for LedCtrlRequest`
-
-- <span id="ledctrlrequest-clone"></span>`fn clone(&self) -> LedCtrlRequest` — [`LedCtrlRequest`](#ledctrlrequest)
-
-##### `impl Debug for LedCtrlRequest`
-
-- <span id="ledctrlrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for LedCtrlRequest`
-
-- <span id="ledctrlrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `PromptSoundPayload`
 
 ```rust
 struct PromptSoundPayload {
     pub command: &'static str,
     pub sound_enable: bool,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -324,7 +271,7 @@ Controls structural notification sound output via speakers (Supported on A1, A1 
 
   Whether notification sounds are enabled.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -341,42 +288,6 @@ Controls structural notification sound output via speakers (Supported on A1, A1 
 ##### `impl Serialize for PromptSoundPayload`
 
 - <span id="promptsoundpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `PromptSoundRequest`
-
-```rust
-struct PromptSoundRequest {
-    pub print: PromptSoundPayload,
-}
-```
-
-Enables or disables the printer's notification sounds.
-
-#### Fields
-
-- **`print`**: `PromptSoundPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="promptsoundrequest-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Builds a `print_option` request enabling or disabling notification sounds.
-
-#### Trait Implementations
-
-##### `impl Clone for PromptSoundRequest`
-
-- <span id="promptsoundrequest-clone"></span>`fn clone(&self) -> PromptSoundRequest` — [`PromptSoundRequest`](#promptsoundrequest)
-
-##### `impl Debug for PromptSoundRequest`
-
-- <span id="promptsoundrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for PromptSoundRequest`
-
-- <span id="promptsoundrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `AirductMode`
 
@@ -425,4 +336,36 @@ Airduct damper operating mode [REF-MQTT-LIFECYCLE].
 ##### `impl PartialEq for AirductMode`
 
 - <span id="airductmode-partialeq-eq"></span>`fn eq(&self, other: &AirductMode) -> bool` — [`AirductMode`](#airductmode)
+
+### `AirductRequest`
+
+```rust
+type AirductRequest = super::Print<AirductPayload>;
+```
+
+Switches the enclosure airduct damper between cooling, heating, and laser modes.
+
+### `BuzzerRequest`
+
+```rust
+type BuzzerRequest = super::Print<BuzzerPayload>;
+```
+
+Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
+
+### `LedCtrlRequest`
+
+```rust
+type LedCtrlRequest = super::System<LedCtrlPayload>;
+```
+
+Turns chamber or toolhead LEDs on or off.
+
+### `PromptSoundRequest`
+
+```rust
+type PromptSoundRequest = super::Print<PromptSoundPayload>;
+```
+
+Enables or disables the printer's notification sounds.
 

@@ -12,10 +12,10 @@ Print job dispatch (file selection, AMS material mapping, plate/timelapse config
   - [`NozzleRack`](#nozzlerack)
   - [`PrintJobConfig`](#printjobconfig)
   - [`ProjectFilePayload`](#projectfilepayload)
-  - [`ProjectFileRequest`](#projectfilerequest)
   - [`AmsMappingTable`](#amsmappingtable)
   - [`AmsSource`](#amssource)
   - [`CalibrationMode`](#calibrationmode)
+  - [`ProjectFileRequest`](#projectfilerequest)
 - [Functions](#functions)
   - [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping)
 
@@ -26,11 +26,11 @@ Print job dispatch (file selection, AMS material mapping, plate/timelapse config
 | [`NozzleRack`](#nozzlerack) | struct | Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) needs. |
 | [`PrintJobConfig`](#printjobconfig) | struct | Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE]. |
 | [`ProjectFilePayload`](#projectfilepayload) | struct | Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage. |
-| [`ProjectFileRequest`](#projectfilerequest) | struct | Submits a `.3mf` print job from the SD card for execution. |
 | [`AmsMappingTable`](#amsmappingtable) | enum | Represents the conditional, polymorphic typing needed for the `ams_mapping` key [REF-MQTT-LIFECYCLE]. |
 | [`AmsSource`](#amssource) | enum | Where a print job's AMS routing comes from: one mapping form or the other, never both. |
 | [`CalibrationMode`](#calibrationmode) | enum | Tri-state calibration setting: force every print, skip entirely, or let the firmware decide based on whether the relevant calibration ran recently [REF-MQTT-LIFECYCLE]. |
 | [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) | fn | Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs. |
+| [`ProjectFileRequest`](#projectfilerequest) | type | Submits a `.3mf` print job from the SD card for execution. |
 
 ## Types
 
@@ -247,7 +247,7 @@ defaults for calibration flags.
 ```rust
 struct ProjectFilePayload {
     pub command: &'static str,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
     pub param: String,
     pub subtask_name: String,
     pub subtask_id: String,
@@ -280,7 +280,7 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 
   Wire command name, always `"project_file"`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -402,54 +402,6 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 ##### `impl Serialize for ProjectFilePayload`
 
 - <span id="projectfilepayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `ProjectFileRequest`
-
-```rust
-struct ProjectFileRequest {
-    pub print: ProjectFilePayload,
-}
-```
-
-Submits a `.3mf` print job from the SD card for execution.
-
-#### Fields
-
-- **`print`**: `ProjectFilePayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: PrinterModel) -> Self` — [`PrintJobConfig`](#printjobconfig), [`ClampedTaskId`](../index.md#clampedtaskid), [`PrinterModel`](../../../models/index.md#printermodel)
-
-  Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
-
-  `nozzle_offset_cali` is gated on the model's `supports_nozzle_offset_calibration()`
-  quirk as a hard ceiling, not a default: it is enabled automatically on IDEX and
-  tool-changer platforms when the caller left it `None`, and forced off on every
-  single-nozzle model even when the caller explicitly asked for it — the printer has no
-  second carriage to calibrate.
-
-  **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
-  `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
-  serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
-  to treat the value as the physical carriage index (Target nozzle 1) instead of material
-  routing parameters.
-
-#### Trait Implementations
-
-##### `impl Clone for ProjectFileRequest`
-
-- <span id="projectfilerequest-clone"></span>`fn clone(&self) -> ProjectFileRequest` — [`ProjectFileRequest`](#projectfilerequest)
-
-##### `impl Debug for ProjectFileRequest`
-
-- <span id="projectfilerequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for ProjectFileRequest`
-
-- <span id="projectfilerequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `AmsMappingTable`
 
@@ -587,6 +539,14 @@ Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed i
 ##### `impl PartialEq for CalibrationMode`
 
 - <span id="calibrationmode-partialeq-eq"></span>`fn eq(&self, other: &CalibrationMode) -> bool` — [`CalibrationMode`](#calibrationmode)
+
+### `ProjectFileRequest`
+
+```rust
+type ProjectFileRequest = super::Print<ProjectFilePayload>;
+```
+
+Submits a `.3mf` print job from the SD card for execution.
 
 
 ---

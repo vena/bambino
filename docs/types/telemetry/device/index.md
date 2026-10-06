@@ -71,6 +71,23 @@ Climate parts collection nested within `device` parameters.
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
   — see its doc comment.
 
+#### Implementations
+
+- <span id="airductcollection-part-percent"></span>`fn part_percent(&self, id: u32) -> Option<u8>`
+
+  The speed of the fan reported as part `id`, as a percentage (0-100).
+
+  Two wire shapes, both real, and the fix for each broke the other once (#31, then #184),
+  so order matters:
+
+  1. A negative state is a firmware sentinel for "off/unknown" and reads `None`. It must be
+     rejected *before* the mask, since `-1 & 0xFF == 255`, which would clamp to a bogus 100%.
+  2. A non-negative state may be bit-packed, with the percentage in the low byte and flags
+     above it. BambuStudio's `DevFan::ParseV3_0` applies `get_flag_bits(state, 0, 8)`
+     unconditionally to every airduct part, and bambuddy independently does the same
+     `int(part["state"]) & 0xFF`. Without the mask a packed `306` clamps to 100 instead of
+     decoding to its real 50.
+
 #### Trait Implementations
 
 ##### `impl Clone for AirductCollection`
@@ -184,6 +201,12 @@ Bed info segment with composite-packed temperature.
 - **`temp`**: `Option<u32>`
 
   Composite-packed bed temperature [REF-THER-DECODE].
+
+#### Implementations
+
+- <span id="bedinfo-temperatures"></span>`fn temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../../client/index.md#heatertemps)
+
+  The bed's temperatures unpacked from `temp`; `None` when it is absent.
 
 #### Trait Implementations
 
@@ -304,7 +327,7 @@ Appears at two locations on the wire:
   A fixture payload carries the identical value in both fields, and both
   pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
   never consult this field either. Parsed for wire-format completeness only —
-  `decode_bed_temperatures()` deliberately does not read it.
+  The bed-temperature decode deliberately does not read it.
 
 #### Trait Implementations
 
@@ -473,7 +496,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`temp`**: `Option<u32>`
 
-  Composite-packed temperature (use `unpack_temperature()` to decode).
+  Composite-packed temperature; decode with [`temperatures()`](#extruderinfo).
 
 - **`snow`**: `Option<u32>`
 
@@ -535,9 +558,9 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 #### Implementations
 
-- <span id="extruderinfo-temperatures"></span>`fn temperatures(&self) -> (u16, u16)`
+- <span id="extruderinfo-temperatures"></span>`fn temperatures(&self) -> Option<HeaterTemps>` — [`HeaterTemps`](../../../client/index.md#heatertemps)
 
-  Unpacks the composite temperature into (actual, target) degrees Celsius.
+  Unpacks the composite `temp`; `None` when it is absent.
 
 - <span id="extruderinfo-current-ams-slot"></span>`fn current_ams_slot(&self) -> Option<(u8, u8)>`
 

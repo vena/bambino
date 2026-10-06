@@ -11,7 +11,7 @@ G-code dispatch command payload.
 | Item | Kind | Description |
 |------|------|-------------|
 | [`GCodePayload`](#gcodepayload) | struct | Queues raw G-code strings directly to the printer's motion execution controller. |
-| [`GCodeRequest`](#gcoderequest) | struct | Sends a raw G-code line to the printer for immediate execution. |
+| [`GCodeRequest`](#gcoderequest) | type | Sends a raw G-code line to the printer for immediate execution. |
 
 ## Types
 
@@ -21,7 +21,7 @@ G-code dispatch command payload.
 struct GCodePayload {
     pub command: &'static str,
     pub param: String,
-    pub sequence_id: String,
+    pub sequence_id: super::ClampedTaskId,
 }
 ```
 
@@ -40,7 +40,7 @@ temperature targets are issued by packing standard G-code lines into this wrappe
 
   Raw G-code line, newline-terminated by [`GCodeRequest::new`](#gcoderequest).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `super::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -61,39 +61,8 @@ temperature targets are issued by packing standard G-code lines into this wrappe
 ### `GCodeRequest`
 
 ```rust
-struct GCodeRequest {
-    pub print: GCodePayload,
-}
+type GCodeRequest = super::Print<GCodePayload>;
 ```
 
 Sends a raw G-code line to the printer for immediate execution.
-
-#### Fields
-
-- **`print`**: `GCodePayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
-
-  Creates a request envelope wrapping a raw G-code payload.
-
-  **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
-  to ensure the physical controller's stream parser identifies the end-of-command boundary.
-
-#### Trait Implementations
-
-##### `impl Clone for GCodeRequest`
-
-- <span id="gcoderequest-clone"></span>`fn clone(&self) -> GCodeRequest` — [`GCodeRequest`](#gcoderequest)
-
-##### `impl Debug for GCodeRequest`
-
-- <span id="gcoderequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for GCodeRequest`
-
-- <span id="gcoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 

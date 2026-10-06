@@ -19,20 +19,21 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 ## Contents
 
 - [Types](#types)
+  - [`CaliSelAddress`](#caliseladdress)
   - [`ExtrusionCaliGetPayload`](#extrusioncaligetpayload)
-  - [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest)
   - [`ExtrusionCaliGetResponse`](#extrusioncaligetresponse)
   - [`ExtrusionCaliGetResponsePayload`](#extrusioncaligetresponsepayload)
   - [`ExtrusionCaliSelPayload`](#extrusioncaliselpayload)
-  - [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest)
   - [`ExtrusionCaliSetPayload`](#extrusioncalisetpayload)
-  - [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest)
   - [`IdexCaliDelEntry`](#idexcalidelentry)
   - [`IdexCaliDelPayload`](#idexcalidelpayload)
-  - [`IdexCaliDelRequest`](#idexcalidelrequest)
   - [`KProfileEntry`](#kprofileentry)
   - [`StandardCaliDelEntry`](#standardcalidelentry)
   - [`StandardCaliDelPayload`](#standardcalidelpayload)
+  - [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest)
+  - [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest)
+  - [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest)
+  - [`IdexCaliDelRequest`](#idexcalidelrequest)
   - [`StandardCaliDelRequest`](#standardcalidelrequest)
 - [Functions](#functions)
   - [`is_setting_id_valid`](#is-setting-id-valid)
@@ -41,31 +42,84 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`CaliSelAddress`](#caliseladdress) | struct | The three address fields of an `extrusion_cali_sel`, derived from a unit and its local slot. |
 | [`ExtrusionCaliGetPayload`](#extrusioncaligetpayload) | struct | Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest). |
-| [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest) | struct | JSON request wrapper to trigger a complete dump of the stored calibration database. |
 | [`ExtrusionCaliGetResponse`](#extrusioncaligetresponse) | struct | JSON response wrapper containing the printer's stored calibration profile database. |
 | [`ExtrusionCaliGetResponsePayload`](#extrusioncaligetresponsepayload) | struct | Payload envelope returned by the printer in response to `extrusion_cali_get`. |
 | [`ExtrusionCaliSelPayload`](#extrusioncaliselpayload) | struct | Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest). |
-| [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest) | struct | JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP]. |
 | [`ExtrusionCaliSetPayload`](#extrusioncalisetpayload) | struct | Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest). |
-| [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest) | struct | JSON request wrapper to create or overwrite calibration profile allocations. |
 | [`IdexCaliDelEntry`](#idexcalidelentry) | struct | Deletion data fields utilized by dual-nozzle IDEX databases (Schema B). |
 | [`IdexCaliDelPayload`](#idexcalidelpayload) | struct | Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest). |
-| [`IdexCaliDelRequest`](#idexcalidelrequest) | struct | JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF]. |
 | [`KProfileEntry`](#kprofileentry) | struct | Structured representation of a Linear Advance calibration profile entry on the printer. |
 | [`StandardCaliDelEntry`](#standardcalidelentry) | struct | Deletion data fields utilized by standard single-nozzle databases (Schema A). |
 | [`StandardCaliDelPayload`](#standardcalidelpayload) | struct | Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest). |
-| [`StandardCaliDelRequest`](#standardcalidelrequest) | struct | JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF]. |
 | [`is_setting_id_valid`](#is-setting-id-valid) | fn | Validates whether a provided calibration profile setting ID complies with EEPROM limits. |
+| [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest) | type | JSON request wrapper to trigger a complete dump of the stored calibration database. |
+| [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest) | type | JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP]. |
+| [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest) | type | JSON request wrapper to create or overwrite calibration profile allocations. |
+| [`IdexCaliDelRequest`](#idexcalidelrequest) | type | JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF]. |
+| [`StandardCaliDelRequest`](#standardcalidelrequest) | type | JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF]. |
 
 ## Types
+
+### `CaliSelAddress`
+
+```rust
+struct CaliSelAddress {
+    // [REDACTED: Private Fields]
+}
+```
+
+The three address fields of an `extrusion_cali_sel`, derived from a unit and its local slot.
+
+The wire `tray_id` is the global tray from
+`resolve_global_tray_id`: `ams_id * 4 + slot` on a
+standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1` example is
+unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's `GetTrayIndexMap`,
+`DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT (slot 0 only) or an external
+holder (slot ignored) — which gives the cheat-sheet pairs on [`ExtrusionCaliSelRequest::new`](#extrusioncaliselrequest).
+`slot_id` is the unit-local slot BambuStudio and bambuddy send beside it (#315): the caller's
+slot on a four-slot unit, `0` on an AMS-HT or external holder. `ams_id` is the wire form (an
+A2L's AMS Lite is `16`).
+
+#### Implementations
+
+- <span id="caliseladdress-new"></span>`fn new(ams_id: u8, slot_id: u8) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
+
+  Derives the address of slot `slot_id` on the unit at `ams_id` (telemetry or wire form).
+
+  # Errors
+
+  [`Error::InvalidArgument`](../../error/index.md#error) when no tray answers to that unit and slot.
+
+#### Trait Implementations
+
+##### `impl Clone for CaliSelAddress`
+
+- <span id="caliseladdress-clone"></span>`fn clone(&self) -> CaliSelAddress` — [`CaliSelAddress`](#caliseladdress)
+
+##### `impl Copy for CaliSelAddress`
+
+##### `impl Debug for CaliSelAddress`
+
+- <span id="caliseladdress-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for CaliSelAddress`
+
+##### `impl Hash for CaliSelAddress`
+
+- <span id="caliseladdress-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for CaliSelAddress`
+
+- <span id="caliseladdress-partialeq-eq"></span>`fn eq(&self, other: &CaliSelAddress) -> bool` — [`CaliSelAddress`](#caliseladdress)
 
 ### `ExtrusionCaliGetPayload`
 
 ```rust
 struct ExtrusionCaliGetPayload {
     pub command: &'static str,
-    pub sequence_id: String,
+    pub sequence_id: crate::mqtt::commands::ClampedTaskId,
     pub filament_id: Option<String>,
     pub nozzle_diameter: Option<String>,
     pub extruder_id: Option<u8>,
@@ -83,7 +137,7 @@ Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest).
 
   Wire command name, always `"extrusion_cali_get"`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `crate::mqtt::commands::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -147,72 +201,6 @@ Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest).
 ##### `impl Serialize for ExtrusionCaliGetPayload`
 
 - <span id="extrusioncaligetpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `ExtrusionCaliGetRequest`
-
-```rust
-struct ExtrusionCaliGetRequest {
-    pub print: ExtrusionCaliGetPayload,
-}
-```
-
-JSON request wrapper to trigger a complete dump of the stored calibration database.
-
-# Firmware Quirk: Priming Required [REF-DIAG-KPROF]
-
-The firmware ignores the first `extrusion_cali_get` command received after MQTTS
-connection establishment. A dummy "priming" request must be sent first before the
-real query will receive a response. `PrinterClient::get_k_profiles()` handles this
-automatically — use `set_k_profile_primed(true)` to opt out if you manage priming
-yourself.
-
-#### Fields
-
-- **`print`**: `ExtrusionCaliGetPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="extrusioncaligetrequest-new"></span>`fn new(filament_id: Option<&str>, nozzle_diameter: Option<&str>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
-
-  Builds an `extrusion_cali_get` request.
-
-  `filament_id` and `nozzle_diameter` scope the query; both are omitted from the wire when
-  `None`, which reproduces the bare request shape exactly. Whether to scope by diameter
-  depends on the machine — see [`ExtrusionCaliGetPayload::nozzle_diameter`](#extrusioncaligetpayload).
-
-  Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
-  documented above.
-
-- <span id="extrusioncaligetrequest-with-extruder-id"></span>`fn with_extruder_id(self, extruder_id: u8) -> Self`
-
-  Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` is not
-  unique across extruders. `0` = right/main, `1` = left/deputy.
-
-- <span id="extrusioncaligetrequest-with-nozzle-id"></span>`fn with_nozzle_id(self, nozzle_id: &str) -> Self`
-
-  Scopes the query to one flow type, e.g. `"HS00-0.4"` (standard) or `"HH00-0.4"` (high
-  flow) — see [`ExtrusionCaliGetPayload::nozzle_id`](#extrusioncaligetpayload).
-
-- <span id="extrusioncaligetrequest-with-nozzle-rack-position"></span>`fn with_nozzle_rack_position(self, nozzle_pos: i32, nozzle_sn: &str) -> Self`
-
-  Names a specific physical hotend by rack position and serial. BambuStudio sends these
-  two together and only for a non-negative position.
-
-#### Trait Implementations
-
-##### `impl Clone for ExtrusionCaliGetRequest`
-
-- <span id="extrusioncaligetrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliGetRequest` — [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest)
-
-##### `impl Debug for ExtrusionCaliGetRequest`
-
-- <span id="extrusioncaligetrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for ExtrusionCaliGetRequest`
-
-- <span id="extrusioncaligetrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `ExtrusionCaliGetResponse`
 
@@ -307,7 +295,7 @@ struct ExtrusionCaliSelPayload {
     pub cali_idx: i32,
     pub filament_id: String,
     pub nozzle_diameter: String,
-    pub sequence_id: String,
+    pub sequence_id: crate::mqtt::commands::ClampedTaskId,
 }
 ```
 
@@ -345,7 +333,7 @@ Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest).
 
   Nozzle diameter this K-profile applies to (`KProfileEntry::nozzle_diameter`).
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `crate::mqtt::commands::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -363,69 +351,13 @@ Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest).
 
 - <span id="extrusioncaliselpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `ExtrusionCaliSelRequest`
-
-```rust
-struct ExtrusionCaliSelRequest {
-    pub print: ExtrusionCaliSelPayload,
-}
-```
-
-JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
-
-The `setting_id` field is intentionally omitted from this payload to prevent
-database mislinking on the motion board.
-
-#### Fields
-
-- **`print`**: `ExtrusionCaliSelPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="extrusioncaliselrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, slot_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
-
-  Creates a request payload to bind a stored K-profile calibration entry to an AMS
-  material slot.
-
-  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
-  addressing differs by command family — this rule is *not* the same one used by
-  `ams_filament_setting` (filament configuration, see
-  [`crate::mqtt::AmsFilamentSettingRequest::new`](../../mqtt/index.md)):
-  * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
-    `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
-    Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong
-    address for Ext-R on IDEX machines mis-routes the pressure advance profile to
-    the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
-    uncalibrated.
-  * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
-    Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
-    `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
-
-  Wire form as given: `slot_id` is the unit-local slot, see [`ExtrusionCaliSelPayload::slot_id`](#extrusioncaliselpayload).
-
-#### Trait Implementations
-
-##### `impl Clone for ExtrusionCaliSelRequest`
-
-- <span id="extrusioncaliselrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliSelRequest` — [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest)
-
-##### `impl Debug for ExtrusionCaliSelRequest`
-
-- <span id="extrusioncaliselrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for ExtrusionCaliSelRequest`
-
-- <span id="extrusioncaliselrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
 ### `ExtrusionCaliSetPayload`
 
 ```rust
 struct ExtrusionCaliSetPayload {
     pub command: &'static str,
     pub filaments: Vec<KProfileEntry>,
-    pub sequence_id: String,
+    pub sequence_id: crate::mqtt::commands::ClampedTaskId,
 }
 ```
 
@@ -441,7 +373,7 @@ Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest).
 
   Calibration profile entries to write. Multiple entries support IDEX multi-nozzle writes.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `crate::mqtt::commands::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -458,45 +390,6 @@ Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest).
 ##### `impl Serialize for ExtrusionCaliSetPayload`
 
 - <span id="extrusioncalisetpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `ExtrusionCaliSetRequest`
-
-```rust
-struct ExtrusionCaliSetRequest {
-    pub print: ExtrusionCaliSetPayload,
-}
-```
-
-JSON request wrapper to create or overwrite calibration profile allocations.
-
-#### Fields
-
-- **`print`**: `ExtrusionCaliSetPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="extrusioncalisetrequest-new"></span>`fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`KProfileEntry`](#kprofileentry), [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid), [`Error`](../../error/index.md#error)
-
-  Builds a secure write-transaction payload targeting physical EEPROM slots.
-
-  Verifies that all target profiles carry valid setting identifiers to protect local
-  database health. Supports multi-profile writes for IDEX platforms.
-
-#### Trait Implementations
-
-##### `impl Clone for ExtrusionCaliSetRequest`
-
-- <span id="extrusioncalisetrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliSetRequest` — [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest)
-
-##### `impl Debug for ExtrusionCaliSetRequest`
-
-- <span id="extrusioncalisetrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for ExtrusionCaliSetRequest`
-
-- <span id="extrusioncalisetrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `IdexCaliDelEntry`
 
@@ -567,7 +460,7 @@ what name the profile; the carriage fields alone name none (#313).
 struct IdexCaliDelPayload {
     pub command: &'static str,
     pub target: IdexCaliDelEntry,
-    pub sequence_id: String,
+    pub sequence_id: crate::mqtt::commands::ClampedTaskId,
 }
 ```
 
@@ -583,7 +476,7 @@ Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest).
 
   The entry to delete, flattened into `print`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `crate::mqtt::commands::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -600,42 +493,6 @@ Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest).
 ##### `impl Serialize for IdexCaliDelPayload`
 
 - <span id="idexcalidelpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-### `IdexCaliDelRequest`
-
-```rust
-struct IdexCaliDelRequest {
-    pub print: IdexCaliDelPayload,
-}
-```
-
-JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF].
-
-#### Fields
-
-- **`print`**: `IdexCaliDelPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="idexcalidelrequest-new"></span>`fn new(target: IdexCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`IdexCaliDelEntry`](#idexcalidelentry), [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
-
-  Builds a dual-nozzle carriage deletion transaction keyed on physical coordinates.
-
-#### Trait Implementations
-
-##### `impl Clone for IdexCaliDelRequest`
-
-- <span id="idexcalidelrequest-clone"></span>`fn clone(&self) -> IdexCaliDelRequest` — [`IdexCaliDelRequest`](#idexcalidelrequest)
-
-##### `impl Debug for IdexCaliDelRequest`
-
-- <span id="idexcalidelrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for IdexCaliDelRequest`
-
-- <span id="idexcalidelrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `KProfileEntry`
 
@@ -758,6 +615,13 @@ the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out
 
 - <span id="kprofileentry-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Default for KProfileEntry`
+
+- <span id="kprofileentry-default"></span>`fn default() -> Self`
+
+  The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp:56-72`):
+  `cali_idx` `-1` (a fresh write), `k_value` `"0"`, everything else empty.
+
 ##### `impl Deserialize<'de> for KProfileEntry`
 
 - <span id="kprofileentry-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
@@ -847,7 +711,7 @@ OrcaSlicer all send `extrusion_cali_del` that way (`reference/07_diagnostics_hms
 struct StandardCaliDelPayload {
     pub command: &'static str,
     pub target: StandardCaliDelEntry,
-    pub sequence_id: String,
+    pub sequence_id: crate::mqtt::commands::ClampedTaskId,
 }
 ```
 
@@ -863,7 +727,7 @@ Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest).
 
   The entry to delete, flattened into `print`.
 
-- **`sequence_id`**: `String`
+- **`sequence_id`**: `crate::mqtt::commands::ClampedTaskId`
 
   Request sequence ID, serialized as a string on the wire.
 
@@ -881,41 +745,56 @@ Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest).
 
 - <span id="standardcalidelpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `ExtrusionCaliGetRequest`
+
+```rust
+type ExtrusionCaliGetRequest = crate::mqtt::commands::Print<ExtrusionCaliGetPayload>;
+```
+
+JSON request wrapper to trigger a complete dump of the stored calibration database.
+
+# Firmware Quirk: Priming Required [REF-DIAG-KPROF]
+
+The firmware ignores the first `extrusion_cali_get` command received after MQTTS
+connection establishment. A dummy "priming" request must be sent first before the
+real query will receive a response. `PrinterClient::get_k_profiles()` handles this
+automatically — use `set_k_profile_primed(true)` to opt out if you manage priming
+yourself.
+
+### `ExtrusionCaliSelRequest`
+
+```rust
+type ExtrusionCaliSelRequest = crate::mqtt::commands::Print<ExtrusionCaliSelPayload>;
+```
+
+JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
+
+The `setting_id` field is intentionally omitted from this payload to prevent
+database mislinking on the motion board.
+
+### `ExtrusionCaliSetRequest`
+
+```rust
+type ExtrusionCaliSetRequest = crate::mqtt::commands::Print<ExtrusionCaliSetPayload>;
+```
+
+JSON request wrapper to create or overwrite calibration profile allocations.
+
+### `IdexCaliDelRequest`
+
+```rust
+type IdexCaliDelRequest = crate::mqtt::commands::Print<IdexCaliDelPayload>;
+```
+
+JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF].
+
 ### `StandardCaliDelRequest`
 
 ```rust
-struct StandardCaliDelRequest {
-    pub print: StandardCaliDelPayload,
-}
+type StandardCaliDelRequest = crate::mqtt::commands::Print<StandardCaliDelPayload>;
 ```
 
 JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF].
-
-#### Fields
-
-- **`print`**: `StandardCaliDelPayload`
-
-  The `print` namespace envelope required by the wire protocol.
-
-#### Implementations
-
-- <span id="standardcalidelrequest-new"></span>`fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`StandardCaliDelEntry`](#standardcalidelentry), [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid), [`Error`](../../error/index.md#error)
-
-  Builds a single-nozzle deletion transaction keyed on the setting identifier.
-
-#### Trait Implementations
-
-##### `impl Clone for StandardCaliDelRequest`
-
-- <span id="standardcalidelrequest-clone"></span>`fn clone(&self) -> StandardCaliDelRequest` — [`StandardCaliDelRequest`](#standardcalidelrequest)
-
-##### `impl Debug for StandardCaliDelRequest`
-
-- <span id="standardcalidelrequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Serialize for StandardCaliDelRequest`
-
-- <span id="standardcalidelrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 
 ---

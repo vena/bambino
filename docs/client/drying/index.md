@@ -151,7 +151,7 @@ client
   longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
   attached box must have a heater.
 
-  [`Error::ProtocolViolation`](../../error/index.md#error) for an `ams_id` outside the documented address space.
+  [`Error::InvalidArgument`](../../error/index.md#error) for an `ams_id` outside the documented address space.
 
   [`Error::InvalidArgument`](../../error/index.md#error) when the temperature falls outside the unit's
   [`dry_temp_range`](../../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not

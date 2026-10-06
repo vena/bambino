@@ -25,12 +25,15 @@ models.
   - [`BuildVolume`](#buildvolume)
   - [`FanSpeedDebouncer`](#fanspeeddebouncer)
   - [`ModelQuirks`](#modelquirks)
+  - [`Axis`](#axis)
   - [`DoorSensor`](#doorsensor)
   - [`NozzleLayout`](#nozzlelayout)
   - [`Support`](#support)
 - [Functions](#functions)
   - [`decode_fan_percentage`](#decode-fan-percentage)
   - [`fan_step_to_percentage`](#fan-step-to-percentage)
+- [Constants](#constants)
+  - [`RACK_NOZZLE_IDS`](#rack-nozzle-ids)
 
 ## Quick Reference
 
@@ -41,11 +44,13 @@ models.
 | [`BuildVolume`](#buildvolume) | struct | A model's maximum safe travel per axis, in millimeters. |
 | [`FanSpeedDebouncer`](#fanspeeddebouncer) | struct | Filters out transient quantization oscillation artifacts emitted by physical fan controllers. |
 | [`ModelQuirks`](#modelquirks) | struct | One printer model's hardware variations and transport exceptions, as data. |
+| [`Axis`](#axis) | enum | A motion axis. |
 | [`DoorSensor`](#doorsensor) | enum | Where a model reports its front door state, if it has a door sensor at all [REF-NET-DOOR]. |
 | [`NozzleLayout`](#nozzlelayout) | enum | How a model's hotends are arranged. |
 | [`Support`](#support) | enum | How a capability answer was reached — the printer's own report, an inference, or a default. |
 | [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`](#fan-step-to-percentage). |
 | [`fan_step_to_percentage`](#fan-step-to-percentage) | fn | Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS]. |
+| [`RACK_NOZZLE_IDS`](#rack-nozzle-ids) | const | Nozzle ids of a tool changer's six rack slots (H2C) [REF-THER-DECODE]. |
 
 ## Modules
 
@@ -303,14 +308,14 @@ must adapt to.
   support this until a capture shows a stage queued for it: guessing wrong toward
   "unsupported" costs a rejected command rather than a silently skipped calibration.
 
-- <span id="modelquirks-supported-calibration-mask"></span>`fn supported_calibration_mask(&self) -> u32`
+- <span id="modelquirks-supported-calibration"></span>`fn supported_calibration(&self) -> CalibrationOption` — [`CalibrationOption`](../types/control/index.md#calibrationoption)
 
-  Returns the mask of `calibration` option bits this model actually executes [REF-MQTT-LIFECYCLE].
+  Returns the `calibration` routines this model actually executes [REF-MQTT-LIFECYCLE].
 
-  Bits 1–3 (bed leveling, vibration compensation, motor noise) are supported everywhere
-  observed. Bit 4 follows [`Self::supports_nozzle_offset_calibration`](#modelquirks) and bit 5 follows
-  [`Self::supports_heatbed_thermal_calibration`](#modelquirks). Bits 0 and 6 are internal/undocumented
-  and never included.
+  Bed leveling, vibration compensation and motor noise (bits 1–3) are supported everywhere
+  observed. Nozzle height (bit 4) follows [`Self::supports_nozzle_offset_calibration`](#modelquirks) and
+  heatbed thermal (bit 5) follows [`Self::supports_heatbed_thermal_calibration`](#modelquirks). Bits 0 and
+  6 are internal/undocumented and never included.
 
 - <span id="modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -346,20 +351,25 @@ must adapt to.
 
   Returns this model's maximum safe travel per axis.
 
-- <span id="modelquirks-relative-z-move-gcode"></span>`fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String`
+- <span id="modelquirks-is-valid-nozzle-id"></span>`fn is_valid_nozzle_id(&self, id: u8) -> bool`
 
-  Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
+  Whether `id` addresses a nozzle on this model, as `M104 T<id>` and the print-job nozzle mapping use it.
 
-  Returns an empty string if `distance` exceeds the model's Z travel.
+  On a tool changer ([`has_nozzle_rack`](#modelquirks), H2C) that is the fixed
+  hotend `0` or a rack slot in [`RACK_NOZZLE_IDS`](#rack-nozzle-ids) — *not* `0..physical_nozzle_count()`,
+  even though that count is `7` there. Elsewhere it is `0..physical_nozzle_count()`.
 
-- <span id="modelquirks-relative-xy-move-gcode"></span>`fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String`
+  `reference/04_toolhead_thermal_motion.md` §4 confirms `16..=21` for the rack slots'
+  telemetry `stat` field only, not that a write to a passively stored tool does anything, so
+  this is a permissive address check, not a statement about effect.
 
-  Generates a bounded relative X/Y-axis movement G-code command.
+- <span id="modelquirks-relative-move-gcode"></span>`fn relative_move_gcode(&self, axis: Axis, distance: f32, feedrate: u32) -> Option<String>` — [`Axis`](#axis)
 
-  The same single-command distance cap `relative_z_move_gcode` applies to Z (see
-  `format_z_move_gcode` for why this isn't true position-aware crash prevention). Returns an
-  empty string if `distance` is zero, non-finite, exceeds the axis's travel, or `axis` is
-  neither `'X'` nor `'Y'`.
+  Generates a bounded relative move on one axis [REF-MOTO-GCODE].
+
+  `None` when `distance` is zero, non-finite, or exceeds the axis's travel in
+  [`build_volume()`](#modelquirks). The cap bounds a single command, not the toolhead's
+  position — see `format_move_gcode`.
 
 - <span id="modelquirks-requires-wallclock-rtsp-timestamps"></span>`fn requires_wallclock_rtsp_timestamps(&self) -> bool`
 
@@ -490,6 +500,78 @@ must adapt to.
 ##### `impl Debug for ModelQuirks`
 
 - <span id="modelquirks-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+### `Axis`
+
+```rust
+enum Axis {
+    X,
+    Y,
+    Z,
+}
+```
+
+A motion axis.
+
+#### Variants
+
+- **`X`**
+
+  X.
+
+- **`Y`**
+
+  Y.
+
+- **`Z`**
+
+  Z.
+
+#### Implementations
+
+- <span id="axis-const-all"></span>`const ALL: [Axis; 3]`
+
+- <span id="axis-letter"></span>`const fn letter(self) -> char`
+
+  The G-code letter for this axis.
+
+#### Trait Implementations
+
+##### `impl Clone for Axis`
+
+- <span id="axis-clone"></span>`fn clone(&self) -> Axis` — [`Axis`](#axis)
+
+##### `impl Copy for Axis`
+
+##### `impl Debug for Axis`
+
+- <span id="axis-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for Axis`
+
+- <span id="axis-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for Axis`
+
+##### `impl FromStr for Axis`
+
+- <span id="axis-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="axis-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+  Parses `x`/`y`/`z`, case-insensitively.
+
+##### `impl Hash for Axis`
+
+- <span id="axis-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for Axis`
+
+- <span id="axis-partialeq-eq"></span>`fn eq(&self, other: &Axis) -> bool` — [`Axis`](#axis)
+
+##### `impl ToString for Axis`
+
+- <span id="axis-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `DoorSensor`
 
@@ -693,4 +775,16 @@ fn fan_step_to_percentage(step: u8) -> u8
 Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
 
 Implements standard mathematical rounding logic: `Round(Step * 100 / 15)`.
+
+
+---
+
+## Constants
+
+### `RACK_NOZZLE_IDS`
+```rust
+const RACK_NOZZLE_IDS: core::ops::RangeInclusive<u8>;
+```
+
+Nozzle ids of a tool changer's six rack slots (H2C) [REF-THER-DECODE].
 
