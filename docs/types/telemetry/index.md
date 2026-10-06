@@ -2806,7 +2806,7 @@ AI detection and print-option settings, nested as `print.xcam` on the wire.
 
 Every field is `Option` because which keys arrive depends on both firmware generation and
 model, and because `xcam` appears to be pushall-only — an incremental `msg: 1` frame carries
-none of it. Use [`merge_from`](xcam/index.md#xcamtelemetry) rather than replacing a cached copy wholesale.
+none of it. Use `merge_from` rather than replacing a cached copy wholesale.
 
 Unmodeled keys survive in [`extra`](xcam/index.md#xcamtelemetry): this wire object is still largely uncharted
 and model-dependent, so round-tripping a report must not silently drop what it carries.

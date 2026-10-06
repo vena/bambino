@@ -758,7 +758,7 @@ The `print` namespace envelope a command payload is published in.
   `tray_info_idx` and is omitted entirely when not set.
 
   Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
-  code in [`with_preset`](#print). See
+  code in [`FilamentSpec::preset`](ams/index.md#filamentspec). See
   [`AmsFilamentSettingPayload::tray_info_idx`](ams/index.md#amsfilamentsettingpayload) for what the printer does when a long id is
   put in the short field instead.
 

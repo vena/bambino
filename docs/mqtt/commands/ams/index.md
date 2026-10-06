@@ -304,7 +304,7 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
   **Short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"` [REF-AMS-SP_CFG].
   
-  Set via [`AmsFilamentSettingRequest::with_preset`](#amsfilamentsettingrequest).
+  Set from [`FilamentSpec::preset`](#filamentspec).
   
   This is *not* where a long `"PF"`-prefixed preset id belongs — that goes in
   [`setting_id`](#amsfilamentsettingpayload), which is a separate wire field. Putting a 19-character
