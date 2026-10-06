@@ -19,6 +19,9 @@ use bambino::models::PrinterModel;
 
 use bambino::io::TlsVersion;
 
+/// The printer clock every listing test parses against.
+const REF_NOW: CurrentDateTime = CurrentDateTime::new(2026, 6, 17, 15, 0);
+
 use crate::common::io::{
     CloseCountingTlsConnector, DummyTlsConnector, FailingDataTlsConnector, FaultyDataTlsConnector,
     HostCapturingTlsConnector, MockDataStreamFactory, PerCallVersionReportingTlsConnector,
@@ -126,16 +129,7 @@ async fn test_ftps_client_lifecycle_and_operations() {
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let list = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
+        .list_directory("/model", REF_NOW)
         .await
         .expect("LIST failed");
     assert_eq!(
@@ -221,16 +215,7 @@ async fn test_ftps_a1_plaintext_data_channel() {
     let mut client = connect_client(client_control, factory, PrinterModel::A1).await;
 
     let list = client
-        .list_directory(
-            "/",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
+        .list_directory("/", REF_NOW)
         .await
         .expect("LIST failed on A1 plaintext path");
     assert_eq!(list.len(), 1);
@@ -529,18 +514,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
     .await
     .expect("FTPS handshake failed");
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(result, Err(bambino::error::Error::Network(_))),
         "Expected the data-channel TLS connect failure to surface as Network, got {:?}",
@@ -644,16 +618,7 @@ async fn test_ftps_list_directory_426_recovery() {
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let list = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
+        .list_directory("/model", REF_NOW)
         .await
         .expect("LIST should tolerate 426 confirmation");
     assert_eq!(list.len(), 1);
@@ -677,18 +642,7 @@ async fn test_ftps_list_directory_426_with_truncated_entry_rejected() {
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(result, Err(Error::ProtocolViolation(_))),
         "a 426-aborted LIST cut mid-entry must error, not return a silently short listing, got {:?}",
@@ -711,18 +665,7 @@ async fn test_ftps_list_directory_426_with_empty_payload_rejected() {
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(result, Err(Error::ProtocolViolation(_))),
         "a 426-aborted LIST with no data must error, not return an empty listing, got {:?}",
@@ -746,16 +689,7 @@ async fn test_ftps_list_directory_skips_non_utf8_line() {
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let list = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
+        .list_directory("/model", REF_NOW)
         .await
         .expect("LIST with one non-UTF-8 line should still succeed");
     assert_eq!(list.len(), 1);
@@ -885,18 +819,7 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(result, Err(Error::Network(_))),
         "Expected the dropped connection to surface as Network, got {:?}",
@@ -929,18 +852,7 @@ async fn test_ftps_pasv_transport_failure_poisons_client() {
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(result, Err(Error::Network(_))),
         "Expected the connection dropped during PASV to surface as Network, got {:?}",
@@ -971,18 +883,7 @@ async fn test_ftps_pasv_rejection_reply_does_not_poison_client() {
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(
             result,
@@ -1080,16 +981,7 @@ async fn test_ftps_closes_tls_sessions_on_teardown() {
     .expect("FTPS handshake failed");
 
     client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
+        .list_directory("/model", REF_NOW)
         .await
         .expect("list_directory should succeed");
     assert_eq!(
@@ -1220,18 +1112,7 @@ async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
     .await
     .expect("Control channel at TLS 1.2 should be accepted for P2S");
 
-    let result = client
-        .list_directory(
-            "/model",
-            CurrentDateTime {
-                year: 2026,
-                month: 6,
-                day: 17,
-                hour: 15,
-                minute: 0,
-            },
-        )
-        .await;
+    let result = client.list_directory("/model", REF_NOW).await;
     assert!(
         matches!(result, Err(bambino::error::Error::ProtocolViolation(_))),
         "Expected the data-channel TLS 1.3 recheck to reject with ProtocolViolation, got {:?}",

@@ -316,6 +316,14 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
     }
 }
 
+/// An [`FtpsClient`](crate::ftps::FtpsClient) on the tokio backend, as `PrinterClient::storage()` hands it out with `TokioTimer`.
+pub type TokioFtpsClient = crate::ftps::FtpsClient<
+    TokioIo<::tokio::net::TcpStream>,
+    TokioTlsConnector,
+    TokioRawStreamFactory,
+    TokioTimer,
+>;
+
 /// Raw (pre-TLS) connection factory for the Tokio runtime.
 ///
 /// Creates raw TCP connections wrapped in [`TokioIo`] — used for MQTT's lazy connect and

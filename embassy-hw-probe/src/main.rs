@@ -685,13 +685,7 @@ async fn replay(ctx: &mut Ctx) -> Outcome {
 
 #[cfg(not(feature = "control"))]
 fn listing_time() -> CurrentDateTime {
-    CurrentDateTime {
-        year: 2026,
-        month: 10,
-        day: 3,
-        hour: 12,
-        minute: 0,
-    }
+    CurrentDateTime::new(2026, 10, 3, 12, 0)
 }
 
 #[cfg(not(feature = "control"))]

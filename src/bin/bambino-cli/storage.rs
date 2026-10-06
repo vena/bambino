@@ -79,18 +79,6 @@ fn print_transfer_time(command: &str, started: Instant) {
     );
 }
 
-/// Dynamic calendar epoch helper converting the current wall-clock time to calendar date parts.
-fn current_date_utc() -> CurrentDateTime {
-    let now = time::OffsetDateTime::now_utc();
-    CurrentDateTime {
-        year: now.year(),
-        month: now.month() as u8,
-        day: now.day(),
-        hour: now.hour(),
-        minute: now.minute(),
-    }
-}
-
 /// Dispatches a typed storage action over FTPS.
 pub async fn run(
     target: &Target,
@@ -124,7 +112,7 @@ pub async fn run(
     let result: Result<(), CliError> = async {
         match action {
             FilesAction::List { remote_path } => {
-                let now = current_date_utc();
+                let now = CurrentDateTime::now_utc();
 
                 println!("Traversing remote files on directory '{}'...", remote_path);
                 let started = Instant::now();
@@ -222,15 +210,7 @@ pub async fn run(
 /// readable — see `FilesAction::ClockCheck`'s doc comment for why this exists:
 /// LAN-mode NTP sync is unreliable, so `list_directory`'s year-rollover math can't be trusted
 /// without checking the printer's clock first.
-async fn run_clock_check<RawIO, Tls, Factory, FtpsTimer>(
-    client: &mut bambino::ftps::FtpsClient<RawIO, Tls, Factory, FtpsTimer>,
-) -> Result<(), Error>
-where
-    RawIO: bambino::io::AsyncIo,
-    Tls: bambino::io::TlsConnector<RawIO>,
-    Factory: bambino::io::RawStreamFactory<RawIO>,
-    FtpsTimer: bambino::io::TimerProvider,
-{
+async fn run_clock_check(client: &mut bambino::io::tokio::TokioFtpsClient) -> Result<(), Error> {
     const PROBE_PATH: &str = "/bambino_clock_probe.txt";
     let payload = b"bambino clock probe";
 
@@ -245,7 +225,7 @@ where
     // path below is both the fallback and what a no-MDTM firmware is stuck with anyway.
     let mdtm = client.modification_time(PROBE_PATH).await;
 
-    let now = current_date_utc();
+    let now = CurrentDateTime::now_utc();
     let listing = client.list_directory("/", now).await;
 
     // Always attempt cleanup, even if the listing failed — don't leave the probe file behind
@@ -290,11 +270,11 @@ where
                 } else {
                     " (year from wire)  "
                 },
-                f.year,
-                f.month,
-                f.day,
-                f.hour,
-                f.minute
+                f.modified.year,
+                f.modified.month,
+                f.modified.day,
+                f.modified.hour,
+                f.modified.minute
             );
         }
         None => println!(
@@ -310,7 +290,14 @@ where
     match (&mdtm, probe) {
         (Ok(Some(t)), _) => report_clock_delta(after, t.year, t.month, t.day, t.hour, t.minute),
         (_, Some(f)) => {
-            report_clock_delta(after, f.year, f.month, f.day, f.hour, f.minute);
+            report_clock_delta(
+                after,
+                f.modified.year,
+                f.modified.month,
+                f.modified.day,
+                f.modified.hour,
+                f.modified.minute,
+            );
             if f.year_is_inferred {
                 println!(
                     "Note: MDTM was unavailable, so the year above was reconstructed from this \
@@ -428,7 +415,12 @@ fn print_file_listing_table(remote_path: &str, files: &[bambino::ftps::FtpFile])
         };
         let modified_str = format!(
             "{:04}-{:02}-{:02} {:02}:{:02}{}",
-            file.year, file.month, file.day, file.hour, file.minute, inferred_marker
+            file.modified.year,
+            file.modified.month,
+            file.modified.day,
+            file.modified.hour,
+            file.modified.minute,
+            inferred_marker
         );
         table.add_row(vec![type_str, &size_str, &modified_str, &file.name]);
     }

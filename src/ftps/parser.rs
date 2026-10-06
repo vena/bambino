@@ -33,18 +33,14 @@ pub struct FtpFile {
     pub is_dir: bool,
     /// Absolute size of the file, in bytes.
     pub size: u64,
-    /// Reconstructed modification year: taken verbatim from the wire when the listing carried one,
-    /// otherwise inferred against the [`CurrentDateTime`] reference (see `year_is_inferred`).
-    pub year: i32,
-    /// Numeric calendar month (1 to 12).
-    pub month: u8,
-    /// Numeric day of the month (1 to 31).
-    pub day: u8,
-    /// Clock hour (0 to 23). Default is 0 if listing only provides a calendar year.
-    pub hour: u8,
-    /// Clock minute (0 to 59). Default is 0 if listing only provides a calendar year.
-    pub minute: u8,
-    /// `true` when `year` was inferred from the [`CurrentDateTime`] reference (the wire's
+    /// Modification time. `second` is always 0 (`LIST` has no seconds), and so are `hour` and
+    /// `minute` when the line gave a year instead of a time. The year is taken verbatim from the
+    /// wire when the listing carried one, otherwise inferred against the [`CurrentDateTime`]
+    /// reference (see `year_is_inferred`). Comparable with a [`modification_time`] result.
+    ///
+    /// [`modification_time`]: crate::ftps::FtpsClient::modification_time
+    pub modified: FtpTimestamp,
+    /// `true` when `modified.year` was inferred from the [`CurrentDateTime`] reference (the wire's
     /// HH:MM-recent-file format, ambiguous by design; see `parse_unix_listing`'s doc comment),
     /// `false` when the wire reported an explicit `YYYY` directly. `year`'s rollover math always
     /// lands in `{reference_year, reference_year - 1}` for an inferred entry by construction, so it
@@ -54,23 +50,17 @@ pub struct FtpFile {
     pub year_is_inferred: bool,
 }
 
-/// Converts a 3-letter month abbreviation into a calendar month index.
+/// Three-letter month abbreviations, in calendar order.
+const MONTH_ABBREVIATIONS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// Converts a 3-letter month abbreviation (any case) into a calendar month index.
 fn parse_month(month: &str) -> Option<u8> {
-    match month {
-        "Jan" | "jan" => Some(1),
-        "Feb" | "feb" => Some(2),
-        "Mar" | "mar" => Some(3),
-        "Apr" | "apr" => Some(4),
-        "May" | "may" => Some(5),
-        "Jun" | "jun" => Some(6),
-        "Jul" | "jul" => Some(7),
-        "Aug" | "aug" => Some(8),
-        "Sep" | "sep" => Some(9),
-        "Oct" | "oct" => Some(10),
-        "Nov" | "nov" => Some(11),
-        "Dec" | "dec" => Some(12),
-        _ => None,
-    }
+    MONTH_ABBREVIATIONS
+        .iter()
+        .position(|m| m.eq_ignore_ascii_case(month))
+        .map(|i| i as u8 + 1)
 }
 
 /// Returns the number of days in a given calendar month, leap-year-aware for February.
@@ -102,6 +92,13 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
     Some((&trimmed[..end], &trimmed[end..]))
 }
 
+/// Takes the next token off `rest` (see [`next_token`]), advancing `rest` past it.
+fn take<'a>(rest: &mut &'a str) -> Option<&'a str> {
+    let (token, remainder) = next_token(rest)?;
+    *rest = remainder;
+    Some(token)
+}
+
 /// An absolute file modification time as reported by the `MDTM` command, to one-second resolution.
 ///
 /// Unlike everything derived from a `LIST` line, this carries an explicit four-digit year straight
@@ -111,7 +108,9 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
 ///
 /// See [`FtpsClient::modification_time`](crate::ftps::FtpsClient::modification_time), which returns
 /// `None` when the printer's firmware doesn't implement the command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Ordered chronologically (fields compare year first, second last).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FtpTimestamp {
     /// Four-digit calendar year, as reported.
     pub year: i32,
@@ -199,7 +198,7 @@ pub fn parse_mdtm_timestamp(body: &str) -> Option<FtpTimestamp> {
 /// `LIST` or read outright via `MDTM`, is what the printer believed when it wrote the file, so a
 /// clock that was wrong then is still wrong now. A better reference makes the reconstruction more
 /// likely to be right, never authoritative.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentDateTime {
     /// The printer's calendar year.
     pub year: i32,
@@ -211,6 +210,71 @@ pub struct CurrentDateTime {
     pub hour: u8,
     /// The printer's minute (0-59).
     pub minute: u8,
+}
+
+impl CurrentDateTime {
+    /// A reference clock at the given calendar time.
+    #[must_use]
+    pub const fn new(year: i32, month: u8, day: u8, hour: u8, minute: u8) -> Self {
+        Self {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+        }
+    }
+
+    /// The host's current UTC time — a fallback reference when the printer's clock is unknown.
+    ///
+    /// Prefer the printer's own clock (see the type's doc comment); entries whose year came from
+    /// this reference are flagged with [`FtpFile::year_is_inferred`].
+    #[cfg(feature = "std")]
+    #[must_use]
+    pub fn now_utc() -> Self {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let days = (secs / 86_400) as i64;
+        let secs_of_day = secs % 86_400;
+        let (year, month, day) = civil_from_days(days);
+        Self::new(
+            year,
+            month,
+            day,
+            (secs_of_day / 3600) as u8,
+            (secs_of_day % 3600 / 60) as u8,
+        )
+    }
+
+    /// This reference as a timestamp at second 0, for comparing against parsed entries.
+    fn as_timestamp(self) -> FtpTimestamp {
+        FtpTimestamp {
+            year: self.year,
+            month: self.month,
+            day: self.day,
+            hour: self.hour,
+            minute: self.minute,
+            second: 0,
+        }
+    }
+}
+
+/// Converts days since 1970-01-01 to a proleptic Gregorian `(year, month, day)`.
+///
+/// Howard Hinnant's `civil_from_days` (<https://howardhinnant.github.io/date_algorithms.html>).
+#[cfg(feature = "std")]
+fn civil_from_days(days: i64) -> (i32, u8, u8) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
+    let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
+    (year, month, day)
 }
 
 /// Converts an `MDTM` reading into a `LIST` reference clock, discarding the seconds field.
@@ -255,10 +319,7 @@ impl From<FtpTimestamp> for CurrentDateTime {
 /// calculated year by 1.
 pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
     let current_year = now.year;
-    let current_month = now.month;
-    let current_day = now.day;
-    let current_hour = now.hour;
-    let current_minute = now.minute;
+    let now_ts = now.as_timestamp();
     let mut files = Vec::new();
 
     for line in payload.lines() {
@@ -273,49 +334,23 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
 
         // Standard UNIX listings contain exactly 9 base columns:
         // [0:Perms] [1:Links] [2:Owner] [3:Group] [4:Size] [5:Month] [6:Day] [7:TimeOrYear] [8+:Name]
-        let perms = match next_token(rest) {
-            Some((tok, r)) => {
-                rest = r;
-                tok
-            }
-            None => continue,
+        let Some(perms) = take(&mut rest) else {
+            continue;
         };
         for _ in 0..3 {
-            if let Some((_, r)) = next_token(rest) {
-                rest = r;
-            }
+            take(&mut rest);
         }
-
-        let size = match next_token(rest) {
-            Some((tok, r)) => match tok.parse::<u64>() {
-                Ok(sz) => {
-                    rest = r;
-                    sz
-                }
-                Err(_) => continue,
-            },
-            None => continue,
+        let Some(Ok(size)) = take(&mut rest).map(str::parse::<u64>) else {
+            continue;
         };
-        let month_str = match next_token(rest) {
-            Some((tok, r)) => {
-                rest = r;
-                tok
-            }
-            None => continue,
+        let Some(month_str) = take(&mut rest) else {
+            continue;
         };
-        let day_str = match next_token(rest) {
-            Some((tok, r)) => {
-                rest = r;
-                tok
-            }
-            None => continue,
+        let Some(day_str) = take(&mut rest) else {
+            continue;
         };
-        let time_or_year = match next_token(rest) {
-            Some((tok, r)) => {
-                rest = r;
-                tok
-            }
-            None => continue,
+        let Some(time_or_year) = take(&mut rest) else {
+            continue;
         };
 
         // Everything following the 8th whitespace-delimited block is the filename.
@@ -362,13 +397,9 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             _ => continue,
         };
 
-        let mut hour = 0;
-        let mut minute = 0;
-        let mut year = current_year;
         let year_is_inferred = time_or_year.contains(':');
-
-        if time_or_year.contains(':') {
-            // Field contains HH:MM time layout. Parse temporal properties.
+        // Field contains HH:MM time layout for a recent file; a YYYY line carries no time.
+        let (hour, minute) = if year_is_inferred {
             let mut time_parts = time_or_year.split(':');
             let Some(parsed_hour) = time_parts.next().and_then(|h| h.parse::<u8>().ok()) else {
                 continue;
@@ -376,18 +407,28 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             let Some(parsed_minute) = time_parts.next().and_then(|m| m.parse::<u8>().ok()) else {
                 continue;
             };
-
             if parsed_hour > 23 || parsed_minute > 59 {
                 continue;
             }
-            hour = parsed_hour;
-            minute = parsed_minute;
+            (parsed_hour, parsed_minute)
+        } else {
+            (0, 0)
+        };
+        // The entry's timestamp in a candidate `year`; everything else is final.
+        let at = |year| FtpTimestamp {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second: 0,
+        };
 
+        let mut year = current_year;
+        if year_is_inferred {
             // Rollover calculation: If parsed datetime attributes exceed our current system markers,
             // we have crossed a calendar year boundary. Drop the year parameter accordingly.
-            let parsed_dt = (month, day, hour, minute);
-            let current_dt = (current_month, current_day, current_hour, current_minute);
-            if parsed_dt > current_dt {
+            if at(current_year) > now_ts {
                 year = current_year - 1;
             }
         } else {
@@ -425,9 +466,7 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
                 // fails the day check, and is then "repaired" to 2024-02-29 — six weeks in
                 // the future. Retrying backward to `current_year - 1` moves the entry further
                 // into the past and never violates the invariant, so it needs no extra guard.
-                let alternate_is_future = alternate_year == current_year
-                    && (month, day, hour, minute)
-                        > (current_month, current_day, current_hour, current_minute);
+                let alternate_is_future = at(alternate_year) > now_ts;
                 if day <= days_in_month(month, alternate_year) && !alternate_is_future {
                     year = alternate_year;
                 } else {
@@ -453,11 +492,7 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             name,
             is_dir,
             size,
-            year,
-            month,
-            day,
-            hour,
-            minute,
+            modified: at(year),
             year_is_inferred,
         });
     }
@@ -468,6 +503,24 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn test_civil_from_days_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        assert_eq!(civil_from_days(19_723), (2024, 1, 1));
+        assert_eq!(civil_from_days(20_513), (2026, 3, 1));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn test_month_abbreviation_any_case() {
+        assert_eq!(parse_month("Jan"), Some(1));
+        assert_eq!(parse_month("dec"), Some(12));
+        assert_eq!(parse_month("JUN"), Some(6));
+        assert_eq!(parse_month("Juny"), None);
+    }
 
     #[test]
     fn test_leading_dash_filename_survives_listing() {
@@ -535,11 +588,11 @@ mod tests {
         assert_eq!(file.name, "video_2026-06-17.mp4");
         assert!(!file.is_dir);
         assert_eq!(file.size, 1632221);
-        assert_eq!(file.year, 2026);
-        assert_eq!(file.month, 6);
-        assert_eq!(file.day, 17);
-        assert_eq!(file.hour, 12);
-        assert_eq!(file.minute, 14);
+        assert_eq!(file.modified.year, 2026);
+        assert_eq!(file.modified.month, 6);
+        assert_eq!(file.modified.day, 17);
+        assert_eq!(file.modified.hour, 12);
+        assert_eq!(file.modified.minute, 14);
         assert!(
             file.year_is_inferred,
             "HH:MM-format entry must be flagged as inferred"
@@ -550,11 +603,11 @@ mod tests {
         assert_eq!(dir.name, "cache");
         assert!(dir.is_dir);
         assert_eq!(dir.size, 4096);
-        assert_eq!(dir.year, 2025);
-        assert_eq!(dir.month, 6);
-        assert_eq!(dir.day, 17);
-        assert_eq!(dir.hour, 0);
-        assert_eq!(dir.minute, 0);
+        assert_eq!(dir.modified.year, 2025);
+        assert_eq!(dir.modified.month, 6);
+        assert_eq!(dir.modified.day, 17);
+        assert_eq!(dir.modified.hour, 0);
+        assert_eq!(dir.modified.minute, 0);
         assert!(
             !dir.year_is_inferred,
             "explicit-YYYY-format entry must not be flagged as inferred"
@@ -601,7 +654,7 @@ mod tests {
         );
         let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec![" lead.3mf", "trail.3mf  "]);
-        assert_eq!(f.year, 2030);
+        assert_eq!(f.modified.year, 2030);
     }
 
     #[test]
@@ -644,7 +697,7 @@ mod tests {
             },
         );
         assert_eq!(files.len(), 1);
-        assert_eq!(files[0].year, 2024);
+        assert_eq!(files[0].modified.year, 2024);
         assert!(files[0].year_is_inferred);
     }
 
@@ -740,11 +793,11 @@ mod tests {
 
         assert_eq!(files.len(), 1);
         let file = &files[0];
-        assert_eq!(file.year, 2025);
-        assert_eq!(file.month, 12);
-        assert_eq!(file.day, 31);
-        assert_eq!(file.hour, 23);
-        assert_eq!(file.minute, 59);
+        assert_eq!(file.modified.year, 2025);
+        assert_eq!(file.modified.month, 12);
+        assert_eq!(file.modified.day, 31);
+        assert_eq!(file.modified.hour, 23);
+        assert_eq!(file.modified.minute, 59);
     }
 
     #[test]
