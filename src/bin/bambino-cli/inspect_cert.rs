@@ -12,9 +12,9 @@
 //! [`TlsConnector::peer_chain_der`], rather than driving `tokio_rustls` with a bespoke
 //! capturing verifier as it used to. That makes this command an exercise of the exact code
 //! path a consumer pinning a certificate would use, instead of a parallel implementation that
-//! could drift from it — and it costs nothing, because `build_unsafe_client_config` already
+//! could drift from it — and it costs nothing, because `TokioTlsConnector::unverified` already
 //! builds the identical config (ring provider, `DEFAULT_VERSIONS`, `NoCertificateVerification`
-//! advertising the same twelve signature schemes) that the local verifier was duplicating.
+//! advertising the provider's signature schemes) that the local verifier was duplicating.
 //!
 //! The **whole** chain is captured, not just the leaf, because whether a printer sends its
 //! issuing CA decides what pinning a consumer can build on top of `peer_chain_der`: if the
@@ -31,8 +31,8 @@
 
 use std::path::{Path, PathBuf};
 
-use bambino::io::TlsConnector;
-use bambino::io::tokio::build_unsafe_client_config;
+use bambino::io::tokio::TokioTlsConnector;
+use bambino::io::{TlsConnector, TlsVersions};
 
 use crate::connection::{dial_and_handshake, validate_ip_serial};
 use crate::error::CliError;
@@ -80,8 +80,13 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
         );
     }
 
-    let (connector, tls_stream) =
-        dial_and_handshake(ip, serial, port, build_unsafe_client_config()).await?;
+    let (connector, tls_stream) = dial_and_handshake(
+        ip,
+        serial,
+        port,
+        TokioTlsConnector::unverified(TlsVersions::Default),
+    )
+    .await?;
 
     // Must be read before the stream is dropped: the chain is owned by the live session.
     let chain = connector.peer_chain_der(&tls_stream).ok_or_else(|| {

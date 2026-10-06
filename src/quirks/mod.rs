@@ -346,6 +346,16 @@ impl ModelQuirks {
         self.ftps_tls_1_2
     }
 
+    /// Returns the TLS versions an FTPS connector for this model may offer — see [`Self::requires_ftps_tls_1_2`].
+    #[must_use]
+    pub fn ftps_tls_versions(&self) -> crate::io::TlsVersions {
+        if self.ftps_tls_1_2 {
+            crate::io::TlsVersions::Tls12Only
+        } else {
+            crate::io::TlsVersions::Default
+        }
+    }
+
     /// Returns where this model reports its door state, or [`DoorSensor::None`] without a door sensor.
     ///
     /// Read the state itself with

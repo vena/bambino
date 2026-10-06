@@ -1,8 +1,11 @@
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, SignatureScheme};
-use rustls_pki_types::{CertificateDer, ServerName, SignatureVerificationAlgorithm, UnixTime};
+use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use tokio_rustls::rustls;
+use x509_parser::certificate::X509Certificate;
 use x509_parser::prelude::FromDer;
+use x509_parser::time::ASN1Time;
 
 /// Custom certificate verifier that disables **all** peer certificate verification.
 ///
@@ -57,22 +60,12 @@ impl ServerCertVerifier for NoCertificateVerification {
         Ok(HandshakeSignatureValid::assertion())
     }
 
+    /// The provider's schemes, the same list [`CnFallbackServerVerifier`] offers, so a printer that
+    /// completes a verified handshake also completes an unverified one.
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        // Expose support for all typical legacy and modern signing configurations to avoid handshake failure.
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-        ]
+        super::crypto_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -122,10 +115,7 @@ impl ServerCertVerifier for NoCertificateVerification {
 /// walker to `x509-parser`'s parsed fields.
 pub struct CnFallbackServerVerifier {
     trusted_roots: Vec<CertificateDer<'static>>,
-    algs_mapping: &'static [(
-        SignatureScheme,
-        &'static [&'static dyn SignatureVerificationAlgorithm],
-    )],
+    algs: WebPkiSupportedAlgorithms,
 }
 
 impl CnFallbackServerVerifier {
@@ -148,10 +138,9 @@ impl CnFallbackServerVerifier {
             })?;
         }
 
-        let provider = rustls::crypto::ring::default_provider();
         Ok(Self {
             trusted_roots,
-            algs_mapping: provider.signature_verification_algorithms.mapping,
+            algs: super::crypto_provider().signature_verification_algorithms,
         })
     }
 }
@@ -171,22 +160,12 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
         _ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, RustlsError> {
-        use x509_parser::certificate::X509Certificate;
-        use x509_parser::time::ASN1Time;
-
         let (_, leaf) = X509Certificate::from_der(end_entity.as_ref())
             .map_err(|_| RustlsError::InvalidCertificate(CertificateError::BadEncoding))?;
 
         let now_asn1 = ASN1Time::from_timestamp(now.as_secs() as i64)
             .map_err(|_| RustlsError::InvalidCertificate(CertificateError::BadEncoding))?;
-        if !leaf.validity().is_valid_at(now_asn1) {
-            let err = if now_asn1.timestamp() < leaf.validity().not_before.timestamp() {
-                CertificateError::NotValidYet
-            } else {
-                CertificateError::Expired
-            };
-            return Err(RustlsError::InvalidCertificate(err));
-        }
+        check_validity(&leaf, now_asn1)?;
 
         // Walk from the leaf through `intermediates` (parsed once up front, then
         // consumed as they're matched — each intermediate is usable at most once, so a cyclic
@@ -273,14 +252,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             // are checked — the leaf itself is exempt, since real Bambu v1 leaf certs carry no
             // extensions at all.
             check_ca_capable(current, intermediates_below as u32)?;
-            if !current.validity().is_valid_at(now_asn1) {
-                let err = if now_asn1.timestamp() < current.validity().not_before.timestamp() {
-                    CertificateError::NotValidYet
-                } else {
-                    CertificateError::Expired
-                };
-                return Err(RustlsError::InvalidCertificate(err));
-            }
+            check_validity(current, now_asn1)?;
         }
         if !chain_trusted {
             return Err(RustlsError::InvalidCertificate(
@@ -299,7 +271,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, RustlsError> {
-        verify_handshake_signature(cert, message, dss, self.algs_mapping, true)
+        verify_handshake_signature(cert, message, dss, &self.algs, true)
     }
 
     fn verify_tls13_signature(
@@ -313,15 +285,25 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
                 rustls::PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,
             ));
         }
-        verify_handshake_signature(cert, message, dss, self.algs_mapping, false)
+        verify_handshake_signature(cert, message, dss, &self.algs, false)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.algs_mapping
-            .iter()
-            .map(|(scheme, _)| *scheme)
-            .collect()
+        self.algs.supported_schemes()
     }
+}
+
+/// Rejects `cert` as `NotValidYet` or `Expired` when `now` is outside its validity period.
+fn check_validity(cert: &X509Certificate<'_>, now: ASN1Time) -> Result<(), RustlsError> {
+    if cert.validity().is_valid_at(now) {
+        return Ok(());
+    }
+    let err = if now.timestamp() < cert.validity().not_before.timestamp() {
+        CertificateError::NotValidYet
+    } else {
+        CertificateError::Expired
+    };
+    Err(RustlsError::InvalidCertificate(err))
 }
 
 /// Rejects a peer-supplied cert that is being used as an issuer but isn't allowed to be one.
@@ -409,17 +391,15 @@ fn verify_handshake_signature(
     cert: &CertificateDer<'_>,
     message: &[u8],
     dss: &DigitallySignedStruct,
-    algs_mapping: &'static [(
-        SignatureScheme,
-        &'static [&'static dyn SignatureVerificationAlgorithm],
-    )],
+    algs: &WebPkiSupportedAlgorithms,
     try_all: bool,
 ) -> Result<HandshakeSignatureValid, RustlsError> {
-    let (_, leaf) = x509_parser::certificate::X509Certificate::from_der(cert.as_ref())
+    let (_, leaf) = X509Certificate::from_der(cert.as_ref())
         .map_err(|_| RustlsError::InvalidCertificate(CertificateError::BadEncoding))?;
     let public_key = &leaf.public_key().subject_public_key.data;
 
-    let candidates = algs_mapping
+    let candidates = algs
+        .mapping
         .iter()
         .find(|(scheme, _)| *scheme == dss.scheme)
         .map(|(_, algs)| *algs)

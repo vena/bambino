@@ -384,7 +384,7 @@ where
     ///
     /// Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, `FtpsFactory`, and `FtpsTimer`
     /// type parameters. The FTPS [`TlsConnector`] is independent from MQTT's (some models
-    /// require different TLS settings for FTPS, e.g. `force_tls_1_2`). `timer` is
+    /// require different TLS settings for FTPS, e.g. `TlsVersions::Tls12Only`). `timer` is
     /// constructed fresh by the caller (e.g. `TokioTimer::new()`) — `FtpsClient` owns it
     /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
     /// out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
@@ -467,8 +467,8 @@ where
     /// `require_tls_1_2_if_enforced` passes on its own whenever a P2S/X2D actually negotiates
     /// TLS 1.2 — see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. What differs between
     /// backends is the ability to *cap* the peer at 1.2: only `tokio` has that knob
-    /// (`force_tls_1_2` on `build_verified_client_config_with_options` /
-    /// `build_unsafe_client_config_with_options`). `esp-idf` and `embassy` set no maximum
+    /// (`TlsVersions::Tls12Only` on `TokioTlsConnector::verified`/`unverified`). `esp-idf` and
+    /// `embassy` set no maximum
     /// version — upstream exposes none on ESP-IDF, and this crate sets only `min_version` on
     /// embassy — so against a printer that insisted on TLS 1.3 they fail closed, and this
     /// bypass is the only way through. It skips the version check only; certificate

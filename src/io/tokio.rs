@@ -6,14 +6,17 @@
 
 use crate::io::{
     AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
-    TimerError, TimerProvider, TlsConnector, TlsVersion,
+    TimerError, TimerProvider, TlsConnector, TlsVersion, TlsVersions,
 };
-
-pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
 use core::net::SocketAddr;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use std::sync::Arc;
-use tokio_rustls::rustls;
+
+/// The `rustls` this crate builds against, so a consumer assembling a `ClientConfig` by hand uses
+/// a version-matched copy instead of depending on `rustls` directly.
+pub use tokio_rustls::rustls;
+
+pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
 
 /// Timer implementation utilizing Tokio's non-blocking system clock registry.
 pub struct TokioTimer {
@@ -174,38 +177,40 @@ fn map_rustls_certificate_error(err: &rustls::CertificateError) -> CertificateFa
 
 mod cert_verify;
 /// Re-exported so a consumer assembling a `rustls::ClientConfig` by hand — rather than through
-/// [`build_verified_client_config_with_options`] — can name these verifiers. `.claude/rules/
+/// [`build_verified_client_config`] — can name these verifiers. `.claude/rules/
 /// tls-identity-sni.md` documents `CnFallbackServerVerifier` at this path, which a private
 /// `use` made unreachable.
 pub use cert_verify::{CnFallbackServerVerifier, NoCertificateVerification};
 
-/// Builds an unsafe `ClientConfig` with configurable TLS version constraints.
-///
-/// When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only. This is
-/// required for P2S and X2D models whose embedded vsFTPd servers fail on TLS 1.3
-/// session tickets [REF-FTPS-CONN].
-pub fn build_unsafe_client_config_with_options(force_tls_1_2: bool) -> Arc<rustls::ClientConfig> {
-    let verifier = Arc::new(NoCertificateVerification);
-
-    let provider = rustls::crypto::ring::default_provider();
-    let versions: &[&rustls::SupportedProtocolVersion] = if force_tls_1_2 {
-        &[&rustls::version::TLS12]
-    } else {
-        rustls::DEFAULT_VERSIONS
-    };
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_protocol_versions(versions)
-        .expect("Protocols must be initialized successfully")
-        .dangerous()
-        .with_custom_certificate_verifier(verifier)
-        .with_no_client_auth();
-
-    Arc::new(config)
+/// The crypto provider every config and verifier in this backend uses.
+pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    Arc::new(rustls::crypto::ring::default_provider())
 }
 
-/// Builds an unsafe `ClientConfig` with default TLS version negotiation (TLS 1.2 + 1.3).
-pub fn build_unsafe_client_config() -> Arc<rustls::ClientConfig> {
-    build_unsafe_client_config_with_options(false)
+/// The shared start of every config builder: [`crypto_provider`], `versions`, custom verifier.
+fn dangerous_builder(
+    versions: TlsVersions,
+) -> rustls::client::danger::DangerousClientConfigBuilder {
+    let versions: &[&rustls::SupportedProtocolVersion] = match versions {
+        TlsVersions::Default => rustls::DEFAULT_VERSIONS,
+        TlsVersions::Tls12Only => &[&rustls::version::TLS12],
+    };
+    rustls::ClientConfig::builder_with_provider(crypto_provider())
+        .with_protocol_versions(versions)
+        .expect("the ring provider supports every rustls protocol version")
+        .dangerous()
+}
+
+/// Builds a `ClientConfig` that accepts any certificate — see [`NoCertificateVerification`].
+///
+/// [`TlsVersions::Tls12Only`] is required for FTPS on P2S and X2D
+/// ([`ModelQuirks::requires_ftps_tls_1_2`](crate::quirks::ModelQuirks::requires_ftps_tls_1_2))
+/// [REF-FTPS-CONN].
+pub fn build_unsafe_client_config(versions: TlsVersions) -> Arc<rustls::ClientConfig> {
+    let config = dangerous_builder(versions)
+        .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
+        .with_no_client_auth();
+    Arc::new(config)
 }
 
 /// Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs.
@@ -217,36 +222,14 @@ pub fn build_unsafe_client_config() -> Arc<rustls::ClientConfig> {
 /// ```
 ///
 /// `client_auth`: pass `Some((cert_chain, key))` for mutual TLS, `None` for server-only verification.
+/// See [`build_unsafe_client_config`] for when `versions` must be [`TlsVersions::Tls12Only`].
 pub fn build_verified_client_config(
     ca_certs: impl IntoIterator<Item = CertificateDer<'static>>,
     client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+    versions: TlsVersions,
 ) -> Result<Arc<rustls::ClientConfig>, rustls::Error> {
-    build_verified_client_config_with_options(ca_certs, client_auth, false)
-}
-
-/// Builds a verified `ClientConfig` with configurable TLS version constraints.
-///
-/// When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only (required
-/// for FTPS data channels on P2S/X2D models [REF-FTPS-CONN]).
-pub fn build_verified_client_config_with_options(
-    ca_certs: impl IntoIterator<Item = CertificateDer<'static>>,
-    client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
-    force_tls_1_2: bool,
-) -> Result<Arc<rustls::ClientConfig>, rustls::Error> {
-    let provider = rustls::crypto::ring::default_provider();
-    let versions: &[&rustls::SupportedProtocolVersion] = if force_tls_1_2 {
-        &[&rustls::version::TLS12]
-    } else {
-        rustls::DEFAULT_VERSIONS
-    };
-
     let verifier = Arc::new(CnFallbackServerVerifier::new(ca_certs)?);
-
-    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_protocol_versions(versions)
-        .expect("Protocols must be initialized successfully")
-        .dangerous()
-        .with_custom_certificate_verifier(verifier);
+    let builder = dangerous_builder(versions).with_custom_certificate_verifier(verifier);
 
     let config = match client_auth {
         Some((cert_chain, key)) => builder.with_client_auth_cert(cert_chain, key)?,
@@ -266,6 +249,26 @@ impl TokioTlsConnector {
     pub fn new(connector: tokio_rustls::TlsConnector) -> Self {
         Self { connector }
     }
+
+    /// A connector that accepts any certificate — see [`build_unsafe_client_config`].
+    pub fn unverified(versions: TlsVersions) -> Self {
+        build_unsafe_client_config(versions).into()
+    }
+
+    /// A connector that verifies the printer against `ca_certs` — see [`build_verified_client_config`].
+    pub fn verified(
+        ca_certs: impl IntoIterator<Item = CertificateDer<'static>>,
+        client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+        versions: TlsVersions,
+    ) -> Result<Self, rustls::Error> {
+        build_verified_client_config(ca_certs, client_auth, versions).map(Self::from)
+    }
+}
+
+impl From<Arc<rustls::ClientConfig>> for TokioTlsConnector {
+    fn from(config: Arc<rustls::ClientConfig>) -> Self {
+        Self::new(tokio_rustls::TlsConnector::from(config))
+    }
 }
 
 impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
@@ -276,7 +279,7 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
         host: &str,
         raw_stream: TokioIo<::tokio::net::TcpStream>,
     ) -> Result<Self::Stream, SocketError> {
-        let server_name = ServerName::try_from(host.to_string())
+        let server_name = ServerName::try_from(host)
             .map_err(|_| SocketError::InvalidInput)?
             .to_owned();
 

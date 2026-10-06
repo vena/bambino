@@ -551,6 +551,18 @@ pub enum TlsVersion {
     Tls13,
 }
 
+/// Which TLS versions a connector may offer the printer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TlsVersions {
+    /// Every version the backend supports (TLS 1.2 and 1.3).
+    #[default]
+    Default,
+    /// TLS 1.2 only — what
+    /// [`ModelQuirks::ftps_tls_versions`](crate::quirks::ModelQuirks::ftps_tls_versions) returns
+    /// for P2S and X2D [REF-FTPS-CONN].
+    Tls12Only,
+}
+
 /// Consolidated Async Read + Write trait boundary.
 ///
 /// Intermediates communication across all layers (MQTTS, FTPS, RTSPS, Port 6000).

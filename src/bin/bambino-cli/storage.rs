@@ -11,12 +11,12 @@ use std::time::Instant;
 
 use bambino::Error;
 use bambino::ftps::CurrentDateTime;
-use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer};
 use clap::Subcommand;
 
 use crate::connection::Target;
 use crate::error::CliError;
-use crate::trust::build_cli_tls_config;
+use crate::trust::build_cli_tls_connector;
 
 /// Bytes per gibibyte — shared by the upload size ceiling and `format_size`'s unit conversion, which previously each hardcoded this same literal independently.
 const BYTES_PER_GIB: u64 = 1_073_741_824;
@@ -100,8 +100,7 @@ pub async fn run(
     let printer = target.printer()?;
     let model = printer.model();
 
-    let ftps_config = build_cli_tls_config(model.quirks().requires_ftps_tls_1_2())?;
-    let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
+    let ftps_tls = build_cli_tls_connector(model.quirks().ftps_tls_versions())?;
 
     let mut printer = printer
         .with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new())

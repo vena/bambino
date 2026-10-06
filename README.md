@@ -70,15 +70,12 @@ let printers = discover_with(
 ```rust
 use bambino::client::PrinterClient;
 use bambino::identity::PrinterIdentity;
-use bambino::io::tokio::{
-    TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
-    build_unsafe_client_config,
-};
+use bambino::io::TlsVersions;
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, TokioTimer};
 
 // Printer certs chain to BBL's private CA, absent from OS trust stores;
 // skip verification unless you can supply that CA (see "TLS configuration")
-let config = build_unsafe_client_config();
-let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+let tls = TokioTlsConnector::unverified(TlsVersions::Default);
 
 // `new` derives the model from the serial prefix; construct the struct literal
 // directly if you need to override that.
@@ -307,16 +304,10 @@ printer.stop_drying(0).await?;                  // ams_id only—every other fie
 Add FTPS to a `PrinterClient` with `.with_ftps()`. The FTPS TLS connector is independent from MQTT's—some models require different TLS settings (e.g. TLS 1.2 only for FTPS data channels).
 
 ```rust
-use bambino::io::tokio::{
-    TokioTlsConnector, TokioRawStreamFactory, TokioTimer,
-    build_unsafe_client_config_with_options,
-};
+use bambino::io::tokio::{TokioTlsConnector, TokioRawStreamFactory, TokioTimer};
 
 // Configure FTPS TLS (respecting model-specific requirements)
-let ftps_config = build_unsafe_client_config_with_options(
-    model.quirks().requires_ftps_tls_1_2(),
-);
-let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
+let ftps_tls = TokioTlsConnector::unverified(model.quirks().ftps_tls_versions());
 
 let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new());
 
@@ -490,33 +481,35 @@ P2S models on certain firmware versions have a bug where RTP timestamps don't ad
 
 ## TLS configuration
 
-By default, `build_unsafe_client_config()` skips certificate verification. A printer's leaf cert carries its serial in the CN and chains to BBL's own private CA, which is in no OS trust store—so the default exists because most callers have no anchor to verify against, not because the cert is unverifiable. If you hold the BBL CA certs (or provision your own), `build_verified_client_config()` performs a real chain-of-trust, handshake-signature, and CN-identity check; this has been confirmed end-to-end against a live P1S over both MQTT (8883) and FTPS (990):
+`TokioTlsConnector::unverified()` skips certificate verification. A printer's leaf cert carries its serial in the CN and chains to BBL's own private CA, which is in no OS trust store—so the default exists because most callers have no anchor to verify against, not because the cert is unverifiable. If you hold the BBL CA certs (or provision your own), `TokioTlsConnector::verified()` performs a real chain-of-trust, handshake-signature, and CN-identity check; this has been confirmed end-to-end against a live P1S over both MQTT (8883) and FTPS (990):
 
 > This section covers the `tokio` backend. ESP-IDF chooses its trust anchor differently and needs target configuration to skip verification at all; see "ESP-IDF certificate verification" under [Platform targets](#platform-targets).
 
 ```rust
-use bambino::io::tokio::{build_verified_client_config, TokioTlsConnector};
+use bambino::io::TlsVersions;
+use bambino::io::tokio::TokioTlsConnector;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
 let ca_cert = CertificateDer::from_pem_file("printer-ca.pem").unwrap();
 
 // Server-only verification
-let config = build_verified_client_config(vec![ca_cert], None).unwrap();
+let connector = TokioTlsConnector::verified(vec![ca_cert], None, TlsVersions::Default).unwrap();
 
 // Mutual TLS (mTLS)
 let client_cert = CertificateDer::from_pem_file("client.pem").unwrap();
 let client_key = PrivateKeyDer::from_pem_file("client-key.pem").unwrap();
-let config = build_verified_client_config(
+let connector = TokioTlsConnector::verified(
     vec![ca_cert],
     Some((vec![client_cert], client_key)),
+    TlsVersions::Default,
 ).unwrap();
-
-let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 ```
 
-`build_verified_client_config()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `build_unsafe_client_config()` is unaffected, it never checks certificate identity.
+To build a `ClientConfig` yourself, use `build_unsafe_client_config` / `build_verified_client_config` (same arguments) and `bambino::io::tokio::rustls`, the version-matched `rustls` re-export; a `TokioTlsConnector` converts from `Arc<ClientConfig>` with `.into()`.
 
-Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models (P2S and X2D) need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().requires_ftps_tls_1_2()`. `FtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects; never a silent pass-through).
+`TokioTlsConnector::verified()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `TokioTlsConnector::unverified()` is unaffected, it never checks certificate identity.
+
+Both take a `TlsVersions`. Two models (P2S and X2D) need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). `model.quirks().ftps_tls_versions()` returns `TlsVersions::Tls12Only` for them. `FtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects; never a silent pass-through).
 
 This is platform-general: all three connectors implement `negotiated_version` for real, so the check passes on any platform where the printer negotiates TLS 1.2 of its own accord. What differs is the ability to *cap* the peer at 1.2: only `tokio` has that knob. `esp-idf` exposes no min/max version field upstream, and `EmbassyTlsConnector` sets only a minimum, so against a peer that insisted on TLS 1.3 both fail closed rather than downgrade; see the Embassy TLS section below for the opt-out.
 

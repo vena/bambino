@@ -1413,10 +1413,8 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// written confirmed it needs no raw mbedTLS FFI to wrap an existing fd) instead of
 /// `EspTls::new()` + `connect()`.
 ///
-/// **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
-/// `build_verified_client_config_with_options(..., force_tls_1_2: bool)` /
-/// `build_unsafe_client_config_with_options(force_tls_1_2: bool)`, this connector has no
-/// equivalent knob: `esp_idf_svc::tls::Config` (0.53.0, as vendored) exposes no min/max TLS
+/// **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s `TlsVersions::Tls12Only`, this connector
+/// has no equivalent knob: `esp_idf_svc::tls::Config` (0.53.0, as vendored) exposes no min/max TLS
 /// version field, and the mbedTLS accessor functions that would set it
 /// (`mbedtls_ssl_conf_min_tls_version`/`mbedtls_ssl_conf_max_tls_version`) are absent from
 /// this ESP-IDF build's actual bindgen output (confirmed by inspecting the generated

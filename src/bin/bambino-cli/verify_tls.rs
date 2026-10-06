@@ -1,14 +1,15 @@
 #![cfg(feature = "cli")]
 
 //! Diagnostic-only command that attempts a real CA-verified TLS handshake against a printer
-//! using `bambino::io::tokio::build_verified_client_config`
+//! using `bambino::io::tokio::TokioTlsConnector::verified`
 //! (and therefore `CnFallbackServerVerifier`), sending `serial` as the SNI
 //! value. Reports success or the exact `rustls`/`Error` failure — this
 //! is the only way to confirm the verifier's SAN-then-CN logic (see
 //! `.claude/rules/tls-identity-sni.md`) behaves correctly against a real
 //! printer's handshake, not just against rcgen fixtures.
 
-use bambino::io::tokio::build_verified_client_config;
+use bambino::io::TlsVersions;
+use bambino::io::tokio::TokioTlsConnector;
 
 use crate::connection::{dial_and_handshake, validate_ip_serial};
 use crate::error::CliError;
@@ -33,9 +34,9 @@ pub async fn run(ip: &str, serial: &str, port: u16) -> Result<(), CliError> {
         ));
     };
 
-    let config = build_verified_client_config(anchors.to_vec(), None)
+    let connector = TokioTlsConnector::verified(anchors.to_vec(), None, TlsVersions::Default)
         .map_err(|e| CliError::Other(format!("failed to build verified TLS config: {e}")))?;
-    dial_and_handshake(ip, serial, port, config).await?;
+    dial_and_handshake(ip, serial, port, connector).await?;
     println!(
         "Verified TLS handshake with {ip} port {port} (SNI={serial}) succeeded — \
          CnFallbackServerVerifier accepted the printer's cert."

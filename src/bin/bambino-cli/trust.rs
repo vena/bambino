@@ -17,11 +17,9 @@
 
 use std::sync::OnceLock;
 
-use bambino::io::tokio::{
-    build_unsafe_client_config_with_options, build_verified_client_config_with_options,
-};
+use bambino::io::TlsVersions;
+use bambino::io::tokio::TokioTlsConnector;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
-use tokio_rustls::rustls;
 
 use crate::error::CliError;
 
@@ -42,20 +40,18 @@ pub(crate) fn trusted_roots() -> Option<&'static [CertificateDer<'static>]> {
     TRUSTED_ROOTS.get().map(Vec::as_slice)
 }
 
-/// Builds the `ClientConfig` every CLI TLS call site should use: CA-verified when
-/// `--with-certs` supplied anchors, otherwise the unverified default.
+/// Builds the connector every CLI TLS call site should use: CA-verified when `--with-certs`
+/// supplied anchors, otherwise unverified.
 ///
-/// `force_tls_1_2` is passed through unchanged so the P2S/X2D FTPS quirk
-/// (`requires_ftps_tls_1_2`) applies identically on both paths.
-pub(crate) fn build_cli_tls_config(
-    force_tls_1_2: bool,
-) -> Result<std::sync::Arc<rustls::ClientConfig>, CliError> {
+/// `versions` applies identically on both paths, so the P2S/X2D FTPS cap
+/// (`ModelQuirks::ftps_tls_versions`) holds either way.
+pub(crate) fn build_cli_tls_connector(
+    versions: TlsVersions,
+) -> Result<TokioTlsConnector, CliError> {
     match trusted_roots() {
-        Some(roots) => {
-            build_verified_client_config_with_options(roots.to_vec(), None, force_tls_1_2)
-                .map_err(|e| CliError::Other(format!("failed to build verified TLS config: {e}")))
-        }
-        None => Ok(build_unsafe_client_config_with_options(force_tls_1_2)),
+        Some(roots) => TokioTlsConnector::verified(roots.to_vec(), None, versions)
+            .map_err(|e| CliError::Other(format!("failed to build verified TLS config: {e}"))),
+        None => Ok(TokioTlsConnector::unverified(versions)),
     }
 }
 

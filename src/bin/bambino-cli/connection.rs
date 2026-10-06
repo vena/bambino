@@ -3,14 +3,12 @@
 use bambino::client::PrinterClient;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
 use bambino::identity::PrinterIdentity;
-use std::sync::Arc;
 
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
-use bambino::io::{RawStreamFactory, TlsConnector, TokioIo};
-use tokio_rustls::rustls::ClientConfig;
+use bambino::io::{RawStreamFactory, TlsConnector, TlsVersions, TokioIo};
 
 use crate::error::CliError;
-use crate::trust::build_cli_tls_config;
+use crate::trust::build_cli_tls_connector;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
@@ -35,7 +33,7 @@ pub(crate) async fn with_connect_timeout<T>(
 pub(crate) type TlsStream =
     <TokioTlsConnector as TlsConnector<TokioIo<::tokio::net::TcpStream>>>::Stream;
 
-/// Dials `ip:port` and completes a TLS handshake under `config`, sending `serial` as the SNI.
+/// Dials `ip:port` and completes a TLS handshake through `connector`, sending `serial` as the SNI.
 ///
 /// Goes through the library's own `TokioRawStreamFactory` and `TokioTlsConnector`, so a
 /// diagnostic exercises the same dial path `PrinterClient` uses. The connector is returned
@@ -44,7 +42,7 @@ pub(crate) async fn dial_and_handshake(
     ip: &str,
     serial: &str,
     port: u16,
-    config: Arc<ClientConfig>,
+    connector: TokioTlsConnector,
 ) -> Result<(TokioTlsConnector, TlsStream), CliError> {
     let raw_stream = with_connect_timeout(&format!("TCP connect to {ip} port {port}"), async {
         TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {
@@ -56,7 +54,6 @@ pub(crate) async fn dial_and_handshake(
     })
     .await?;
 
-    let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
     let stream = with_connect_timeout(&format!("TLS handshake with {ip} port {port}"), async {
         connector.connect(serial, raw_stream).await.map_err(|e| {
             CliError::Network(format!(
@@ -150,8 +147,7 @@ pub(crate) fn write_report(path: &str, report: &impl serde::Serialize) -> Result
 pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, CliError> {
     validate_params(ip, serial, access_code)?;
 
-    let config = build_cli_tls_config(false)?;
-    let tls_connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+    let tls_connector = build_cli_tls_connector(TlsVersions::Default)?;
 
     Ok(PrinterClient::new(
         tls_connector,

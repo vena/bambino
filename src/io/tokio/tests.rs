@@ -6,7 +6,7 @@ use x509_parser::prelude::FromDer;
 
 #[test]
 fn test_build_unsafe_client_config() {
-    let config = build_unsafe_client_config();
+    let config = build_unsafe_client_config(TlsVersions::Default);
     assert!(config.alpn_protocols.is_empty());
 }
 
@@ -14,7 +14,7 @@ fn test_build_unsafe_client_config() {
 fn test_build_verified_client_config_empty_roots_fails_fast() {
     // An empty root store can never validate a chain — CnFallbackServerVerifier::new fails
     // immediately (NoRootAnchors) rather than deferring to a confusing handshake-time error.
-    let config = build_verified_client_config(std::iter::empty(), None);
+    let config = build_verified_client_config(std::iter::empty(), None, TlsVersions::Default);
     assert!(
         config.is_err(),
         "empty root store should fail fast at config-build time"
@@ -22,10 +22,22 @@ fn test_build_verified_client_config_empty_roots_fails_fast() {
 }
 
 #[test]
-fn test_build_verified_client_config_with_options_tls12() {
+fn test_build_verified_client_config_tls12_only() {
     let (ca_der, ..) = test_support::generate_test_ca();
-    let config = build_verified_client_config_with_options([ca_der], None, true);
+    let config = build_verified_client_config([ca_der], None, TlsVersions::Tls12Only);
     assert!(config.is_ok());
+}
+
+/// The unverified path offers exactly the schemes the verified path can check, so a printer that
+/// completes one handshake completes the other.
+#[test]
+fn test_unverified_and_verified_offer_the_same_signature_schemes() {
+    let (ca_der, ..) = test_support::generate_test_ca();
+    let verified = CnFallbackServerVerifier::new([ca_der]).unwrap();
+    assert_eq!(
+        NoCertificateVerification.supported_verify_schemes(),
+        verified.supported_verify_schemes()
+    );
 }
 
 /// Shared fixtures for `CnFallbackServerVerifier` tests: real DER-encoded certs rather than
@@ -463,7 +475,11 @@ fn test_build_verified_client_config_bad_key_returns_error() {
     let bogus_key = PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(vec![0u8; 10]));
     let bogus_cert = CertificateDer::from(vec![0u8; 10]);
 
-    let result = build_verified_client_config([ca_der], Some((vec![bogus_cert], bogus_key)));
+    let result = build_verified_client_config(
+        [ca_der],
+        Some((vec![bogus_cert], bogus_key)),
+        TlsVersions::Default,
+    );
 
     assert!(
         result.is_err(),

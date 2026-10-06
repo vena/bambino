@@ -23,16 +23,13 @@
 //! ```rust,ignore
 //! use bambino::client::{PrinterClient, TelemetryEvent};
 //! use bambino::identity::PrinterIdentity;
-//! use bambino::io::tokio::{
-//!     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
-//!     build_unsafe_client_config,
-//! };
+//! use bambino::io::TlsVersions;
+//! use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, TokioTimer};
 //!
 //! async fn example() -> Result<(), bambino::Error> {
 //!     // Printer certs chain to BBL's private CA, absent from OS trust stores;
 //!     // skip verification unless you can supply that CA
-//!     let tls_config = build_unsafe_client_config();
-//!     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
+//!     let tls = TokioTlsConnector::unverified(TlsVersions::Default);
 //!
 //!     // Create a lazy client — MQTT connects automatically on first use
 //!     let mut printer = PrinterClient::new(
