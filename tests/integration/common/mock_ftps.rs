@@ -7,151 +7,168 @@
 //! different FTPS protocol paths (happy path, A1 plaintext, STAT fallback,
 //! download, directory ops, upload error recovery).
 
+use super::client::ACCESS_CODE;
 use super::io::DataContainer;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 use bambino::io::TokioIo;
 
-/// Helper: reads the next command from the control stream and returns it as a string.
-///
-/// This single, non-looping `read()` is *not* a safety net against
-/// `write_command`'s single-write-call guarantee regressing back to two writes — under tokio's
-/// cooperative scheduling, two sequential small writes on a `tokio::io::duplex` normally
-/// coalesce into one `.read()` before this task is ever polled, so every test built on this
-/// harness would very likely keep passing even if `write_command` regressed. The dedicated
-/// `WriteRecorder`-based unit test in `src/ftps/protocol.rs` is the only thing actually guarding
-/// that invariant end-to-end; don't rely on this helper for it.
-async fn read_cmd(stream: &mut tokio::io::DuplexStream, buf: &mut [u8]) -> String {
-    let n = stream.read(buf).await.expect("Failed to read FTP command");
-    core::str::from_utf8(&buf[..n])
-        .expect("FTP command is not valid UTF-8")
-        .to_string()
+/// The mock server's end of the control channel, and the slot its passive data channels go into.
+struct Control {
+    stream: DuplexStream,
+    buf: Vec<u8>,
+    data: DataContainer,
 }
 
-/// Helper: writes a response line to the control stream.
-async fn respond(stream: &mut tokio::io::DuplexStream, response: &[u8]) {
-    stream
-        .write_all(response)
-        .await
-        .expect("Failed to write FTP response");
-}
-
-/// Helper: runs the standard handshake (greeting, login, PBSZ, PROT P, TYPE I).
-async fn run_standard_handshake(
-    server_control: &mut tokio::io::DuplexStream,
-    buf: &mut [u8],
-    expect_prot_p: bool,
-) {
-    run_handshake_with_greeting(server_control, buf, expect_prot_p, b"220 vsFTPd 3.0.3\r\n").await;
-}
-
-/// Helper: [`run_standard_handshake`] with a caller-supplied greeting.
-///
-/// Split out so a test can drive a multi-line (`220-`…`220 `) greeting through `read_response`'s
-/// RFC 959 §4.2 continuation handling — every other mock here writes single-line replies only,
-/// so no integration test exercised that path end to end.
-async fn run_handshake_with_greeting(
-    server_control: &mut tokio::io::DuplexStream,
-    buf: &mut [u8],
-    expect_prot_p: bool,
-    greeting: &[u8],
-) {
-    respond(server_control, greeting).await;
-
-    // USER
-    let cmd = read_cmd(server_control, buf).await;
-    assert!(cmd.starts_with("USER bblp"), "Expected USER bblp");
-    respond(server_control, b"331 Please specify the password.\r\n").await;
-
-    // PASS
-    let cmd = read_cmd(server_control, buf).await;
-    assert!(cmd.starts_with("PASS 12345678"), "Expected PASS");
-    respond(server_control, b"230 Login successful.\r\n").await;
-
-    // PBSZ
-    let cmd = read_cmd(server_control, buf).await;
-    assert_eq!(cmd, "PBSZ 0\r\n");
-    respond(server_control, b"200 PBSZ set to 0.\r\n").await;
-
-    // PROT P or TYPE I (depending on model)
-    if expect_prot_p {
-        let cmd = read_cmd(server_control, buf).await;
-        assert_eq!(cmd, "PROT P\r\n");
-        respond(server_control, b"200 PROT level set to P.\r\n").await;
+impl Control {
+    /// A control channel whose passive data channels are handed to the client through `data`.
+    fn new(stream: DuplexStream, data: DataContainer) -> Self {
+        Self {
+            stream,
+            buf: vec![0u8; 1024],
+            data,
+        }
     }
 
-    // TYPE I
-    let cmd = read_cmd(server_control, buf).await;
-    assert_eq!(cmd, "TYPE I\r\n");
-    respond(server_control, b"200 Switching to Binary mode.\r\n").await;
-}
-
-/// Helper: handles a PASV negotiation, creating a mock data stream.
-async fn handle_pasv(
-    server_control: &mut tokio::io::DuplexStream,
-    buf: &mut [u8],
-    data_container: &DataContainer,
-) -> tokio::io::DuplexStream {
-    let cmd = read_cmd(server_control, buf).await;
-    assert_eq!(cmd, "PASV\r\n");
-
-    let (client_data, server_data) = tokio::io::duplex(4096);
-    {
-        let mut guard = data_container.lock().await;
-        *guard = Some(TokioIo::new(client_data));
+    /// A control channel for a mock that never opens a data channel.
+    fn control_only(stream: DuplexStream) -> Self {
+        Self::new(stream, DataContainer::default())
     }
 
-    // Port = 192 * 256 + 168 = 49320
-    respond(
-        server_control,
-        b"227 Entering Passive Mode (127,0,0,1,192,168).\r\n",
-    )
-    .await;
+    /// Reads the next command from the control stream and returns it as a string.
+    ///
+    /// This single, non-looping `read()` is *not* a safety net against
+    /// `write_command`'s single-write-call guarantee regressing back to two writes — under
+    /// tokio's cooperative scheduling, two sequential small writes on a `tokio::io::duplex`
+    /// normally coalesce into one `.read()` before this task is ever polled, so every test built
+    /// on this harness would very likely keep passing even if `write_command` regressed. The
+    /// dedicated `WriteRecorder`-based unit test in `src/ftps/protocol.rs` is the only thing
+    /// actually guarding that invariant end-to-end; don't rely on this helper for it.
+    async fn read_cmd(&mut self) -> String {
+        let n = self
+            .stream
+            .read(&mut self.buf)
+            .await
+            .expect("Failed to read FTP command");
+        core::str::from_utf8(&self.buf[..n])
+            .expect("FTP command is not valid UTF-8")
+            .to_string()
+    }
 
-    server_data
+    /// Writes a response line to the control stream.
+    async fn respond(&mut self, response: &[u8]) {
+        self.stream
+            .write_all(response)
+            .await
+            .expect("Failed to write FTP response");
+    }
+
+    /// Reads the next command, asserts it is `cmd`, and answers with `reply`.
+    async fn expect(&mut self, cmd: &str, reply: &[u8]) {
+        let got = self.read_cmd().await;
+        assert_eq!(got, cmd);
+        self.respond(reply).await;
+    }
+
+    /// Runs the standard handshake (greeting, login, PBSZ, PROT P, TYPE I).
+    async fn handshake(&mut self, expect_prot_p: bool) {
+        self.handshake_with_greeting(expect_prot_p, b"220 vsFTPd 3.0.3\r\n")
+            .await;
+    }
+
+    /// [`Control::handshake`] with a caller-supplied greeting.
+    ///
+    /// Split out so a test can drive a multi-line (`220-`…`220 `) greeting through
+    /// `read_response`'s RFC 959 §4.2 continuation handling — every other mock here writes
+    /// single-line replies only, so no integration test exercised that path end to end.
+    async fn handshake_with_greeting(&mut self, expect_prot_p: bool, greeting: &[u8]) {
+        self.respond(greeting).await;
+
+        let cmd = self.read_cmd().await;
+        assert!(cmd.starts_with("USER bblp"), "Expected USER bblp");
+        self.respond(b"331 Please specify the password.\r\n").await;
+
+        self.expect(
+            &format!("PASS {ACCESS_CODE}\r\n"),
+            b"230 Login successful.\r\n",
+        )
+        .await;
+        self.expect("PBSZ 0\r\n", b"200 PBSZ set to 0.\r\n").await;
+        // PROT P or TYPE I (depending on model)
+        if expect_prot_p {
+            self.expect("PROT P\r\n", b"200 PROT level set to P.\r\n")
+                .await;
+        }
+        self.expect("TYPE I\r\n", b"200 Switching to Binary mode.\r\n")
+            .await;
+    }
+
+    /// Handles a PASV negotiation, handing the client end of a fresh data stream to the factory.
+    async fn pasv(&mut self) -> DuplexStream {
+        let cmd = self.read_cmd().await;
+        assert_eq!(cmd, "PASV\r\n");
+
+        let (client_data, server_data) = tokio::io::duplex(4096);
+        *self.data.lock().await = Some(TokioIo::new(client_data));
+
+        // Port = 192 * 256 + 168 = 49320
+        self.respond(b"227 Entering Passive Mode (127,0,0,1,192,168).\r\n")
+            .await;
+        server_data
+    }
+
+    /// One complete passive transfer from the server: `PASV`, then `cmd` answered with
+    /// `opening`, then `data` written and the data channel closed, then `closing`.
+    async fn serve_data(&mut self, cmd: &str, opening: &[u8], data: &[u8], closing: &[u8]) {
+        let mut server_data = self.pasv().await;
+        self.expect(cmd, opening).await;
+        server_data.write_all(data).await.expect("data write");
+        server_data.flush().await.expect("data flush");
+        drop(server_data);
+        self.respond(closing).await;
+    }
+
+    /// Answers `LIST path` with `lines` as the listing, over a fresh passive data channel.
+    async fn serve_listing(&mut self, path: &str, lines: &[u8]) {
+        self.serve_data(
+            &format!("LIST {path}\r\n"),
+            b"150 Here comes directory listing.\r\n",
+            lines,
+            b"226 Directory send OK.\r\n",
+        )
+        .await;
+    }
 }
 
 /// Primary happy-path mock server: handshake, list, AVBL, SIZE, upload, delete.
 pub async fn run_mock_server(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // LIST
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /model\r\n");
-    respond(
-        &mut server_control,
+    ctl.serve_data(
+        "LIST /model\r\n",
         b"150 Here comes directory listing.\r\n",
+        b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n",
+        b"226 Directory send OK.\r\n",
     )
     .await;
-    server_data
-        .write_all(b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n")
-        .await
-        .expect("LIST data write");
-    server_data.flush().await.expect("LIST data flush");
-    drop(server_data);
-    respond(&mut server_control, b"226 Directory send OK.\r\n").await;
 
     // AVBL
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "AVBL\r\n");
-    respond(&mut server_control, b"213 107374182400\r\n").await;
+    ctl.expect("AVBL\r\n", b"213 107374182400\r\n").await;
 
     // SIZE
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
-    respond(&mut server_control, b"213 102400\r\n").await;
+    ctl.expect("SIZE /model/job.3mf\r\n", b"213 102400\r\n")
+        .await;
 
     // STOR upload
-    let mut server_upload_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STOR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+    let mut server_upload_data = ctl.pasv().await;
+    ctl.expect("STOR /model/job.3mf\r\n", b"150 Ok to send data.\r\n")
+        .await;
 
     let mut upload_buf = vec![0u8; 100];
     let bytes_read = server_upload_data
@@ -161,17 +178,17 @@ pub async fn run_mock_server(
     assert_eq!(&upload_buf[..bytes_read], b"MOCK_UPLOAD_DATA");
     drop(server_upload_data);
 
-    respond(&mut server_control, b"226 File receive OK.\r\n").await;
+    ctl.respond(b"226 File receive OK.\r\n").await;
 
     // Post-upload SIZE verification
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
-    respond(&mut server_control, b"213 16\r\n").await;
+    ctl.expect("SIZE /model/job.3mf\r\n", b"213 16\r\n").await;
 
     // DELE
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "DELE /model/job.3mf\r\n");
-    respond(&mut server_control, b"250 File deleted successfully.\r\n").await;
+    ctl.expect(
+        "DELE /model/job.3mf\r\n",
+        b"250 File deleted successfully.\r\n",
+    )
+    .await;
 }
 
 /// Mock server for upload exercising `upload_file`'s multi-chunk write loop with a payload
@@ -187,18 +204,17 @@ pub async fn run_mock_server(
 /// stream regardless of write count), only that the client's offset-tracking loop reassembles
 /// a multi-chunk payload correctly end-to-end.
 pub async fn run_mock_server_upload_multi_chunk(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
     expected_len: usize,
 ) -> Vec<u8> {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_upload_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STOR /model/big.bin\r\n");
-    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+    let mut server_upload_data = ctl.pasv().await;
+    ctl.expect("STOR /model/big.bin\r\n", b"150 Ok to send data.\r\n")
+        .await;
 
     let mut received = Vec::with_capacity(expected_len);
     let mut chunk = vec![0u8; 8192];
@@ -212,12 +228,10 @@ pub async fn run_mock_server_upload_multi_chunk(
     }
     drop(server_upload_data);
 
-    respond(&mut server_control, b"226 File receive OK.\r\n").await;
+    ctl.respond(b"226 File receive OK.\r\n").await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "SIZE /model/big.bin\r\n");
-    respond(
-        &mut server_control,
+    ctl.expect(
+        "SIZE /model/big.bin\r\n",
         format!("213 {}\r\n", expected_len).as_bytes(),
     )
     .await;
@@ -227,155 +241,110 @@ pub async fn run_mock_server_upload_multi_chunk(
 
 /// Mock server for A1 plaintext data channel tests: skips PROT P.
 pub async fn run_mock_server_a1_plaintext(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
     // A1 handshake: no PROT P
-    run_standard_handshake(&mut server_control, &mut buf, false).await;
+    ctl.handshake(false).await;
 
     // LIST over plaintext data channel
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /\r\n");
-    respond(
-        &mut server_control,
+    ctl.serve_data(
+        "LIST /\r\n",
         b"150 Here comes directory listing.\r\n",
+        b"drwxr-xr-x    2 1000     1000         4096 Jun 17  2025 cache\r\n",
+        b"226 Directory send OK.\r\n",
     )
     .await;
-    server_data
-        .write_all(b"drwxr-xr-x    2 1000     1000         4096 Jun 17  2025 cache\r\n")
-        .await
-        .expect("LIST data write");
-    server_data.flush().await.expect("LIST data flush");
-    drop(server_data);
-    respond(&mut server_control, b"226 Directory send OK.\r\n").await;
 }
 
 /// Mock server for download (RETR) test.
 pub async fn run_mock_server_download(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // RETR download
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RETR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Opening data connection.\r\n").await;
-
-    server_data
-        .write_all(b"MOCK_FILE_CONTENT_FOR_DOWNLOAD")
-        .await
-        .expect("RETR data write");
-    server_data.flush().await.expect("RETR data flush");
-    drop(server_data);
-    respond(&mut server_control, b"226 Transfer complete.\r\n").await;
+    ctl.serve_data(
+        "RETR /model/job.3mf\r\n",
+        b"150 Opening data connection.\r\n",
+        b"MOCK_FILE_CONTENT_FOR_DOWNLOAD",
+        b"226 Transfer complete.\r\n",
+    )
+    .await;
 
     // Post-download SIZE verification
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
-    respond(&mut server_control, b"213 30\r\n").await;
+    ctl.expect("SIZE /model/job.3mf\r\n", b"213 30\r\n").await;
 }
 
 /// Mock server for download (RETR) with a SIZE mismatch (should trigger ProtocolViolation).
 pub async fn run_mock_server_download_size_mismatch(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // RETR download
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RETR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Opening data connection.\r\n").await;
-
     // Data channel closes early after only partial content — the client still sees a clean
     // 226 confirmation, but the payload it actually read is shorter than the real file.
-    server_data
-        .write_all(b"MOCK_FILE_CONTENT_FOR_DOWNLOAD")
-        .await
-        .expect("RETR data write");
-    server_data.flush().await.expect("RETR data flush");
-    drop(server_data);
-    respond(&mut server_control, b"226 Transfer complete.\r\n").await;
+    ctl.serve_data(
+        "RETR /model/job.3mf\r\n",
+        b"150 Opening data connection.\r\n",
+        b"MOCK_FILE_CONTENT_FOR_DOWNLOAD",
+        b"226 Transfer complete.\r\n",
+    )
+    .await;
 
     // SIZE verification — report a larger size than what was actually transferred.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
-    respond(&mut server_control, b"213 99999\r\n").await;
-}
-
-/// Helper: answers `LIST path` with `lines` as the listing, over a fresh passive data channel.
-async fn serve_listing(
-    server_control: &mut tokio::io::DuplexStream,
-    buf: &mut [u8],
-    data_container: &DataContainer,
-    path: &str,
-    lines: &[u8],
-) {
-    let mut server_data = handle_pasv(server_control, buf, data_container).await;
-    let cmd = read_cmd(server_control, buf).await;
-    assert_eq!(cmd, format!("LIST {path}\r\n"));
-    respond(server_control, b"150 Here comes directory listing.\r\n").await;
-    server_data.write_all(lines).await.expect("LIST data write");
-    server_data.flush().await.expect("LIST data flush");
-    drop(server_data);
-    respond(server_control, b"226 Directory send OK.\r\n").await;
+    ctl.expect("SIZE /model/job.3mf\r\n", b"213 99999\r\n")
+        .await;
 }
 
 /// Mock server for directory operations: MKD, RMD, RNFR/RNTO, and the `550` re-check listing.
 pub async fn run_mock_server_dir_ops(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // MKD, answered the RFC 959 way.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "MKD /model/subdir\r\n");
-    respond(&mut server_control, b"257 \"/model/subdir\" created.\r\n").await;
+    ctl.expect(
+        "MKD /model/subdir\r\n",
+        b"257 \"/model/subdir\" created.\r\n",
+    )
+    .await;
 
     // MKD, answered the way a P1S's `BBL-P003` server does: a bare `250` (#613).
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "MKD /model/other\r\n");
-    respond(&mut server_control, b"250 \r\n").await;
+    ctl.expect("MKD /model/other\r\n", b"250 \r\n").await;
 
     // RMD
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RMD /model/subdir\r\n");
-    respond(
-        &mut server_control,
+    ctl.expect(
+        "RMD /model/subdir\r\n",
         b"250 Directory removed successfully.\r\n",
     )
     .await;
 
     // RNFR + RNTO
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RNFR /model/old.3mf\r\n");
-    respond(&mut server_control, b"350 Ready for destination name.\r\n").await;
+    ctl.expect(
+        "RNFR /model/old.3mf\r\n",
+        b"350 Ready for destination name.\r\n",
+    )
+    .await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RNTO /model/new.3mf\r\n");
-    respond(&mut server_control, b"250 Rename successful.\r\n").await;
+    ctl.expect("RNTO /model/new.3mf\r\n", b"250 Rename successful.\r\n")
+        .await;
 
     // RMD of a missing directory: a bare 550, and the parent listing doesn't show it (#392).
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RMD /model/gone\r\n");
-    respond(&mut server_control, b"550 \r\n").await;
-    serve_listing(
-        &mut server_control,
-        &mut buf,
-        &data_container,
+    ctl.expect("RMD /model/gone\r\n", b"550 \r\n").await;
+    ctl.serve_listing(
         "/model",
         b"drwxr-xr-x    2 1000     1000           0 Jun 17 12:14 other\r\n",
     )
@@ -383,13 +352,8 @@ pub async fn run_mock_server_dir_ops(
 
     // DELE the printer refuses (a non-empty directory): the same bare 550, but the parent
     // listing still shows the target.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "DELE /model/full\r\n");
-    respond(&mut server_control, b"550 \r\n").await;
-    serve_listing(
-        &mut server_control,
-        &mut buf,
-        &data_container,
+    ctl.expect("DELE /model/full\r\n", b"550 \r\n").await;
+    ctl.serve_listing(
         "/model",
         b"drwxr-xr-x    2 1000     1000           0 Jun 17 12:14 full\r\n",
     )
@@ -402,87 +366,61 @@ pub async fn run_mock_server_dir_ops(
 /// responds to `STAT` with `502 Command not implemented`, so the fallback was dead code. The
 /// client must now surface `Err(ProtocolViolation)` directly off the failed `AVBL` reply,
 /// without ever sending `STAT`.
-pub async fn run_mock_server_avbl_unsupported(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_avbl_unsupported(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // AVBL — unsupported, no STAT fallback follows.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "AVBL\r\n");
-    respond(
-        &mut server_control,
-        b"500 Syntax error, command unrecognized.\r\n",
-    )
-    .await;
+    ctl.expect("AVBL\r\n", b"500 Syntax error, command unrecognized.\r\n")
+        .await;
 }
 
 /// Mock server for `modification_time()` (`MDTM`) success — a well-formed `213 YYYYMMDDHHMMSS`
 /// reply.
-pub async fn run_mock_server_mdtm_success(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_mdtm_success(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "MDTM /model/job.3mf\r\n");
-    respond(&mut server_control, b"213 20230415101530\r\n").await;
+    ctl.expect("MDTM /model/job.3mf\r\n", b"213 20230415101530\r\n")
+        .await;
 }
 
 /// Mock server for `modification_time()` when the firmware doesn't implement `MDTM` (`500`).
-pub async fn run_mock_server_mdtm_unsupported(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_mdtm_unsupported(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "MDTM /model/job.3mf\r\n");
-    respond(
-        &mut server_control,
+    ctl.expect(
+        "MDTM /model/job.3mf\r\n",
         b"500 Syntax error, command unrecognized.\r\n",
     )
     .await;
 }
 
 /// Mock server for `modification_time()` on an absent file (`550`).
-pub async fn run_mock_server_mdtm_not_found(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_mdtm_not_found(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "MDTM /model/gone.3mf\r\n");
-    respond(
-        &mut server_control,
+    ctl.expect(
+        "MDTM /model/gone.3mf\r\n",
         b"550 Failed to get modification time.\r\n",
     )
     .await;
 }
 
 /// Mock server for `modification_time()` with a malformed `213` body (not `YYYYMMDDHHMMSS`).
-pub async fn run_mock_server_mdtm_malformed(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_mdtm_malformed(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "MDTM /model/job.3mf\r\n");
-    respond(&mut server_control, b"213 not-a-timestamp\r\n").await;
+    ctl.expect("MDTM /model/job.3mf\r\n", b"213 not-a-timestamp\r\n")
+        .await;
 }
 
 /// Mock server for upload with 426 (TLS 1.3 close race) + SIZE recovery.
@@ -494,19 +432,18 @@ pub async fn run_mock_server_mdtm_malformed(
 /// recheck is what `src/ftps/CLAUDE.md` cites to justify the fail-open
 /// `allow_unverified_tls_1_2` opt-out, so the test proving it has to be able to fail.
 pub async fn run_mock_server_upload_426_recovery(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
     expected_len: usize,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // STOR upload
-    let mut server_upload_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STOR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+    let mut server_upload_data = ctl.pasv().await;
+    ctl.expect("STOR /model/job.3mf\r\n", b"150 Ok to send data.\r\n")
+        .await;
 
     // Loop until the full expected payload arrives, like run_mock_server_upload_multi_chunk:
     // a single read can return a short chunk, which the old single-read version silently
@@ -524,36 +461,29 @@ pub async fn run_mock_server_upload_426_recovery(
     drop(server_upload_data);
 
     // Return 426 (TLS 1.3 close race) instead of 226
-    respond(
-        &mut server_control,
-        b"426 Failure reading network stream.\r\n",
-    )
-    .await;
+    ctl.respond(b"426 Failure reading network stream.\r\n")
+        .await;
 
     // SIZE verification — report the independently-known length, not the observed count.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert!(cmd.starts_with("SIZE "));
-    respond(
-        &mut server_control,
-        format!("213 {}\r\n", expected_len).as_bytes(),
-    )
-    .await;
+    ctl.respond(format!("213 {}\r\n", expected_len).as_bytes())
+        .await;
 }
 
 /// Mock server for upload with 426 + SIZE mismatch (should trigger DiskWriteFailure).
 pub async fn run_mock_server_upload_size_mismatch(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // STOR upload
-    let mut server_upload_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STOR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+    let mut server_upload_data = ctl.pasv().await;
+    ctl.expect("STOR /model/job.3mf\r\n", b"150 Ok to send data.\r\n")
+        .await;
 
     let mut upload_buf = vec![0u8; 100];
     let _bytes_read = server_upload_data
@@ -563,16 +493,13 @@ pub async fn run_mock_server_upload_size_mismatch(
     drop(server_upload_data);
 
     // Return 426 (TLS close race)
-    respond(
-        &mut server_control,
-        b"426 Failure reading network stream.\r\n",
-    )
-    .await;
+    ctl.respond(b"426 Failure reading network stream.\r\n")
+        .await;
 
     // SIZE verification — report WRONG size (truncated write)
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert!(cmd.starts_with("SIZE "));
-    respond(&mut server_control, b"213 0\r\n").await;
+    ctl.respond(b"213 0\r\n").await;
 }
 
 /// Mock server for the data-channel desync regression test
@@ -584,21 +511,16 @@ pub async fn run_mock_server_upload_size_mismatch(
 /// final reply that will never arrive; if it instead ignored the failure and tried to read the
 /// control channel again, that read would hang forever against this mock.
 pub async fn run_mock_server_data_channel_failure(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let _server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /model\r\n");
-    respond(
-        &mut server_control,
-        b"150 Here comes directory listing.\r\n",
-    )
-    .await;
+    let _server_data = ctl.pasv().await;
+    ctl.expect("LIST /model\r\n", b"150 Here comes directory listing.\r\n")
+        .await;
     // Intentionally no matching 226 — the client's TLS connector fails the data-channel connect
     // before it would ever consume this reply.
 }
@@ -609,19 +531,19 @@ pub async fn run_mock_server_data_channel_failure(
 /// reading that reply. Draining keeps the data channel open while the client writes, so a
 /// write that is meant to pass through doesn't fail on a closed pipe instead.
 pub async fn run_mock_server_upload_data_failure(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STOR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+    let mut server_data = ctl.pasv().await;
+    ctl.expect("STOR /model/job.3mf\r\n", b"150 Ok to send data.\r\n")
+        .await;
 
-    while matches!(server_data.read(&mut buf).await, Ok(n) if n > 0) {}
+    let mut drain = [0u8; 1024];
+    while matches!(server_data.read(&mut drain).await, Ok(n) if n > 0) {}
 }
 
 /// Mock server for the single-reply-command poisoning regression test.
@@ -629,15 +551,12 @@ pub async fn run_mock_server_upload_data_failure(
 /// Reads the `DELE` command and then drops the control stream without ever replying — the
 /// client's `read_response` sees a clean 0-byte read, which `read_chunk` maps to
 /// `SocketError::ConnectionReset` immediately (no 30s timeout wait needed for this test).
-pub async fn run_mock_server_dele_connection_drop(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_dele_connection_drop(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert_eq!(cmd, "DELE /model/job.3mf\r\n");
     // Drop the stream instead of responding.
 }
@@ -646,19 +565,14 @@ pub async fn run_mock_server_dele_connection_drop(
 ///
 /// Drops the control stream on the `PASV` that opens the listing, so the client is poisoned
 /// mid-`delete_file` (#392).
-pub async fn run_mock_server_dele_550_listing_drop(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_dele_550_listing_drop(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "DELE /model/job.3mf\r\n");
-    respond(&mut server_control, b"550 \r\n").await;
+    ctl.expect("DELE /model/job.3mf\r\n", b"550 \r\n").await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert_eq!(cmd, "PASV\r\n");
     // Drop the stream instead of responding.
 }
@@ -668,15 +582,12 @@ pub async fn run_mock_server_dele_550_listing_drop(
 /// the client, the way every other control-channel transport failure does — every existing
 /// poisoning test exercises a command issued *after* PASV already succeeded, so
 /// `negotiate_passive_port`'s own calls to the poisoning helpers were never covered.
-pub async fn run_mock_server_pasv_connection_drop(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_pasv_connection_drop(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert_eq!(cmd, "PASV\r\n");
     // Drop the stream instead of responding.
 }
@@ -685,42 +596,35 @@ pub async fn run_mock_server_pasv_connection_drop(
 /// rather than `227`. The control channel is still perfectly in sync, so this must surface as a
 /// `ProtocolViolation` *without* poisoning the client — the asymmetry with the drop case above
 /// is the thing worth pinning.
-pub async fn run_mock_server_pasv_rejected(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_pasv_rejected(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "PASV\r\n");
-    respond(&mut server_control, b"425 Can't open data connection.\r\n").await;
+    ctl.expect("PASV\r\n", b"425 Can't open data connection.\r\n")
+        .await;
 
     // The client is not poisoned, so it may legitimately issue a follow-up command; answer it
     // so the assertion under test is the client's own state, not a second transport failure.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "AVBL\r\n");
-    respond(&mut server_control, b"213 1024000\r\n").await;
+    ctl.expect("AVBL\r\n", b"213 1024000\r\n").await;
 }
 
 /// Mock server for the regression test: a transport failure between `rename_file`'s two-step
 /// `RNFR`/`RNTO` sequence must poison the client the same way a single-reply command's failure
 /// already does. Acks `RNFR` normally, then drops the connection instead of responding to
 /// `RNTO`.
-pub async fn run_mock_server_rnto_connection_drop(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_rnto_connection_drop(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RNFR /model/old.3mf\r\n");
-    respond(&mut server_control, b"350 Ready for destination name.\r\n").await;
+    ctl.expect(
+        "RNFR /model/old.3mf\r\n",
+        b"350 Ready for destination name.\r\n",
+    )
+    .await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert_eq!(cmd, "RNTO /model/new.3mf\r\n");
     // Drop the stream instead of responding.
 }
@@ -729,21 +633,16 @@ pub async fn run_mock_server_rnto_connection_drop(
 /// (the documented P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]) the same way upload/download
 /// already do — upload/download both have a dedicated 426-recovery test; LIST did not.
 pub async fn run_mock_server_list_426_recovery(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /model\r\n");
-    respond(
-        &mut server_control,
-        b"150 Here comes directory listing.\r\n",
-    )
-    .await;
+    let mut server_data = ctl.pasv().await;
+    ctl.expect("LIST /model\r\n", b"150 Here comes directory listing.\r\n")
+        .await;
     server_data
         .write_all(b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n")
         .await
@@ -751,11 +650,8 @@ pub async fn run_mock_server_list_426_recovery(
     server_data.flush().await.expect("LIST data flush");
     drop(server_data);
     // 426 instead of 226 — the TLS 1.3 close race, tolerated the same as upload/download.
-    respond(
-        &mut server_control,
-        b"426 Connection closed; transfer aborted.\r\n",
-    )
-    .await;
+    ctl.respond(b"426 Connection closed; transfer aborted.\r\n")
+        .await;
 }
 
 /// Mock server for the regression test: a `426` on `LIST` whose listing was cut mid-line.
@@ -766,21 +662,16 @@ pub async fn run_mock_server_list_426_recovery(
 /// silently gets a short file list. The final line here ends without a terminator, which is the
 /// signal `list_directory` now rejects.
 pub async fn run_mock_server_list_426_truncated(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /model\r\n");
-    respond(
-        &mut server_control,
-        b"150 Here comes directory listing.\r\n",
-    )
-    .await;
+    let mut server_data = ctl.pasv().await;
+    ctl.expect("LIST /model\r\n", b"150 Here comes directory listing.\r\n")
+        .await;
     server_data
         .write_all(
             b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n\
@@ -790,11 +681,8 @@ pub async fn run_mock_server_list_426_truncated(
         .expect("LIST data write");
     server_data.flush().await.expect("LIST data flush");
     drop(server_data);
-    respond(
-        &mut server_control,
-        b"426 Connection closed; transfer aborted.\r\n",
-    )
-    .await;
+    ctl.respond(b"426 Connection closed; transfer aborted.\r\n")
+        .await;
 }
 
 /// Mock server for the regression test: a `426` on `LIST` with **zero** data bytes delivered.
@@ -804,49 +692,36 @@ pub async fn run_mock_server_list_426_truncated(
 /// failed transfer onto "empty directory", the exact silent-truncation class the framing guard
 /// exists to catch.
 pub async fn run_mock_server_list_426_empty(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /model\r\n");
-    respond(
-        &mut server_control,
-        b"150 Here comes directory listing.\r\n",
-    )
-    .await;
+    let server_data = ctl.pasv().await;
+    ctl.expect("LIST /model\r\n", b"150 Here comes directory listing.\r\n")
+        .await;
     // No data bytes at all — the data channel dies before delivering anything.
     drop(server_data);
-    respond(
-        &mut server_control,
-        b"426 Connection closed; transfer aborted.\r\n",
-    )
-    .await;
+    ctl.respond(b"426 Connection closed; transfer aborted.\r\n")
+        .await;
 }
 
 /// Mock server for the regression test: a listing carrying one valid line and one
 /// non-UTF-8 filename (a Latin-1 byte on a FAT microSD). The whole listing completes
 /// normally (`226`), so only the per-line decoding is under test.
 pub async fn run_mock_server_list_non_utf8_line(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "LIST /model\r\n");
-    respond(
-        &mut server_control,
-        b"150 Here comes directory listing.\r\n",
-    )
-    .await;
+    let mut server_data = ctl.pasv().await;
+    ctl.expect("LIST /model\r\n", b"150 Here comes directory listing.\r\n")
+        .await;
     server_data
         .write_all(b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n")
         .await
@@ -858,7 +733,7 @@ pub async fn run_mock_server_list_non_utf8_line(
         .expect("LIST data write");
     server_data.flush().await.expect("LIST data flush");
     drop(server_data);
-    respond(&mut server_control, b"226 Transfer complete.\r\n").await;
+    ctl.respond(b"226 Transfer complete.\r\n").await;
 }
 
 /// Mock server for the regression test: `LIST`'s *initial* write/read (the `150`/`125`
@@ -866,15 +741,15 @@ pub async fn run_mock_server_list_non_utf8_line(
 /// poison the client on failure too. Drops the control stream right after reading the `LIST`
 /// command, before ever sending a `150`/`125` reply.
 pub async fn run_mock_server_list_connection_drop(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let _server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let _server_data = ctl.pasv().await;
+    let cmd = ctl.read_cmd().await;
     assert_eq!(cmd, "LIST /model\r\n");
     // Drop the stream instead of responding.
 }
@@ -884,18 +759,19 @@ pub async fn run_mock_server_list_connection_drop(
 /// through to the SIZE recheck, symmetric with `upload_file`'s existing 426 handling —
 /// previously RETR treated 426 as an unconditional hard failure.
 pub async fn run_mock_server_download_426_recovery(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_download_data =
-        handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "RETR /model/job.3mf\r\n");
-    respond(&mut server_control, b"150 Opening data connection.\r\n").await;
+    let mut server_download_data = ctl.pasv().await;
+    ctl.expect(
+        "RETR /model/job.3mf\r\n",
+        b"150 Opening data connection.\r\n",
+    )
+    .await;
 
     let payload = b"TEST_DATA";
     server_download_data
@@ -905,20 +781,14 @@ pub async fn run_mock_server_download_426_recovery(
     drop(server_download_data);
 
     // Return 426 (TLS 1.3 close race) instead of 226 — the payload was already fully sent.
-    respond(
-        &mut server_control,
-        b"426 Failure reading network stream.\r\n",
-    )
-    .await;
+    ctl.respond(b"426 Failure reading network stream.\r\n")
+        .await;
 
     // SIZE verification — report size matches, so download_file should still succeed.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let cmd = ctl.read_cmd().await;
     assert!(cmd.starts_with("SIZE "));
-    respond(
-        &mut server_control,
-        format!("213 {}\r\n", payload.len()).as_bytes(),
-    )
-    .await;
+    ctl.respond(format!("213 {}\r\n", payload.len()).as_bytes())
+        .await;
 }
 
 /// Mock server whose greeting is a multi-line `220-`…`220 ` reply written in one `write_all`.
@@ -927,23 +797,16 @@ pub async fn run_mock_server_download_426_recovery(
 /// multi-line continuation handling (`FTP_MAX_RESPONSE_LINES`, the header-code terminator rule)
 /// was only ever covered by unit tests over an in-memory reader, never through a real socket and
 /// the client's own `control_fill_buf`. Ends with QUIT so the caller can assert a clean session.
-pub async fn run_mock_server_multiline_greeting(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_multiline_greeting(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_handshake_with_greeting(
-        &mut server_control,
-        &mut buf,
+    ctl.handshake_with_greeting(
         true,
         b"220-vsFTPd 3.0.3\r\n220-Bambu Lab storage service\r\n220 Ready.\r\n",
     )
     .await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "QUIT\r\n");
-    respond(&mut server_control, b"221 Goodbye.\r\n").await;
+    ctl.expect("QUIT\r\n", b"221 Goodbye.\r\n").await;
 }
 
 /// Mock server for RETR whose `150` and `226` replies are written in a *single* `write_all`.
@@ -955,15 +818,15 @@ pub async fn run_mock_server_multiline_greeting(
 /// replies are unavoidably one socket read, so the second `read_response` *must* come from the
 /// carried-over leftover bytes.
 pub async fn run_mock_server_download_coalesced_replies(
-    mut server_control: tokio::io::DuplexStream,
+    server_control: tokio::io::DuplexStream,
     data_container: DataContainer,
 ) {
-    let mut buf = vec![0u8; 1024];
+    let mut ctl = Control::new(server_control, data_container);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
-    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    let mut server_data = ctl.pasv().await;
+    let cmd = ctl.read_cmd().await;
     assert_eq!(cmd, "RETR /model/job.3mf\r\n");
 
     let payload = b"MOCK_FILE_CONTENT_FOR_DOWNLOAD";
@@ -975,32 +838,22 @@ pub async fn run_mock_server_download_coalesced_replies(
     drop(server_data);
 
     // Both replies in one write: not two writes that merely tend to coalesce.
-    respond(
-        &mut server_control,
-        b"150 Opening data connection.\r\n226 Transfer complete.\r\n",
-    )
-    .await;
+    ctl.respond(b"150 Opening data connection.\r\n226 Transfer complete.\r\n")
+        .await;
 
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
-    respond(
-        &mut server_control,
+    ctl.expect(
+        "SIZE /model/job.3mf\r\n",
         format!("213 {}\r\n", payload.len()).as_bytes(),
     )
     .await;
 }
 
 /// Mock server for disconnect (QUIT) test.
-pub async fn run_mock_server_disconnect(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
-) {
-    let mut buf = vec![0u8; 1024];
+pub async fn run_mock_server_disconnect(server_control: tokio::io::DuplexStream) {
+    let mut ctl = Control::control_only(server_control);
 
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
+    ctl.handshake(true).await;
 
     // QUIT
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "QUIT\r\n");
-    respond(&mut server_control, b"221 Goodbye.\r\n").await;
+    ctl.expect("QUIT\r\n", b"221 Goodbye.\r\n").await;
 }

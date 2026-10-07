@@ -306,7 +306,6 @@ async fn test_disconnect_ftps_clears_ftps_for_clean_reconnect() {
     // Acks the handshake, reads DELE, then drops the control stream without replying.
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_dele_connection_drop(
         server_control,
-        data_container.clone(),
     ));
 
     let mut client = PrinterClient::new(DummyTls, DummyFactory, test_identity(PrinterModel::P1S))
@@ -328,10 +327,7 @@ async fn test_disconnect_ftps_clears_ftps_for_clean_reconnect() {
     // the FTPS config, and the same factory dials a fresh control stream.
     let (fresh_control, fresh_server_control) = tokio::io::duplex(8192);
     *data_container.lock().await = Some(TokioIo::new(fresh_control));
-    let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        fresh_server_control,
-        data_container.clone(),
-    ));
+    let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(fresh_server_control));
     client
         .ftps()
         .await
@@ -347,10 +343,7 @@ async fn test_disconnect_ftps_clears_ftps_for_clean_reconnect() {
 async fn test_attach_ftps_installs_a_connected_session() {
     let (fresh_control, fresh_server_control) = tokio::io::duplex(8192);
     let fresh_container = Arc::new(Mutex::new(None));
-    let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        fresh_server_control,
-        fresh_container.clone(),
-    ));
+    let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(fresh_server_control));
     let identity = test_identity(PrinterModel::P1S);
     let fresh_ftps = FtpsClient::connect(
         TokioIo::new(fresh_control),

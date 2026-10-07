@@ -7,21 +7,18 @@
 //! asynchronous network simulation utilizing the shared test infrastructure, preventing
 //! port collisions and flaky cryptography checks.
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
 use bambino::client::DummyTimer;
 use bambino::error::Error;
-use bambino::ftps::{CurrentDateTime, FtpTimestamp, FtpsClient};
-use bambino::identity::PrinterIdentity;
+use bambino::ftps::{CurrentDateTime, FtpTimestamp, FtpsClient, TlsVersionCheck};
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use bambino::io::TlsVersion;
+use bambino::io::{TlsConnector, TlsVersion};
 
 /// The printer clock every listing test parses against.
 const REF_NOW: CurrentDateTime = CurrentDateTime::new(2026, 6, 17, 15, 0);
 
+use crate::common::client::{SERIAL, test_identity};
 use crate::common::io::{
     CloseCountingTlsConnector, DataContainer, DummyTlsConnector, FailingDataTlsConnector,
     FaultyDataTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
@@ -40,9 +37,50 @@ type SetupResult = (
 /// Helper: creates the standard test infrastructure (duplex control stream, data container, factory).
 fn setup() -> SetupResult {
     let (client_control, server_control) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(None));
-    let factory = MockDataStreamFactory::new(data_container.clone());
+    let factory = MockDataStreamFactory::empty();
+    let data_container = factory.active_stream.clone();
     (client_control, server_control, data_container, factory)
+}
+
+/// The FTPS client every test here connects, over `Tls`.
+type TestFtps<Tls> =
+    FtpsClient<TokioIo<tokio::io::DuplexStream>, Tls, MockDataStreamFactory, DummyTimer>;
+
+/// Helper: connects an FTPS client as `model` over `tls`, returning the handshake's result.
+async fn try_connect_with<Tls: TlsConnector<TokioIo<tokio::io::DuplexStream>>>(
+    client_control: tokio::io::DuplexStream,
+    tls: Tls,
+    factory: MockDataStreamFactory,
+    model: PrinterModel,
+    tls_version_check: TlsVersionCheck,
+) -> Result<TestFtps<Tls>, Error> {
+    FtpsClient::connect(
+        TokioIo::new(client_control),
+        tls,
+        factory,
+        test_identity(model),
+        DummyTimer,
+        tls_version_check,
+    )
+    .await
+}
+
+/// Helper: connects an FTPS client as `model` over `tls`, enforcing the TLS version check.
+async fn connect_client_with<Tls: TlsConnector<TokioIo<tokio::io::DuplexStream>>>(
+    client_control: tokio::io::DuplexStream,
+    tls: Tls,
+    factory: MockDataStreamFactory,
+    model: PrinterModel,
+) -> TestFtps<Tls> {
+    try_connect_with(
+        client_control,
+        tls,
+        factory,
+        model,
+        TlsVersionCheck::Enforce,
+    )
+    .await
+    .expect("FTPS handshake failed")
 }
 
 /// Helper: connects the FTPS client using the standard test infrastructure.
@@ -50,27 +88,8 @@ async fn connect_client(
     client_control: tokio::io::DuplexStream,
     factory: MockDataStreamFactory,
     model: PrinterModel,
-) -> FtpsClient<
-    TokioIo<tokio::io::DuplexStream>,
-    DummyTlsConnector,
-    MockDataStreamFactory,
-    DummyTimer,
-> {
-    FtpsClient::connect(
-        TokioIo::new(client_control),
-        DummyTlsConnector,
-        factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
-    )
-    .await
-    .expect("FTPS handshake failed")
+) -> TestFtps<DummyTlsConnector> {
+    connect_client_with(client_control, DummyTlsConnector, factory, model).await
 }
 
 /// Regression test for `.claude/rules/tls-identity-sni.md`: the control-channel TLS connect
@@ -86,25 +105,11 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
     ));
 
     let (connector, captured_host) = HostCapturingTlsConnector::new();
-    let client = FtpsClient::connect(
-        TokioIo::new(client_control),
-        connector,
-        factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
-    )
-    .await
-    .expect("FTPS handshake failed");
+    let client = connect_client_with(client_control, connector, factory, PrinterModel::P1S).await;
 
     assert_eq!(
         captured_host.lock().await.as_deref(),
-        Some("TEST0000000001"),
+        Some(SERIAL),
         "control-channel TLS connect must use the serial, not the IP, as SNI/identity"
     );
 
@@ -282,11 +287,10 @@ async fn test_ftps_download_with_coalesced_replies_in_one_write() {
 /// saw one.
 #[tokio::test]
 async fn test_ftps_connect_accepts_multiline_greeting() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_multiline_greeting(
         server_control,
-        data_container.clone(),
     ));
 
     let client = connect_client(client_control, factory, PrinterModel::P1S).await;
@@ -379,12 +383,9 @@ async fn test_ftps_directory_operations() {
 /// `AVBL` reply, without ever attempting a STAT round-trip.
 #[tokio::test]
 async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_avbl_unsupported(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_avbl_unsupported(server_control));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -406,12 +407,9 @@ async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
 
 #[tokio::test]
 async fn test_ftps_mdtm_success() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_success(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_success(server_control));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -436,12 +434,9 @@ async fn test_ftps_mdtm_success() {
 
 #[tokio::test]
 async fn test_ftps_mdtm_unsupported_returns_none() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_unsupported(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_unsupported(server_control));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -456,12 +451,9 @@ async fn test_ftps_mdtm_unsupported_returns_none() {
 
 #[tokio::test]
 async fn test_ftps_mdtm_not_found_returns_error() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_not_found(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_not_found(server_control));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -484,12 +476,9 @@ async fn test_ftps_mdtm_not_found_returns_error() {
 
 #[tokio::test]
 async fn test_ftps_mdtm_malformed_body_returns_error() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_malformed(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_malformed(server_control));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -517,21 +506,13 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         data_container.clone(),
     ));
 
-    let mut client = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let mut client = connect_client_with(
+        client_control,
         FailingDataTlsConnector::new(),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::P1S,
     )
-    .await
-    .expect("FTPS handshake failed");
+    .await;
 
     let result = client.list_directory("/model", REF_NOW).await;
     assert!(
@@ -563,11 +544,10 @@ async fn test_ftps_data_channel_failure_poisons_client() {
 /// client silently desynced on a transport error, with no poisoning.
 #[tokio::test]
 async fn test_ftps_single_reply_command_failure_poisons_client() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_dele_connection_drop(
         server_control,
-        data_container.clone(),
     ));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
@@ -593,11 +573,10 @@ async fn test_ftps_single_reply_command_failure_poisons_client() {
 /// error, not as the `550` — which would read as a refusal on a still-usable session (#392).
 #[tokio::test]
 async fn test_ftps_delete_550_recheck_failure_poisons_client() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_dele_550_listing_drop(
         server_control,
-        data_container.clone(),
     ));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
@@ -618,11 +597,10 @@ async fn test_ftps_delete_550_recheck_failure_poisons_client() {
 /// two-step rename sequence had no coverage for a failure landing mid-sequence.
 #[tokio::test]
 async fn test_ftps_rename_file_mid_sequence_failure_poisons_client() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_rnto_connection_drop(
         server_control,
-        data_container.clone(),
     ));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
@@ -814,21 +792,13 @@ async fn test_ftps_upload_data_failure_keeps_its_error_kind() {
             data_container.clone(),
         ));
 
-        let mut client = FtpsClient::connect(
-            TokioIo::new(client_control),
+        let mut client = connect_client_with(
+            client_control,
             FaultyDataTlsConnector::new(write_error, flush_error),
             factory,
-            PrinterIdentity {
-                ip: "127.0.0.1".into(),
-                serial: "TEST0000000001".into(),
-                access_code: "12345678".into(),
-                model: PrinterModel::P1S,
-            },
-            DummyTimer,
-            bambino::ftps::TlsVersionCheck::Enforce,
+            PrinterModel::P1S,
         )
-        .await
-        .expect("FTPS handshake failed");
+        .await;
 
         let result = client.upload_file("/model/job.3mf", b"TEST_DATA").await;
         assert!(
@@ -885,11 +855,10 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
 /// were only ever exercised on the happy path.
 #[tokio::test]
 async fn test_ftps_pasv_transport_failure_poisons_client() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_pasv_connection_drop(
         server_control,
-        data_container.clone(),
     ));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
@@ -916,12 +885,9 @@ async fn test_ftps_pasv_transport_failure_poisons_client() {
 /// error *without* poisoning itself and must keep serving subsequent commands.
 #[tokio::test]
 async fn test_ftps_pasv_rejection_reply_does_not_poison_client() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_pasv_rejected(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_pasv_rejected(server_control));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -974,12 +940,9 @@ async fn test_ftps_download_426_recovery_via_size() {
 
 #[tokio::test]
 async fn test_ftps_disconnect() {
-    let (client_control, server_control, data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        server_control,
-        data_container.clone(),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(server_control));
 
     let client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
@@ -1006,21 +969,8 @@ async fn test_ftps_closes_tls_sessions_on_teardown() {
     ));
 
     let (connector, closes) = CloseCountingTlsConnector::new();
-    let mut client = FtpsClient::connect(
-        TokioIo::new(client_control),
-        connector,
-        factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
-    )
-    .await
-    .expect("FTPS handshake failed");
+    let mut client =
+        connect_client_with(client_control, connector, factory, PrinterModel::P1S).await;
 
     client
         .list_directory("/model", REF_NOW)
@@ -1044,20 +994,14 @@ async fn test_ftps_closes_tls_sessions_on_teardown() {
 
 #[tokio::test]
 async fn test_ftps_tls13_rejected_for_p2s() {
-    let (client_control, _server_control, _data_container, factory) = setup();
+    let (client_control, _server_control, _, factory) = setup();
 
-    let result = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let result = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P2S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::P2S,
+        TlsVersionCheck::Enforce,
     )
     .await;
 
@@ -1070,20 +1014,14 @@ async fn test_ftps_tls13_rejected_for_p2s() {
 
 #[tokio::test]
 async fn test_ftps_tls13_rejected_for_x2d() {
-    let (client_control, _server_control, _data_container, factory) = setup();
+    let (client_control, _server_control, _, factory) = setup();
 
-    let result = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let result = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::X2D,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::X2D,
+        TlsVersionCheck::Enforce,
     )
     .await;
 
@@ -1096,25 +1034,16 @@ async fn test_ftps_tls13_rejected_for_x2d() {
 
 #[tokio::test]
 async fn test_ftps_tls12_accepted_for_p2s() {
-    let (client_control, server_control, _data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        server_control,
-        Arc::new(Mutex::new(None)),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(server_control));
 
-    let client = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let client = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P2S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::P2S,
+        TlsVersionCheck::Enforce,
     )
     .await
     .expect("TLS 1.2 should be accepted for P2S");
@@ -1138,18 +1067,12 @@ async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
         data_container.clone(),
     ));
 
-    let mut client = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let mut client = try_connect_with(
+        client_control,
         PerCallVersionReportingTlsConnector::new(Some(TlsVersion::Tls12), Some(TlsVersion::Tls13)),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P2S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::P2S,
+        TlsVersionCheck::Enforce,
     )
     .await
     .expect("Control channel at TLS 1.2 should be accepted for P2S");
@@ -1176,25 +1099,16 @@ async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
 
 #[tokio::test]
 async fn test_ftps_tls13_accepted_for_p1s() {
-    let (client_control, server_control, _data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        server_control,
-        Arc::new(Mutex::new(None)),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(server_control));
 
-    let client = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let client = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::P1S,
+        TlsVersionCheck::Enforce,
     )
     .await
     .expect("TLS 1.3 should be accepted for P1S");
@@ -1205,20 +1119,14 @@ async fn test_ftps_tls13_accepted_for_p1s() {
 
 #[tokio::test]
 async fn test_ftps_version_none_rejected_for_p2s() {
-    let (client_control, _server_control, _data_container, factory) = setup();
+    let (client_control, _server_control, _, factory) = setup();
 
-    let result = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let result = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(None),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P2S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Enforce,
+        PrinterModel::P2S,
+        TlsVersionCheck::Enforce,
     )
     .await;
 
@@ -1241,25 +1149,16 @@ async fn test_ftps_version_none_rejected_for_p2s() {
 /// must now succeed instead of erroring.
 #[tokio::test]
 async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
-    let (client_control, server_control, _data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        server_control,
-        Arc::new(Mutex::new(None)),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(server_control));
 
-    let client = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let client = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P2S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Bypass,
+        PrinterModel::P2S,
+        TlsVersionCheck::Bypass,
     )
     .await
     .expect("allow_unverified_tls_1_2 should bypass the TLS 1.3 rejection for P2S");
@@ -1272,25 +1171,16 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
 /// `test_ftps_version_none_rejected_for_p2s` but with the bypass flag set.
 #[tokio::test]
 async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
-    let (client_control, server_control, _data_container, factory) = setup();
+    let (client_control, server_control, _, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        server_control,
-        Arc::new(Mutex::new(None)),
-    ));
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(server_control));
 
-    let client = FtpsClient::connect(
-        TokioIo::new(client_control),
+    let client = try_connect_with(
+        client_control,
         VersionReportingTlsConnector(None),
         factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: "TEST0000000001".into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P2S,
-        },
-        DummyTimer,
-        bambino::ftps::TlsVersionCheck::Bypass,
+        PrinterModel::P2S,
+        TlsVersionCheck::Bypass,
     )
     .await
     .expect("allow_unverified_tls_1_2 should bypass the undetermined-version rejection for P2S");
