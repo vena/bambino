@@ -17,7 +17,9 @@ use bambino::io::TokioIo;
 struct Control {
     stream: DuplexStream,
     buf: Vec<u8>,
-    data: DataContainer,
+    /// `None` for a mock built with [`Control::control_only`]: [`Control::pasv`] then panics
+    /// rather than hand the client's data stream to a slot its factory never reads.
+    data: Option<DataContainer>,
 }
 
 impl Control {
@@ -26,13 +28,17 @@ impl Control {
         Self {
             stream,
             buf: vec![0u8; 1024],
-            data,
+            data: Some(data),
         }
     }
 
     /// A control channel for a mock that never opens a data channel.
     fn control_only(stream: DuplexStream) -> Self {
-        Self::new(stream, DataContainer::default())
+        Self {
+            stream,
+            buf: vec![0u8; 1024],
+            data: None,
+        }
     }
 
     /// Reads the next command from the control stream and returns it as a string.
@@ -109,7 +115,10 @@ impl Control {
         assert_eq!(cmd, "PASV\r\n");
 
         let (client_data, server_data) = tokio::io::duplex(4096);
-        *self.data.lock().await = Some(TokioIo::new(client_data));
+        let data = self.data.as_ref().expect(
+            "PASV on a control-only mock: build it with Control::new and the factory's container",
+        );
+        *data.lock().await = Some(TokioIo::new(client_data));
 
         // Port = 192 * 256 + 168 = 49320
         self.respond(b"227 Entering Passive Mode (127,0,0,1,192,168).\r\n")

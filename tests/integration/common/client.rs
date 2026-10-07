@@ -60,7 +60,20 @@ where
     Fut: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let (client_stream, server_stream) = tokio::io::duplex(DUPLEX_BYTES);
+    spawn_broker_sized(DUPLEX_BYTES, broker)
+}
+
+/// [`spawn_broker`] over a duplex that buffers `bytes` in each direction.
+pub fn spawn_broker_sized<F, Fut, T>(
+    bytes: usize,
+    broker: F,
+) -> (TokioIo<DuplexStream>, JoinHandle<T>)
+where
+    F: FnOnce(DuplexStream) -> Fut,
+    Fut: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (client_stream, server_stream) = tokio::io::duplex(bytes);
     let task = tokio::spawn(broker(server_stream));
     (TokioIo::new(client_stream), task)
 }
@@ -76,7 +89,23 @@ where
     Fut: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let (stream, task) = spawn_broker(broker);
+    with_broker_sized(DUPLEX_BYTES, serial, model, broker).await
+}
+
+/// [`with_broker`] over a duplex that buffers `bytes` in each direction, for a test that has
+/// the client write far more than the default buffer holds before the broker reads it.
+pub async fn with_broker_sized<F, Fut, T>(
+    bytes: usize,
+    serial: &str,
+    model: PrinterModel,
+    broker: F,
+) -> (TestClient<TokioIo<DuplexStream>>, JoinHandle<T>)
+where
+    F: FnOnce(DuplexStream) -> Fut,
+    Fut: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (stream, task) = spawn_broker_sized(bytes, broker);
     let client = connect_test_client(stream, serial, model).await;
     (client, task)
 }

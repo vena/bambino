@@ -4,13 +4,12 @@
 
 use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus, SEQUENCE_ID_FLOOR};
 use bambino::error::Error;
-use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::PrintJobConfig;
 use bambino::types::DryingMaterial;
 use bambino::types::telemetry::AmsUnitModel;
 
-use crate::common::client::{SERIAL, connect_idle_client, connect_test_client, with_broker};
+use crate::common::client::{SERIAL, connect_idle_client, with_broker, with_broker_sized};
 use crate::common::mock_mqtt::{
     ReportPublisher, handle_mqtt_handshake, read_gcode_param, read_packet, read_publish_payload,
 };
@@ -51,17 +50,18 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
 
 #[tokio::test]
 async fn test_in_flight_saturation() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(1_048_576);
+    let (mut client, _broker_task) = with_broker_sized(
+        1_048_576,
+        SERIAL,
+        PrinterModel::P1S,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let _broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Read and discard all incoming PUBLISH packets without sending PUBACKs
-        while read_packet(&mut server_stream).await.is_ok() {}
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+            // Read and discard all incoming PUBLISH packets without sending PUBACKs
+            while read_packet(&mut server_stream).await.is_ok() {}
+        },
+    )
+    .await;
 
     // Fill the in-flight queue to capacity (200 commands)
     for i in 0..200 {
