@@ -1,13 +1,16 @@
 #![cfg(feature = "cli")]
 
 use std::io::{self, Write};
+use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use bambino::Error;
 use bambino::client::{Axis, FanTarget, LedNode, PrintStatus};
 use serde::Serialize;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target, unix_now_secs, write_report};
+use crate::connection::{
+    Printer, RESPONSE_TIMEOUT_SECS, Target, poll_events_for, unix_now_secs, write_report,
+};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -197,26 +200,21 @@ async fn capture_pushall(
     client: &mut Printer,
     timeout: Duration,
 ) -> Result<Option<serde_json::Value>, Error> {
-    let deadline = Instant::now() + timeout;
-
     // Goes through poll_telemetry() (not poll_raw()) so this also warms
     // PrinterClient's home_flag/gcode_state cache from the very first response.
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let event = match tokio::time::timeout(remaining, client.poll_telemetry()).await {
-            Ok(Ok(event)) => event,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => break,
-        };
+    let mut pushall = None;
+    poll_events_for(client, timeout, |_, event| {
         if let Some(raw) = event.raw()
             && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw.payload)
             && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
         {
-            return Ok(Some(v));
+            pushall = Some(v);
+            return ControlFlow::Break(());
         }
-    }
-
-    Ok(None)
+        ControlFlow::Continue(())
+    })
+    .await?;
+    Ok(pushall)
 }
 
 async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error> {
@@ -295,23 +293,27 @@ async fn run_holistic_homing(client: &mut Printer) -> Result<String, Error> {
     // Warm up the home_flag/gcode_state cache (a single poll may land on a partial
     // telemetry delta carrying neither). mc_print_sub_stage is recorded opportunistically
     // for context only — it does not gate any branch below, see the doc comment.
-    let warmup_deadline = Instant::now() + Duration::from_secs(DEFAULT_CAPTURE_WINDOW_SECS);
+    let warm = |c: &Printer| c.print_status().is_some() && c.is_all_axes_homed().is_some();
     let mut sub_stage_at_start = None;
-    while Instant::now() < warmup_deadline
-        && (client.print_status().is_none() || client.is_all_axes_homed().is_none())
-    {
-        let remaining = warmup_deadline.saturating_duration_since(Instant::now());
-        let event = match tokio::time::timeout(remaining, client.poll_telemetry()).await {
-            Ok(Ok(event)) => event,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => break,
-        };
-        if sub_stage_at_start.is_none() {
-            sub_stage_at_start = event
-                .report()
-                .and_then(|r| r.print.as_ref())
-                .and_then(|p| p.mc_print_sub_stage);
-        }
+    if !warm(client) {
+        poll_events_for(
+            client,
+            Duration::from_secs(DEFAULT_CAPTURE_WINDOW_SECS),
+            |c, event| {
+                if sub_stage_at_start.is_none() {
+                    sub_stage_at_start = event
+                        .report()
+                        .and_then(|r| r.print.as_ref())
+                        .and_then(|p| p.mc_print_sub_stage);
+                }
+                if warm(c) {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
+            },
+        )
+        .await?;
     }
 
     if printer_is_busy(client) {
@@ -361,17 +363,10 @@ async fn capture_responses(
 ) -> Result<Vec<CapturedMessage>, Error> {
     let mut responses = Vec::new();
     let start = Instant::now();
-    let deadline = start + window;
 
     // Goes through poll_telemetry() (not poll_raw()) so every test's capture window
     // also warms PrinterClient's home_flag/gcode_state cache as a side effect.
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let event = match tokio::time::timeout(remaining, client.poll_telemetry()).await {
-            Ok(Ok(event)) => event,
-            Ok(Err(e)) => return Err(e),
-            Err(_) => break,
-        };
+    poll_events_for(client, window, |_, event| {
         if let Some(raw) = event.raw()
             && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw.payload)
         {
@@ -382,7 +377,9 @@ async fn capture_responses(
                 payload: redact_secrets(v),
             });
         }
-    }
+        ControlFlow::Continue(())
+    })
+    .await?;
 
     Ok(responses)
 }

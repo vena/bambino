@@ -1,8 +1,12 @@
 #![cfg(feature = "cli")]
 
-use bambino::client::PrinterClient;
+use std::ops::ControlFlow;
+use std::time::{Duration, Instant};
+
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
+use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;
+use bambino::mqtt::MqttMessage;
 
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
 use bambino::io::{RawStreamFactory, TlsConnector, TlsVersions, TokioIo};
@@ -126,6 +130,46 @@ pub type Printer = PrinterClient<
     DummyTls,
     DummyFactory,
 >;
+
+/// Feeds every telemetry event to `on_event` until it returns `Break`, `window` elapses, or a poll fails; returns whether `on_event` broke.
+///
+/// Goes through `poll_telemetry()`, so the cache warms as events arrive and `on_event` sees it
+/// already updated. `window` is a hard wall-clock bound, unlike
+/// `PrinterClient::poll_telemetry_until`, whose timeout is checked between messages.
+pub(crate) async fn poll_events_for(
+    client: &mut Printer,
+    window: Duration,
+    mut on_event: impl FnMut(&Printer, TelemetryEvent) -> ControlFlow<()>,
+) -> Result<bool, bambino::Error> {
+    let deadline = Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Ok(event) = ::tokio::time::timeout(remaining, client.poll_telemetry()).await else {
+            return Ok(false);
+        };
+        if on_event(client, event?).is_break() {
+            return Ok(true);
+        }
+    }
+}
+
+/// [`poll_events_for`] over undecoded messages (`poll_raw()`), for callers that need payloads typed telemetry can't represent.
+pub(crate) async fn poll_raw_for(
+    client: &mut Printer,
+    window: Duration,
+    mut on_message: impl FnMut(MqttMessage) -> ControlFlow<()>,
+) -> Result<bool, bambino::Error> {
+    let deadline = Instant::now() + window;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Ok(message) = ::tokio::time::timeout(remaining, client.poll_raw()).await else {
+            return Ok(false);
+        };
+        if on_message(message?).is_break() {
+            return Ok(true);
+        }
+    }
+}
 
 /// Seconds since the Unix epoch, for report timestamps.
 pub(crate) fn unix_now_secs() -> u64 {

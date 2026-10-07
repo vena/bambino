@@ -25,6 +25,7 @@
 //! `sequence_id` it must correlate against.
 
 use std::io::{self, Write};
+use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use bambino::Error;
@@ -39,7 +40,9 @@ use bambino::mqtt::{
 };
 use serde::Serialize;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target, unix_now_secs, write_report};
+use crate::connection::{
+    Printer, RESPONSE_TIMEOUT_SECS, Target, poll_raw_for, unix_now_secs, write_report,
+};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -347,31 +350,19 @@ struct Capture {
 /// alongside the ack, which is what distinguishes a real correlated ack from a lucky read.
 async fn capture_ack(client: &mut Printer, expected_seq: u32, window: Duration) -> Capture {
     let start = Instant::now();
-    let deadline = start + window;
     let mut ack = None;
     let mut uncorrelated_count = 0usize;
     let mut uncorrelated_commands: Vec<String> = Vec::new();
-    let mut error = None;
 
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        // poll_raw() rather than poll_telemetry(): a rejection ack for an unsupported command
-        // may not deserialize into a typed telemetry event at all, and the raw envelope is
-        // exactly what the correlation logic under test operates on.
-        let message = match tokio::time::timeout(remaining, client.poll_raw()).await {
-            Ok(Ok(message)) => message,
-            Ok(Err(e)) => {
-                error = Some(e.to_string());
-                break;
-            }
-            Err(_) => break,
-        };
-
+    // poll_raw() rather than poll_telemetry(): a rejection ack for an unsupported command may
+    // not deserialize into a typed telemetry event at all, and the raw envelope is exactly what
+    // the correlation logic under test operates on.
+    let polled = poll_raw_for(client, window, |message| {
         let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&message.payload) else {
-            continue;
+            return ControlFlow::Continue(());
         };
         let Some((wrapper, inner)) = wrapper_object(&payload) else {
-            continue;
+            return ControlFlow::Continue(());
         };
         let command = inner_str(inner, "command").map(str::to_string);
 
@@ -388,7 +379,7 @@ async fn capture_ack(client: &mut Printer, expected_seq: u32, window: Duration) 
                     reason: inner_str(inner, "reason").map(str::to_string),
                 });
             }
-            continue;
+            return ControlFlow::Continue(());
         }
 
         uncorrelated_count += 1;
@@ -397,13 +388,15 @@ async fn capture_ack(client: &mut Printer, expected_seq: u32, window: Duration) 
         {
             uncorrelated_commands.push(command);
         }
-    }
+        ControlFlow::Continue(())
+    })
+    .await;
 
     Capture {
         ack,
         uncorrelated_count,
         uncorrelated_commands,
-        error,
+        error: polled.err().map(|e| e.to_string()),
     }
 }
 
@@ -543,16 +536,11 @@ async fn run_one(
 /// cache empty and the gate refuses a perfectly idle machine. `monitor` and `probe` both open
 /// the same way.
 async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
-    client.request_pushall().await?;
-
-    let deadline = Instant::now() + Duration::from_secs(RESPONSE_TIMEOUT_SECS);
-    while Instant::now() < deadline && client.print_status().is_none() {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match tokio::time::timeout(remaining, client.poll_telemetry()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => return Err(CliError::Library(e)),
-            Err(_) => break,
-        }
+    // The outer bound makes the wait wall-clock: refresh_state checks its own timeout only
+    // between messages.
+    let timeout = Duration::from_secs(RESPONSE_TIMEOUT_SECS);
+    if let Ok(refreshed) = tokio::time::timeout(timeout, client.refresh_state(timeout)).await {
+        refreshed?;
     }
 
     match client.print_status() {

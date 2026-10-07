@@ -3,6 +3,7 @@
 mod dashboard;
 
 use std::io::{self, Write};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -15,7 +16,7 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target, poll_raw_for};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -84,27 +85,25 @@ pub async fn dump(target: &Target, follow: bool, show_serials: bool) -> Result<(
         return follow_pushes(&mut printer, true, show_serials).await;
     }
 
-    let timeout = tokio::time::sleep(Duration::from_secs(RESPONSE_TIMEOUT_SECS));
-    tokio::pin!(timeout);
-
-    loop {
-        tokio::select! {
-            res = printer.poll_raw() => {
-                let msg = res?;
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
-                    && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
-                {
-                    let v = if show_serials { v } else { redact_secrets(v) };
-                    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-                    return Ok(());
-                }
+    let found = poll_raw_for(
+        &mut printer,
+        Duration::from_secs(RESPONSE_TIMEOUT_SECS),
+        |msg| match serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+            Ok(v) if v.get("print").and_then(|p| p.get("gcode_state")).is_some() => {
+                let v = if show_serials { v } else { redact_secrets(v) };
+                println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                ControlFlow::Break(())
             }
-            _ = &mut timeout => {
-                return Err(CliError::Network(format!(
-                    "timed out after {RESPONSE_TIMEOUT_SECS}s waiting for a pushall response"
-                )));
-            }
-        }
+            _ => ControlFlow::Continue(()),
+        },
+    )
+    .await?;
+    if found {
+        Ok(())
+    } else {
+        Err(CliError::Network(format!(
+            "timed out after {RESPONSE_TIMEOUT_SECS}s waiting for a pushall response"
+        )))
     }
 }
 
