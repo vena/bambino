@@ -336,6 +336,11 @@ async fn test_ftps_directory_operations() {
         .expect("MKD failed");
 
     client
+        .create_directory("/model/other")
+        .await
+        .expect("MKD answered 250 (as a P1S does) must succeed");
+
+    client
         .remove_directory("/model/subdir")
         .await
         .expect("RMD failed");
@@ -345,11 +350,25 @@ async fn test_ftps_directory_operations() {
         .await
         .expect("RNFR/RNTO failed");
 
-    // RMD on non-existent directory should succeed (550 = idempotent)
+    // A 550 for a target the parent listing no longer shows is "already gone".
     client
         .remove_directory("/model/gone")
         .await
         .expect("RMD on absent directory should be idempotent");
+
+    // A 550 for a target the parent listing still shows is a refusal, not success.
+    let refused = client.delete_file("/model/full").await;
+    assert!(
+        matches!(
+            refused,
+            Err(Error::FtpReply {
+                command: "DELE",
+                code: 550,
+                ..
+            })
+        ),
+        "a refused DELE must not report success: {refused:?}"
+    );
 
     server_handle.await.expect("Mock server panicked");
 }

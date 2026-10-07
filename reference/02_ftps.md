@@ -135,11 +135,22 @@ RNFR <src_path>\r\n      <- Rename from source path (paired with RNTO)
 RNTO <dest_path>\r\n     <- Rename to destination path (paired with RNFR)
 ```
 
-##### File Deletion Status Codes
-When executing the file deletion command (`DELE`), parsers must evaluate the numeric reply code on the control socket:
-*   **`250`**: Request completed successfully (the target file was deleted).
-*   **`550`**: File not found / permission denied. This represents a **terminal success indicator** for cleanup operations (the file is confirmed absent from the storage directory). Retrying is futile.
-*   **Other 4xx / 5xx codes**: Represent transient network timeouts, filesystem locking contentions, or authentication failures. These are retryable faults.
+##### Directory Mutator Reply Codes
+Captured on a P1S (FTP banner `220 BBL-P003 FTP Server`, 2026-10-07, GitHub issues #392 and #613). This server sends **no reply text** — every reply is a bare code — so the code is all a client has:
+
+| Command | Target | Reply | Effect |
+|---|---|---|---|
+| `MKD` | new directory | `250` (not RFC 959's `257`) | created |
+| `MKD` | existing directory | `550` | none |
+| `DELE` | file | `250` | deleted |
+| `DELE` | missing file | `550` | — |
+| `DELE` | empty directory | `250` | **directory removed** |
+| `DELE` | non-empty directory | `550` | none (directory and contents remain) |
+| `RMD` | empty directory | `250` | removed |
+| `RMD` | missing directory | `550` | — |
+| `RMD` | non-empty directory | `550` | none (contents remain) |
+
+**`550` is not proof of absence.** It answers both a missing target and one the server refused to remove, with nothing to tell them apart. A client wanting idempotent cleanup must confirm absence separately: `FtpsClient::delete_file`/`remove_directory` list the parent directory on a `550` and succeed only if the target's name is not there. Other 4xx/5xx codes have not been characterized on this server.
 
 #### Upload Pipeline Schema
 To initiate a file upload, the client negotiates a passive data port, transmits the standard ASCII `STOR` command over the control socket, and then writes the binary payload stream over the newly established passive data channel socket.

@@ -193,21 +193,21 @@ fn expect_reply(verb: &'static str, reply: (u16, String), ok: &[u16]) -> Result<
     }
 }
 
-/// Like [`expect_reply`] for `DELE`/`RMD`, but also accepts `550` as "already absent" and logs its text.
+/// Splits `path` into its parent directory and final component, or `None` for the root.
 ///
-/// `550` is ambiguous in FTP (absent, denied, in use, non-empty directory); which of these the
-/// printer's server sends for each case is unverified, so the text is logged for diagnosis
-/// (GitHub issue #392).
-fn expect_reply_or_absent(verb: &'static str, reply: (u16, String), ok: u16) -> Result<(), Error> {
-    if reply.0 == FTP_FILE_NOT_FOUND {
-        log::debug!(
-            "FTPS {verb} got 550, treated as already absent: {:?}",
-            reply.1
-        );
-        return Ok(());
-    }
-    expect_reply(verb, reply, &[ok]).map(drop)
+/// The client never sends `CWD`, so the session stays in `/` and a relative path resolves from there.
+fn split_parent(path: &str) -> Option<(&str, &str)> {
+    let trimmed = path.trim_end_matches('/');
+    let (parent, name) = match trimmed.rfind('/') {
+        Some(0) => ("/", &trimmed[1..]),
+        Some(i) => (&trimmed[..i], &trimmed[i + 1..]),
+        None => ("/", trimmed),
+    };
+    (!name.is_empty()).then_some((parent, name))
 }
+
+/// Printer clock passed to the existence-check listing in `finish_removal`, which reads only names, never dates.
+const NAMES_ONLY_LISTING_CLOCK: CurrentDateTime = CurrentDateTime::new(1970, 1, 1, 0, 0);
 
 /// Bundles the args a login-step command shares across calls, so each call site only spells
 /// out what varies: the command, its log label, the expected reply code, and the rejection.
@@ -742,12 +742,13 @@ where
 
     /// Removes a targeted file from non-volatile storage.
     ///
-    /// A `550` reply is treated as "already absent" and returns `Ok`, with its text logged. FTP
-    /// also uses `550` for "permission denied" and "file in use", which this cannot yet tell
-    /// apart from absence (GitHub issue #392).
+    /// Idempotent: deleting a file that is already gone returns `Ok`; a target the printer refused
+    /// to remove is [`Error::FtpReply`]. The printer answers both with a bare `550`, so on a `550`
+    /// this lists the parent directory and succeeds only if the target is no longer there
+    /// (GitHub issue #392).
     pub async fn delete_file(&mut self, remote_path: &str) -> Result<(), Error> {
         let reply = self.command("DELE", Some(remote_path)).await?;
-        expect_reply_or_absent("DELE", reply, FTP_FILE_ACTION_OK)
+        self.finish_removal("DELE", remote_path, reply).await
     }
 
     /// Uploads a binary payload directly to MicroSD card storage.
@@ -834,19 +835,60 @@ where
     }
 
     /// Creates a directory on the printer's MicroSD storage.
+    ///
+    /// Accepts `257`, the RFC 959 reply, and `250`, which the printer's own server sends instead
+    /// (P1S capture, GitHub issue #613). An existing directory is refused with `550`, as
+    /// [`Error::FtpReply`].
     pub async fn create_directory(&mut self, path: &str) -> Result<(), Error> {
         let reply = self.command("MKD", Some(path)).await?;
-        expect_reply("MKD", reply, &[FTP_PATHNAME_CREATED]).map(drop)
+        expect_reply("MKD", reply, &[FTP_PATHNAME_CREATED, FTP_FILE_ACTION_OK]).map(drop)
     }
 
-    /// Removes a directory from the printer's MicroSD storage.
+    /// Removes an empty directory from the printer's MicroSD storage.
     ///
-    /// Returns success for both `250` (deleted) and `550` (treated as already absent, text
-    /// logged), matching `delete_file`. On common servers `550` also answers `RMD` of a non-empty
-    /// directory, which this cannot yet tell apart (GitHub issue #392).
+    /// Idempotent like [`delete_file`](Self::delete_file). A non-empty directory is refused with
+    /// [`Error::FtpReply`]; remove its contents first.
     pub async fn remove_directory(&mut self, path: &str) -> Result<(), Error> {
         let reply = self.command("RMD", Some(path)).await?;
-        expect_reply_or_absent("RMD", reply, FTP_FILE_ACTION_OK)
+        self.finish_removal("RMD", path, reply).await
+    }
+
+    /// Resolves a `DELE`/`RMD` reply, accepting `550` only once a listing of the parent shows `path` is gone.
+    ///
+    /// The printer's server (`BBL-P003`, captured on a P1S, GitHub issue #392) answers `550` with
+    /// no text both for a missing target and for one it refuses to remove, such as a non-empty
+    /// directory, so the code alone can't say which. On a `550` this lists the parent directory:
+    /// no entry named like the target means it is gone (`Ok`), an entry means the removal was
+    /// refused, and a failed listing keeps the `550` as the error rather than guessing. Only the
+    /// `550` path pays for the extra `LIST`.
+    async fn finish_removal(
+        &mut self,
+        verb: &'static str,
+        path: &str,
+        reply: (u16, String),
+    ) -> Result<(), Error> {
+        if reply.0 != FTP_FILE_NOT_FOUND {
+            return expect_reply(verb, reply, &[FTP_FILE_ACTION_OK]).map(drop);
+        }
+        let refused = Error::FtpReply {
+            command: verb,
+            code: reply.0,
+            text: reply.1.into(),
+        };
+        let Some((parent, name)) = split_parent(path) else {
+            return Err(refused);
+        };
+        match self.list_directory(parent, NAMES_ONLY_LISTING_CLOCK).await {
+            Ok(entries) if !entries.iter().any(|entry| entry.name == name) => {
+                log::debug!("FTPS {verb} got 550 and {path:?} is not listed: already absent");
+                Ok(())
+            }
+            Ok(_) => Err(refused),
+            Err(e) => {
+                log::debug!("FTPS {verb} got 550 and listing {parent:?} failed: {e:?}");
+                Err(refused)
+            }
+        }
     }
 
     /// Renames a file or directory on the printer's MicroSD storage.
@@ -928,5 +970,24 @@ where
         }
         drop(control_stream);
         (tls_connector, data_factory, timer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_parent;
+
+    #[test]
+    fn test_split_parent() {
+        assert_eq!(split_parent("/model/job.3mf"), Some(("/model", "job.3mf")));
+        assert_eq!(
+            split_parent("/bambino-392-dir/"),
+            Some(("/", "bambino-392-dir"))
+        );
+        assert_eq!(split_parent("/a/b/c"), Some(("/a/b", "c")));
+        // The session never leaves `/`, so a bare name lives there.
+        assert_eq!(split_parent("job.3mf"), Some(("/", "job.3mf")));
+        assert_eq!(split_parent("/"), None);
+        assert_eq!(split_parent(""), None);
     }
 }

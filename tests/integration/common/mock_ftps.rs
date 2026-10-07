@@ -313,19 +313,42 @@ pub async fn run_mock_server_download_size_mismatch(
     respond(&mut server_control, b"213 99999\r\n").await;
 }
 
-/// Mock server for directory operations: MKD, RMD, RNFR/RNTO.
+/// Helper: answers `LIST path` with `lines` as the listing, over a fresh passive data channel.
+async fn serve_listing(
+    server_control: &mut tokio::io::DuplexStream,
+    buf: &mut [u8],
+    data_container: &DataContainer,
+    path: &str,
+    lines: &[u8],
+) {
+    let mut server_data = handle_pasv(server_control, buf, data_container).await;
+    let cmd = read_cmd(server_control, buf).await;
+    assert_eq!(cmd, format!("LIST {path}\r\n"));
+    respond(server_control, b"150 Here comes directory listing.\r\n").await;
+    server_data.write_all(lines).await.expect("LIST data write");
+    server_data.flush().await.expect("LIST data flush");
+    drop(server_data);
+    respond(server_control, b"226 Directory send OK.\r\n").await;
+}
+
+/// Mock server for directory operations: MKD, RMD, RNFR/RNTO, and the `550` re-check listing.
 pub async fn run_mock_server_dir_ops(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: DataContainer,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
     run_standard_handshake(&mut server_control, &mut buf, true).await;
 
-    // MKD
+    // MKD, answered the RFC 959 way.
     let cmd = read_cmd(&mut server_control, &mut buf).await;
     assert_eq!(cmd, "MKD /model/subdir\r\n");
     respond(&mut server_control, b"257 \"/model/subdir\" created.\r\n").await;
+
+    // MKD, answered the way a P1S's `BBL-P003` server does: a bare `250` (#613).
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "MKD /model/other\r\n");
+    respond(&mut server_control, b"250 \r\n").await;
 
     // RMD
     let cmd = read_cmd(&mut server_control, &mut buf).await;
@@ -345,10 +368,32 @@ pub async fn run_mock_server_dir_ops(
     assert_eq!(cmd, "RNTO /model/new.3mf\r\n");
     respond(&mut server_control, b"250 Rename successful.\r\n").await;
 
-    // RMD on non-existent directory (550 = idempotent success)
+    // RMD of a missing directory: a bare 550, and the parent listing doesn't show it (#392).
     let cmd = read_cmd(&mut server_control, &mut buf).await;
     assert_eq!(cmd, "RMD /model/gone\r\n");
-    respond(&mut server_control, b"550 No such file or directory.\r\n").await;
+    respond(&mut server_control, b"550 \r\n").await;
+    serve_listing(
+        &mut server_control,
+        &mut buf,
+        &data_container,
+        "/model",
+        b"drwxr-xr-x    2 1000     1000           0 Jun 17 12:14 other\r\n",
+    )
+    .await;
+
+    // DELE the printer refuses (a non-empty directory): the same bare 550, but the parent
+    // listing still shows the target.
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "DELE /model/full\r\n");
+    respond(&mut server_control, b"550 \r\n").await;
+    serve_listing(
+        &mut server_control,
+        &mut buf,
+        &data_container,
+        "/model",
+        b"drwxr-xr-x    2 1000     1000           0 Jun 17 12:14 full\r\n",
+    )
+    .await;
 }
 
 /// Mock server for `get_available_space()` when AVBL is unsupported.
