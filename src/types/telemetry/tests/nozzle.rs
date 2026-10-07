@@ -17,8 +17,7 @@ fn test_nozzle_info_standard_keys() {
                 }
             }
         }"#;
-    let nozzle = &serde_json::from_str::<TelemetryReport>(json_data)
-        .unwrap()
+    let nozzle = &parse_report(json_data)
         .device
         .unwrap()
         .nozzle
@@ -48,8 +47,7 @@ fn test_nozzle_info_idex_keys() {
                 }
             }
         }"#;
-    let nozzle = &serde_json::from_str::<TelemetryReport>(json_data)
-        .unwrap()
+    let nozzle = &parse_report(json_data)
         .device
         .unwrap()
         .nozzle
@@ -91,7 +89,7 @@ fn test_extruder_info_h2d_mock() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let extruder = report.device.unwrap().extruder.unwrap();
     let info = extruder.info.as_ref().unwrap();
     assert_eq!(info.len(), 2);
@@ -152,7 +150,7 @@ fn test_extruder_info_x2d_mock() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let extruder = report.device.unwrap().extruder.unwrap();
     let info = extruder.info.as_ref().unwrap();
     assert_eq!(info.len(), 2);
@@ -202,7 +200,7 @@ fn test_extruder_absent_on_single_nozzle() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     assert!(report.device.unwrap().extruder.is_none());
 }
 
@@ -214,10 +212,7 @@ fn test_legacy_nozzle_fields() {
                 "nozzle_diameter": "0.4"
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.nozzle_type.as_deref(), Some("stainless_steel"));
     assert_eq!(print.nozzle_diameter.as_deref(), Some("0.4"));
 }
@@ -235,12 +230,7 @@ fn test_nozzle_collection_extra_fields() {
                 }
             }
         }"#;
-    let nozzle = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .device
-        .unwrap()
-        .nozzle
-        .unwrap();
+    let nozzle = parse_report(json).device.unwrap().nozzle.unwrap();
     assert_eq!(nozzle.exist, Some(3));
     assert_eq!(nozzle.state, Some(1));
     assert_eq!(nozzle.src_id, Some(0));
@@ -256,8 +246,7 @@ fn test_nozzle_info_stat_field() {
                 }
             }
         }"#;
-    let nozzle = &serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
+    let nozzle = &parse_report(json)
         .device
         .unwrap()
         .nozzle
@@ -281,7 +270,7 @@ fn test_decode_nozzle_temperatures_composite_extruder_path() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let temps = decode_nozzle_temperatures(report.device(), None, None);
     // 3211296 = (49 << 16) | 32 -> actual=32, target=49
     assert_eq!(nozzle_tuples(&temps), vec![(0, 70, 70), (1, 32, 49)]);
@@ -300,7 +289,7 @@ fn test_decode_nozzle_temperatures_single_nozzle_flat_fallback() {
                 "nozzle_target_temper": 220.0
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let temps = decode_nozzle_temperatures(
         report.device(),
         report.print.as_ref().unwrap().nozzle_temper,
@@ -324,7 +313,7 @@ fn test_decode_nozzle_temperatures_flat_fallback_above_composite_threshold() {
                 "nozzle_target_temper": 600.0
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let temps = decode_nozzle_temperatures(
         report.device(),
         report.print.as_ref().unwrap().nozzle_temper,
@@ -348,7 +337,7 @@ fn test_decode_nozzle_temperatures_idex_swapped_fallback() {
                 "nozzle_target_temper": 220.0
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let temps = decode_nozzle_temperatures(
         report.device(),
         report.print.as_ref().unwrap().nozzle_temper,
@@ -371,7 +360,7 @@ fn test_decode_nozzle_temperatures_h2c_rack_nozzle_not_misclassified_as_idex() {
                 "nozzle_target_temper": 220.0
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let temps = decode_nozzle_temperatures(
         report.device(),
         report.print.as_ref().unwrap().nozzle_temper,

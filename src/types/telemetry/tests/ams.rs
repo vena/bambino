@@ -49,7 +49,7 @@ fn test_ams_nested_wire_format() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let print = report.print.unwrap();
     let ams_status = print.ams.unwrap();
 
@@ -82,7 +82,7 @@ fn test_ams_nested_wire_format() {
 fn test_ams_lite_on_a2l_unit_id_16_is_normalized_to_6_on_ingest() {
     let json =
         r#"{ "print": { "ams": { "ams": [ { "id": "16", "temp": "0", "humidity": "5" } ] } } }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let units = &report.print.unwrap().ams.unwrap().ams;
     assert_eq!(units[0].id, "6");
 
@@ -91,7 +91,7 @@ fn test_ams_lite_on_a2l_unit_id_16_is_normalized_to_6_on_ingest() {
         { "id": "0", "temp": "0", "humidity": "5" },
         { "id": "128", "temp": "0", "humidity": "5" }
     ] } } }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let units = &report.print.unwrap().ams.unwrap().ams;
     assert_eq!(units[0].id, "0");
     assert_eq!(units[1].id, "128");
@@ -121,7 +121,7 @@ fn test_ams_drying_fields() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let unit = &report.print.unwrap().ams.unwrap().ams[0];
     assert_eq!(unit.dry_time, Some(142));
     assert_eq!(unit.humidity_raw.as_deref(), Some("8"));
@@ -151,10 +151,7 @@ fn test_virtual_tray_deserialization() {
                 }
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_data)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_data);
     let vt = print.vt_tray.unwrap();
     assert_eq!(vt.id, "254");
     assert_eq!(vt.tray_type.as_deref(), Some("PLA"));
@@ -176,12 +173,7 @@ fn test_virtual_tray_empty() {
                 }
             }
         }"#;
-    let vt = serde_json::from_str::<TelemetryReport>(json_data)
-        .unwrap()
-        .print
-        .unwrap()
-        .vt_tray
-        .unwrap();
+    let vt = parse_print(json_data).vt_tray.unwrap();
     assert_eq!(vt.tray_type.as_deref(), Some(""));
     assert_eq!(vt.remain, Some(0));
 }
@@ -195,10 +187,7 @@ fn test_hw_switch_state_and_ams_status() {
                 "s_obj": [2, 5, 7]
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.hw_switch_state, Some(1));
     assert_eq!(print.ams_status, Some(768));
     assert_eq!(print.s_obj, Some(vec![2, 5, 7]));
@@ -226,10 +215,7 @@ fn test_vir_slot_deserialization() {
                 ]
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     let slots = print.vir_slot.unwrap();
     assert_eq!(slots.len(), 2);
     assert_eq!(slots[0].id, "254");
@@ -255,12 +241,7 @@ fn test_ams_status_report_extra_fields() {
                 }
             }
         }"#;
-    let ams = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap();
+    let ams = parse_print(json).ams.unwrap();
     assert_eq!(ams.tray_read_done_bits.as_deref(), Some("ff"));
     assert_eq!(ams.tray_reading_bits.as_deref(), Some("0"));
     assert_eq!(ams.tray_tar.as_deref(), Some("3"));
@@ -282,12 +263,7 @@ fn test_ams_status_report_calibrate_remain_flag_and_cfs() {
                 }
             }
         }"#;
-    let ams = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap();
+    let ams = parse_print(json).ams.unwrap();
     assert_eq!(ams.calibrate_remain_flag, Some(true));
     assert_eq!(
         ams.cfs,
@@ -307,12 +283,7 @@ fn test_ams_filament_step_unknown_value_preserved() {
                 "ams": { "ams": [], "cfs": [99] }
             }
         }"#;
-    let ams = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap();
+    let ams = parse_print(json).ams.unwrap();
     assert_eq!(ams.cfs, Some(vec![AmsFilamentStep::Unknown(99)]));
 }
 
@@ -350,13 +321,7 @@ fn test_ams_unit_info_bitmask() {
                 }
             }
         }"#;
-    let unit = &serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap()
-        .ams[0];
+    let unit = &parse_print(json).ams.unwrap().ams[0];
     assert_eq!(unit.info.as_deref(), Some("11002103"));
     assert_eq!(unit.dry_sf_reason, Some(vec![0, 0, 0, 0]));
 
@@ -434,7 +399,7 @@ fn test_dry_block_reasons_decode_from_unit() {
             }
         }
     }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let unit = &report.print.as_ref().unwrap().ams.as_ref().unwrap().ams[0];
 
     // Decoded in reported order, raw field untouched — the enum is a layer over the Vec<i32>,
@@ -469,7 +434,7 @@ fn test_primary_dry_block_reason_falls_back_to_first_reported() {
             }
         }
     }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let units = &report.print.as_ref().unwrap().ams.as_ref().unwrap().ams;
 
     // No reason needs the user, so reported order decides.
@@ -942,13 +907,7 @@ fn test_ams_tray_remain_g_and_filament_setting_id() {
                 }
             }
         }"#;
-    let unit = &serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap()
-        .ams[0];
+    let unit = &parse_print(json).ams.unwrap().ams[0];
     let trays = unit.tray.as_ref().unwrap();
 
     assert_eq!(trays[0].remain_g, Some(420));

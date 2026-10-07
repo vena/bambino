@@ -3,58 +3,37 @@ use super::*;
 #[test]
 fn test_door_open_from_home_flag() {
     let json_open = r#"{ "print": { "home_flag": 8388608 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_open)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_open);
     assert!(print.is_door_open_from_home_flag());
 
     let json_closed = r#"{ "print": { "home_flag": 0 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_closed)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_closed);
     assert!(!print.is_door_open_from_home_flag());
 }
 
 #[test]
 fn test_is_220v_power_from_home_flag() {
     let json_220v = r#"{ "print": { "home_flag": 8 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_220v)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_220v);
     assert!(print.is_220v_power());
 
     let json_110v = r#"{ "print": { "home_flag": 0 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_110v)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_110v);
     assert!(!print.is_220v_power());
 
     let json_missing = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_missing)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_missing);
     assert!(!print.is_220v_power());
 }
 
 #[test]
 fn test_door_open_from_stat() {
     let json_open = r#"{ "print": { "stat": "0x00800000" } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_open)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_open);
     assert!(print.is_door_open_from_stat());
 
     let json_closed = r#"{ "print": { "stat": "0x00000000" } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_closed)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_closed);
     assert!(!print.is_door_open_from_stat());
 }
 
@@ -69,10 +48,7 @@ fn test_door_open_from_long_new_gen_stat() {
         ("1001000A08070", true),
     ] {
         let json = format!(r#"{{ "print": {{ "stat": "{stat}" }} }}"#);
-        let print = serde_json::from_str::<TelemetryReport>(&json)
-            .expect("valid json")
-            .print
-            .expect("print present");
+        let print = parse_print(&json);
         assert_eq!(print.is_door_open_from_stat(), open, "stat {stat}");
     }
 }
@@ -90,10 +66,7 @@ fn test_new_gen_numeric_ids_and_float_wear_keep_the_frame() {
         "design_id": 0,
         "device": { "nozzle": { "info": [ { "id": 0, "wear": 0.0 } ] } }
     } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .expect("new-gen report must deserialize")
-        .print
-        .expect("print present");
+    let print = parse_print(json);
     assert_eq!(print.canvas_id.as_deref(), Some("0"));
     assert_eq!(print.batch_id.as_deref(), Some("0"));
     assert_eq!(print.task_id.as_deref(), Some("12345"));
@@ -107,10 +80,7 @@ fn test_new_gen_numeric_ids_and_float_wear_keep_the_frame() {
 #[test]
 fn test_door_open_missing_fields() {
     let json_empty = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_empty)
-        .expect("valid json")
-        .print
-        .expect("print present");
+    let print = parse_print(json_empty);
     assert!(!print.is_door_open_from_home_flag());
     assert!(!print.is_door_open_from_stat());
 }
@@ -133,9 +103,8 @@ fn test_device_nesting_in_pushall() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
-    let print = report.print.unwrap();
-    let device = print.device.expect("device nested in print");
+    let report = parse_report(json_data);
+    let device = report.device().cloned().expect("device nested in print");
     let ctc_temp = device.ctc.unwrap().info.unwrap().temp.unwrap();
     assert_eq!(ctc_temp, 3932208);
     assert_eq!(device.nozzle.unwrap().info.unwrap()[0].id, 0);
@@ -151,9 +120,9 @@ fn test_device_incremental_top_level() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     assert!(report.print.is_none());
-    let device = report.device.unwrap();
+    let device = report.device().cloned().unwrap();
     let nozzles = device.nozzle.unwrap().info.unwrap();
     assert_eq!(nozzles.len(), 2);
     assert_eq!(nozzles[1].id, 1);
@@ -164,24 +133,15 @@ fn test_ethernet_active_net_conf_bitmask() {
     // is_ethernet_active() reads print.net.conf bit 0, not the confirmed-wrong
     // home_flag bit 18.
     let json = r#"{ "print": { "net": { "conf": 1 } } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert!(print.is_ethernet_active());
 
     let json_off = r#"{ "print": { "net": { "conf": 0 } } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_off)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_off);
     assert!(!print.is_ethernet_active());
 
     let json_missing = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_missing)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_missing);
     assert!(!print.is_ethernet_active());
 }
 
@@ -197,42 +157,27 @@ fn test_sdcard_state_bitmask() {
     ];
     for (home_flag, expected) in cases {
         let json = format!(r#"{{ "print": {{ "home_flag": {home_flag} }} }}"#);
-        let print = serde_json::from_str::<TelemetryReport>(&json)
-            .unwrap()
-            .print
-            .unwrap();
+        let print = parse_print(&json);
         assert_eq!(print.sdcard_state(), Some(expected));
     }
 
     let json_missing = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_missing)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_missing);
     assert_eq!(print.sdcard_state(), None);
 }
 
 #[test]
 fn test_ethernet_active_via_wifi_signal() {
     let json = r#"{ "print": { "wifi_signal": "-90dBm" } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert!(print.is_ethernet_active_via_wifi_signal());
 
     let json_off = r#"{ "print": { "wifi_signal": "-52dBm" } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_off)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_off);
     assert!(!print.is_ethernet_active_via_wifi_signal());
 
     let json_missing = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_missing)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_missing);
     assert!(!print.is_ethernet_active_via_wifi_signal());
 }
 
@@ -243,18 +188,12 @@ fn test_plate_idx_accepts_number_and_string() {
     // merely miss the string form — it would fail the whole frame, losing every other field
     // in that push to gain one.
     let as_number = r#"{ "print": { "plate_idx": 2, "layer_num": 516 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(as_number)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(as_number);
     assert_eq!(print.plate_idx, Some(2));
     assert_eq!(print.layer_num, Some(516));
 
     let as_string = r#"{ "print": { "plate_idx": "2", "layer_num": 516 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(as_string)
-        .expect("a string plate_idx must not fail the frame")
-        .print
-        .unwrap();
+    let print = parse_print(as_string);
     assert_eq!(print.plate_idx, Some(2));
     assert_eq!(
         print.layer_num,
@@ -264,18 +203,12 @@ fn test_plate_idx_accepts_number_and_string() {
 
     // Unparseable degrades to None rather than discarding the frame.
     let junk = r#"{ "print": { "plate_idx": "", "layer_num": 516 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(junk)
-        .expect("an unreadable plate_idx must not fail the frame")
-        .print
-        .unwrap();
+    let print = parse_print(junk);
     assert_eq!(print.plate_idx, None);
     assert_eq!(print.layer_num, Some(516));
 
     let absent = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(absent)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(absent);
     assert_eq!(print.plate_idx, None);
 }
 
@@ -285,31 +218,16 @@ fn test_power_on_flag_and_tray_exist_bits_are_nested_under_ams() {
     // pushall capture and both upstreams (pybambu reads them off `data.get("ams", {})`,
     // bambuddy off `ams_data`). `PrinterTelemetry` deliberately does not bind them.
     let json = r#"{ "print": { "ams": { "power_on_flag": false, "tray_exist_bits": "c" } } }"#;
-    let ams = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap();
+    let ams = parse_print(json).ams.unwrap();
     assert_eq!(ams.power_on_flag, Some(false));
     assert_eq!(ams.tray_exist_bits.as_deref(), Some("c"));
 
     let json_true = r#"{ "print": { "ams": { "power_on_flag": true } } }"#;
-    let ams = serde_json::from_str::<TelemetryReport>(json_true)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap();
+    let ams = parse_print(json_true).ams.unwrap();
     assert_eq!(ams.power_on_flag, Some(true));
 
     let json_missing = r#"{ "print": { "ams": {} } }"#;
-    let ams = serde_json::from_str::<TelemetryReport>(json_missing)
-        .unwrap()
-        .print
-        .unwrap()
-        .ams
-        .unwrap();
+    let ams = parse_print(json_missing).ams.unwrap();
     assert_eq!(ams.power_on_flag, None);
     assert_eq!(ams.tray_exist_bits, None);
 }
@@ -351,10 +269,7 @@ fn test_lights_report_deserialization() {
                 ]
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     let lights = print.lights_report.unwrap();
     assert_eq!(lights.len(), 3);
     assert_eq!(lights[0].node.as_deref(), Some("chamber_light"));
@@ -378,10 +293,7 @@ fn test_ext_tool_laser_mounted() {
                 }
             }
         }"#;
-    let device = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .device
-        .unwrap();
+    let device = parse_report(json).device.unwrap();
     let ext_tool = device.ext_tool.unwrap();
     assert_eq!(ext_tool.mount, Some(1));
     assert_eq!(ext_tool.tool_type.as_deref(), Some("LB00"));
@@ -397,12 +309,7 @@ fn test_ext_tool_not_mounted() {
                 "ext_tool": { "mount": 0 }
             }
         }"#;
-    let ext_tool = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .device
-        .unwrap()
-        .ext_tool
-        .unwrap();
+    let ext_tool = parse_report(json).device.unwrap().ext_tool.unwrap();
     assert_eq!(ext_tool.mount, Some(0));
     assert!(ext_tool.tool_type.is_none());
 }
@@ -419,12 +326,7 @@ fn test_ipcam_rtsp_url() {
                 }
             }
         }"#;
-    let ipcam = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ipcam
-        .unwrap();
+    let ipcam = parse_print(json).ipcam.unwrap();
     assert_eq!(
         ipcam.rtsp_url.as_deref(),
         Some("rtsps://192.168.1.64/streaming/live/1")
@@ -440,12 +342,7 @@ fn test_ipcam_rtsp_url_disabled() {
                 }
             }
         }"#;
-    let ipcam = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap()
-        .ipcam
-        .unwrap();
+    let ipcam = parse_print(json).ipcam.unwrap();
     assert_eq!(ipcam.rtsp_url.as_deref(), Some("disable"));
 }
 
@@ -469,30 +366,6 @@ fn test_version_module_extra_fields() {
 }
 
 #[test]
-fn test_device_top_level() {
-    let json = r#"{
-            "device": {
-                "bed": { "info": { "temp": 4587590 }, "state": 2 }
-            }
-        }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert!(report.device().is_some());
-}
-
-#[test]
-fn test_device_nested_in_print() {
-    let json = r#"{
-            "print": {
-                "device": {
-                    "bed": { "info": { "temp": 4587590 }, "state": 2 }
-                }
-            }
-        }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert!(report.device().is_some());
-}
-
-#[test]
 fn test_device_both_present_top_level_wins() {
     let json = r#"{
             "device": {
@@ -504,7 +377,7 @@ fn test_device_both_present_top_level_wins() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let device = report.device().unwrap();
     assert_eq!(
         device.airduct.as_ref().unwrap().parts.as_ref().unwrap()[0].id,
@@ -513,17 +386,10 @@ fn test_device_both_present_top_level_wins() {
 }
 
 #[test]
-fn test_device_neither_present() {
-    let json = r#"{ "print": {} }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert!(report.device().is_none());
-}
-
-#[test]
-fn test_device_empty_report() {
-    let json = r#"{}"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert!(report.device().is_none());
+fn test_device_absent() {
+    for json in [r#"{ "print": {} }"#, "{}"] {
+        assert!(parse_report(json).device().is_none(), "{json}");
+    }
 }
 
 #[test]

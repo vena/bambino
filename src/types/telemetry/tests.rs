@@ -1,10 +1,14 @@
 use super::merge::Mergeable;
 use super::*;
 
+/// Parses a fixture as a whole report.
+fn parse_report(json: &str) -> TelemetryReport {
+    serde_json::from_str(json).expect("fixture parses")
+}
+
 /// Parses a fixture into its `print` object.
-fn print(json: &str) -> PrinterTelemetry {
-    serde_json::from_str::<TelemetryReport>(json)
-        .expect("fixture parses")
+fn parse_print(json: &str) -> PrinterTelemetry {
+    parse_report(json)
         .print
         .expect("fixture has a print object")
 }

@@ -57,6 +57,15 @@ impl Loose {
         }
     }
 
+    fn into_f64(self) -> Option<f64> {
+        match self {
+            Loose::Int(i) => Some(i as f64),
+            Loose::Float(f) => Some(f),
+            Loose::Str(s) => s.trim().parse().ok(),
+            _ => None,
+        }
+    }
+
     fn into_string(self) -> Option<String> {
         match self {
             Loose::Str(s) => Some(s),
@@ -93,6 +102,19 @@ where
     Ok(Loose::read(deserializer)?
         .into_i64()
         .and_then(|i| T::try_from(i).ok()))
+}
+
+/// A float sent as a JSON number (integer or not) or a decimal string.
+///
+/// Temperatures arrive as integers on some models and floats on others [REF-THER-DECODE]; the
+/// quoted form is tolerated for the same reason as [`deserialize_permissive_opt_int`].
+pub(crate) fn deserialize_permissive_opt_f64<'de, D>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Loose::read(deserializer)?.into_f64())
 }
 
 /// A 32-bit flag word, keeping its bit pattern when firmware sends it as a negative number.
@@ -150,12 +172,15 @@ where
 {
     Ok(match Loose::read(deserializer)? {
         Loose::Int(i) => u32::try_from(i).unwrap_or(0),
-        Loose::Str(s) => s
-            .trim()
-            .strip_prefix("0x")
-            .or_else(|| s.trim().strip_prefix("0X"))
-            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-            .unwrap_or(0),
+        Loose::Str(s)
+            if s.trim_start()
+                .get(..2)
+                .is_some_and(|p| p.eq_ignore_ascii_case("0x")) =>
+        {
+            super::bits::hex_u64(&s)
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(0)
+        }
         _ => 0,
     })
 }

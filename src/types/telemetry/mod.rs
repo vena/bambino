@@ -43,8 +43,9 @@ pub use device::{
 pub use diagnostics::{CtcInfo, CtcTelemetry, HmsEntry, IpcamTelemetry};
 pub(crate) use loose::{
     deserialize_permissive_hms_u32, deserialize_permissive_opt_bool,
-    deserialize_permissive_opt_flags, deserialize_permissive_opt_int,
-    deserialize_permissive_opt_string, deserialize_permissive_string,
+    deserialize_permissive_opt_f64, deserialize_permissive_opt_flags,
+    deserialize_permissive_opt_int, deserialize_permissive_opt_string,
+    deserialize_permissive_string,
 };
 pub use report::{
     LightReport, NetInfo, PrintPauseList, PrintPausePoint, PrinterTelemetry, SdcardState,

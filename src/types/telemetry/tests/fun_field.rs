@@ -1,49 +1,36 @@
 use super::*;
 
 #[test]
-fn test_fun_field_deserialization_top_level() {
-    let json = r#"{ "fun": "3EC1AFFF9CFF" }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.fun.as_deref(), Some("3EC1AFFF9CFF"));
-}
-
-#[test]
-fn test_fun_field_deserialization_nested_in_print() {
-    let json = r#"{ "print": { "fun": "1AFFF9CFF" } }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.print.unwrap().fun.as_deref(), Some("1AFFF9CFF"));
-}
-
-#[test]
-fn test_fun_top_level_only() {
-    let json = r#"{ "fun": "3EC1AFFF9CFF" }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.fun(), Some("3EC1AFFF9CFF"));
-}
-
-#[test]
-fn test_fun_print_nested_only() {
-    let json = r#"{ "print": { "fun": "3EC1AFFF9CFF" } }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.fun(), Some("3EC1AFFF9CFF"));
+fn test_fun_location_fallback() {
+    // `fun` drifts between the top level and `print` across firmware; top level wins.
+    for (json, expected) in [
+        (r#"{ "fun": "3EC1AFFF9CFF" }"#, Some("3EC1AFFF9CFF")),
+        (r#"{ "print": { "fun": "1AFFF9CFF" } }"#, Some("1AFFF9CFF")),
+        (
+            r#"{ "fun": "TOP_LEVEL", "print": { "fun": "NESTED" } }"#,
+            Some("TOP_LEVEL"),
+        ),
+        (r#"{ "print": {} }"#, None),
+    ] {
+        assert_eq!(parse_report(json).fun(), expected, "{json}");
+    }
 }
 
 #[test]
 fn test_fun2_deserialization_and_location_fallback() {
     // BambuStudio reads only print.fun2, but this accessor mirrors fun's documented drift.
-    let nested: TelemetryReport = serde_json::from_str(r#"{ "print": { "fun2": "20" } }"#).unwrap();
+    let nested = parse_report(r#"{ "print": { "fun2": "20" } }"#);
     assert_eq!(nested.fun2(), Some("20"));
 
-    let top: TelemetryReport = serde_json::from_str(r#"{ "fun2": "20" }"#).unwrap();
+    let top = parse_report(r#"{ "fun2": "20" }"#);
     assert_eq!(top.fun2(), Some("20"));
 
     // Top level wins, same first-found-wins order as fun().
-    let both: TelemetryReport =
-        serde_json::from_str(r#"{ "fun2": "20", "print": { "fun2": "00" } }"#).unwrap();
+    let both = parse_report(r#"{ "fun2": "20", "print": { "fun2": "00" } }"#);
     assert_eq!(both.fun2(), Some("20"));
 
     // Absent entirely is None, not a defaulted zero.
-    let absent: TelemetryReport = serde_json::from_str(r#"{ "print": {} }"#).unwrap();
+    let absent = parse_report(r#"{ "print": {} }"#);
     assert_eq!(absent.fun2(), None);
     assert_eq!(absent.supports_remote_dry(), None);
 }
@@ -86,29 +73,12 @@ fn test_fun2_bit_handles_strings_longer_than_u64() {
 
 #[test]
 fn test_supports_remote_dry_reads_bit_five() {
-    let on: TelemetryReport = serde_json::from_str(r#"{ "print": { "fun2": "20" } }"#).unwrap();
+    let on = parse_report(r#"{ "print": { "fun2": "20" } }"#);
     assert_eq!(on.supports_remote_dry(), Some(true));
 
-    let off: TelemetryReport = serde_json::from_str(r#"{ "print": { "fun2": "1F" } }"#).unwrap();
+    let off = parse_report(r#"{ "print": { "fun2": "1F" } }"#);
     assert_eq!(off.supports_remote_dry(), Some(false));
 
     // A printer reporting bit 5 clear is a real "no", distinct from never reporting fun2.
     assert_ne!(off.supports_remote_dry(), None);
-}
-
-#[test]
-fn test_fun_both_present_top_level_wins() {
-    let json = r#"{
-            "fun": "TOP_LEVEL",
-            "print": { "fun": "NESTED" }
-        }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.fun(), Some("TOP_LEVEL"));
-}
-
-#[test]
-fn test_fun_neither_present() {
-    let json = r#"{ "print": {} }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert!(report.fun().is_none());
 }

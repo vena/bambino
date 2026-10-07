@@ -58,19 +58,35 @@ impl LightReport {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrintPausePoint {
     /// Percent complete at which this pause occurs.
-    #[serde(rename = "p")]
+    #[serde(
+        rename = "p",
+        default,
+        deserialize_with = "super::deserialize_permissive_opt_int"
+    )]
     pub progress_percent: Option<i32>,
 
     /// Remaining print time at this pause, in seconds.
-    #[serde(rename = "t")]
+    #[serde(
+        rename = "t",
+        default,
+        deserialize_with = "super::deserialize_permissive_opt_int"
+    )]
     pub remaining_time_secs: Option<i32>,
 
     /// Index of this pause within the job's schedule.
-    #[serde(rename = "i")]
+    #[serde(
+        rename = "i",
+        default,
+        deserialize_with = "super::deserialize_permissive_opt_int"
+    )]
     pub pause_index: Option<i32>,
 
     /// Layer number at which this pause occurs.
-    #[serde(rename = "l")]
+    #[serde(
+        rename = "l",
+        default,
+        deserialize_with = "super::deserialize_permissive_opt_int"
+    )]
     pub layer: Option<i32>,
 }
 
@@ -86,6 +102,7 @@ pub struct PrintPausePoint {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrintPauseList {
     /// Total number of pauses scheduled for the job.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub total: Option<i32>,
 
     /// The scheduled pauses themselves. Absent and empty are distinct on the wire; both mean
@@ -271,20 +288,25 @@ pub struct PrinterTelemetry {
     ///
     /// Wire sends both integers and floats depending on model. Never composite-packed —
     /// unlike `chamber_temper`, no unpacking is needed here.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub nozzle_target_temper: Option<f64>,
 
     /// Hotend actual temperature register.
     ///
     /// Wire sends both integers and floats depending on model [REF-THER-DECODE].
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub nozzle_temper: Option<f64>,
 
     /// Heated build-plate temperature register (actual value; never composite-packed).
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub bed_temper: Option<f64>,
 
     /// Explicit bed target temperature. Separate from composite-packed `bed_temper`.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub bed_target_temper: Option<f64>,
 
     /// Active chamber heater or sensor telemetry (actual, target, or composite packed).
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub chamber_temper: Option<f64>,
 
     /// Camera and recording telemetry. Nested as `print.ipcam` on the wire.
@@ -519,7 +541,7 @@ pub struct PrinterTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetInfo {
     /// Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub conf: Option<u32>,
 }
 

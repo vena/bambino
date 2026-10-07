@@ -42,13 +42,8 @@ pub fn evaluate_spool_presence(
     tray_id: u8,
     power_on_flag: bool,
 ) -> Option<bool> {
-    // Strip optional hex prefixes prior to radix conversions
-    let clean_bits = tray_exist_bits
-        .strip_prefix("0x")
-        .or_else(|| tray_exist_bits.strip_prefix("0X"))
-        .unwrap_or(tray_exist_bits);
-
-    let parsed_mask = u32::from_str_radix(clean_bits, 16).ok()?;
+    let parsed_mask = crate::types::telemetry::bits::hex_u64(tray_exist_bits)
+        .and_then(|mask| u32::try_from(mask).ok())?;
 
     // Evaluate the shutdown exception boundary
     if parsed_mask == 0 && !power_on_flag {

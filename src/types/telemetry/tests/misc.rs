@@ -34,7 +34,7 @@ fn test_airduct_deserialization() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let device = report.device.unwrap();
     let airduct = device.airduct.unwrap();
     let parts = airduct.parts.unwrap();
@@ -51,7 +51,7 @@ fn test_print_error_deserialization() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let print = report.print.unwrap();
     assert_eq!(print.print_error, Some(83902476));
 }
@@ -67,7 +67,7 @@ fn test_hms_array_deserialization() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let print = report.print.unwrap();
     let hms = print.hms.unwrap();
     assert_eq!(hms.len(), 2);
@@ -91,7 +91,7 @@ fn test_hms_entry_tolerates_hex_string_attr_and_code() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let hms = report.print.unwrap().hms.unwrap();
     assert_eq!(hms.len(), 3);
     assert_eq!(hms[0].attr, 0x03000005);
@@ -116,7 +116,7 @@ fn test_hms_entry_missing_attr_code_defaults_to_zero() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let hms = report.print.unwrap().hms.unwrap();
     assert_eq!(hms.len(), 2);
     assert_eq!(hms[0].attr, 0);
@@ -128,11 +128,11 @@ fn test_hms_entry_missing_attr_code_defaults_to_zero() {
 #[test]
 fn test_hms_absent_vs_empty() {
     let absent = r#"{ "print": {} }"#;
-    let report: TelemetryReport = serde_json::from_str(absent).unwrap();
+    let report = parse_report(absent);
     assert!(report.print.unwrap().hms.is_none());
 
     let empty = r#"{ "print": { "hms": [] } }"#;
-    let report: TelemetryReport = serde_json::from_str(empty).unwrap();
+    let report = parse_report(empty);
     let hms = report.print.unwrap().hms.unwrap();
     assert!(hms.is_empty());
 }
@@ -152,7 +152,7 @@ fn test_camera_fields_deserialization() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let ipcam = report.print.unwrap().ipcam.unwrap();
     assert_eq!(ipcam.ipcam_dev.as_deref(), Some("1"));
     assert_eq!(ipcam.ipcam_record.as_deref(), Some("enable"));
@@ -212,7 +212,7 @@ fn test_xcam_deserialization() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let print = report.print.unwrap();
     let xcam = print.xcam.unwrap();
     assert_eq!(xcam.first_layer_inspector, Some(true));
@@ -342,7 +342,7 @@ fn test_xcam_unmodeled_keys_round_trip() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let xcam = report.print.unwrap().xcam.unwrap();
     assert_eq!(xcam.cfg, Some(224695));
     assert_eq!(xcam.halt_print_sensitivity.as_deref(), Some("medium"));
@@ -387,7 +387,7 @@ fn test_mc_print_sub_stage_deserialization() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let print = report.print.unwrap();
     assert_eq!(print.mc_print_sub_stage, Some(3));
 }
@@ -409,7 +409,7 @@ fn test_full_telemetry_with_diagnostics() {
             }
         }"#;
 
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let print = report.print.unwrap();
     assert_eq!(print.gcode_state.as_deref(), Some("RUNNING"));
     assert_eq!(print.mc_print_sub_stage, Some(0));
@@ -424,9 +424,7 @@ fn test_full_telemetry_with_diagnostics() {
 #[test]
 fn test_p1s_wire_capture_end_to_end() {
     let json_data = include_str!("../../../../tests/mocks/P1S.json");
-    let report: TelemetryReport =
-        serde_json::from_str(json_data).expect("P1S wire capture must deserialize");
-    let print = report.print.expect("print present");
+    let print = parse_print(json_data);
 
     assert_eq!(print.gcode_state.as_deref(), Some("FINISH"));
     assert_eq!(
@@ -444,26 +442,21 @@ fn test_p1s_wire_capture_end_to_end() {
     assert_eq!(print.sdcard, Some(true));
     assert_eq!(print.wifi_signal.as_deref(), Some("-41dBm"));
 
-    // Fix A: float temps deserialize correctly
+    // Float temperatures.
     assert!((print.bed_temper.unwrap() - 27.625).abs() < 0.001);
     assert!((print.nozzle_temper.unwrap() - 29.46875).abs() < 0.001);
     assert_eq!(print.nozzle_target_temper.unwrap() as u32, 0);
     assert_eq!(print.chamber_temper.unwrap() as u32, 5);
-
-    // Fix E: bed_target_temper
     assert_eq!(print.bed_target_temper.unwrap() as u32, 0);
 
-    // Fix H: total_layer_num alias
-    assert_eq!(print.total_layers, Some(27));
-
-    // Fix G: nested ipcam
+    // Nested ipcam.
     let ipcam = print.ipcam.expect("ipcam present");
     assert_eq!(ipcam.ipcam_dev.as_deref(), Some("1"));
     assert_eq!(ipcam.ipcam_record.as_deref(), Some("disable"));
     assert_eq!(ipcam.timelapse.as_deref(), Some("disable"));
     assert_eq!(ipcam.mode_bits, Some(3));
 
-    // Fix F: AMS tray IDs are strings
+    // AMS tray ids are strings.
     let ams = print.ams.expect("ams present");
     assert_eq!(ams.ams.len(), 1);
     let unit = &ams.ams[0];
@@ -473,7 +466,6 @@ fn test_p1s_wire_capture_end_to_end() {
     assert_eq!(unit_tray[0].id, "0");
     assert_eq!(unit_tray[3].id, "3");
 
-    // Fix D: vt_tray
     let vt = print.vt_tray.expect("vt_tray present");
     assert_eq!(vt.id, "254");
     assert_eq!(vt.tray_color.as_deref(), Some("FFFFFF00"));
@@ -485,20 +477,22 @@ fn test_p1s_wire_capture_end_to_end() {
 #[test]
 fn test_temperature_fields_accept_float_and_int() {
     let json_float = r#"{ "print": { "bed_temper": 27.625, "nozzle_temper": 29.46875 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_float)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_float);
     assert!((print.bed_temper.unwrap() - 27.625).abs() < 0.001);
     assert!((print.nozzle_temper.unwrap() - 29.46875).abs() < 0.001);
 
     let json_int = r#"{ "print": { "bed_temper": 100, "nozzle_temper": 40 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_int)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json_int);
     assert_eq!(print.bed_temper.unwrap() as u32, 100);
     assert_eq!(print.nozzle_temper.unwrap() as u32, 40);
+
+    let json_quoted =
+        r#"{ "print": { "bed_temper": "27.5", "chamber_temper": "35", "nozzle_temper": "hot" } }"#;
+    let print = parse_print(json_quoted);
+    assert_eq!(print.bed_temper, Some(27.5));
+    assert_eq!(print.chamber_temper, Some(35.0));
+    // Unreadable degrades the field, not the frame.
+    assert_eq!(print.nozzle_temper, None);
 }
 
 #[test]
@@ -540,17 +534,18 @@ fn test_deserialize_permissive_bool_variants() {
         ("null", None),
     ] {
         let json = format!(r#"{{ "print": {{ "sdcard": {wire} }} }}"#);
-        assert_eq!(print(&json).sdcard, expected, "sdcard: {wire}");
+        assert_eq!(parse_print(&json).sdcard, expected, "sdcard: {wire}");
     }
     // Absent is "not reported", distinct from a reported `false`.
-    assert_eq!(print(r#"{ "print": {} }"#).sdcard, None);
+    assert_eq!(parse_print(r#"{ "print": {} }"#).sdcard, None);
 }
 
 #[test]
 fn test_malformed_field_shape_degrades_the_field_not_the_frame() {
     // A value of a shape no field has (an object here) loses that field only; the rest of the
     // push still parses (see `loose.rs`'s error policy).
-    let print = print(r#"{ "print": { "sdcard": {}, "spd_lvl": {}, "gcode_state": "IDLE" } }"#);
+    let print =
+        parse_print(r#"{ "print": { "sdcard": {}, "spd_lvl": {}, "gcode_state": "IDLE" } }"#);
     assert_eq!(print.sdcard, None);
     assert_eq!(print.spd_lvl, None);
     assert_eq!(print.gcode_state.as_deref(), Some("IDLE"));
@@ -559,39 +554,40 @@ fn test_malformed_field_shape_degrades_the_field_not_the_frame() {
 #[test]
 fn test_numeric_fields_accept_the_quoted_form() {
     let print =
-        print(r#"{ "print": { "spd_lvl": "2", "remain_time": "15", "print_error": "0" } }"#);
+        parse_print(r#"{ "print": { "spd_lvl": "2", "remain_time": "15", "print_error": "0" } }"#);
     assert_eq!(print.spd_lvl, Some(2));
     assert_eq!(print.remain_time, Some(15));
     assert_eq!(print.print_error, Some(0));
+
+    let print = parse_print(
+        r#"{ "print": { "net": { "conf": "1" }, "p_list": { "total": "1", "list": [{ "p": "50", "t": "600", "i": "0", "l": "12" }] } } }"#,
+    );
+    assert_eq!(print.net.and_then(|n| n.conf), Some(1));
+    let pauses = print.p_list.expect("p_list parses");
+    assert_eq!(pauses.total, Some(1));
+    let point = &pauses.list.expect("list present")[0];
+    assert_eq!(
+        (
+            point.progress_percent,
+            point.remaining_time_secs,
+            point.pause_index,
+            point.layer
+        ),
+        (Some(50), Some(600), Some(0), Some(12))
+    );
 }
 
 #[test]
 fn test_total_layer_num_alias() {
     // Wire name: total_layer_num
     let json = r#"{ "print": { "total_layer_num": 42 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.total_layers, Some(42));
 
     // Legacy name still works
     let json2 = r#"{ "print": { "total_layers": 99 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json2)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json2);
     assert_eq!(print.total_layers, Some(99));
-}
-
-#[test]
-fn test_mc_percent_deserialization() {
-    let json = r#"{ "print": { "mc_percent": 100 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
-    assert_eq!(print.mc_percent, Some(100));
 }
 
 /// Firmware sends several progress fields as either a JSON number or a decimal string, and a
@@ -606,10 +602,7 @@ fn test_progress_fields_accept_quoted_numbers() {
         "layer_num": "516",
         "total_layer_num": "879"
     } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.mc_percent, Some(68));
     assert_eq!(print.mc_remaining_time, Some(99));
     assert_eq!(print.layer_num, Some(516));
@@ -617,10 +610,7 @@ fn test_progress_fields_accept_quoted_numbers() {
 
     // An unparseable value degrades to `None` instead of discarding every other field.
     let junk = r#"{ "print": { "mc_percent": "n/a", "layer_num": 7 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(junk)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(junk);
     assert_eq!(print.mc_percent, None);
     assert_eq!(print.layer_num, Some(7));
 }
@@ -630,17 +620,11 @@ fn test_progress_fields_accept_quoted_numbers() {
 #[test]
 fn test_mc_print_stage_accepts_bare_number() {
     let json = r#"{ "print": { "mc_print_stage": 2 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.mc_print_stage.as_deref(), Some("2"));
 
     let quoted = r#"{ "print": { "mc_print_stage": "2" } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(quoted)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(quoted);
     assert_eq!(print.mc_print_stage.as_deref(), Some("2"));
 }
 
@@ -658,7 +642,7 @@ fn test_airduct_mode_telemetry() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let airduct = report.device.unwrap().airduct.unwrap();
     assert_eq!(airduct.mode_cur, Some(1));
     let mode_list = airduct.mode_list.as_ref().unwrap();
@@ -682,7 +666,7 @@ fn test_airduct_mode_telemetry_with_laser() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let airduct = report.device.unwrap().airduct.unwrap();
     assert_eq!(airduct.mode_cur, Some(0));
     let mode_list = airduct.mode_list.as_ref().unwrap();
@@ -699,7 +683,7 @@ fn test_airduct_mode_absent() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let report = parse_report(json_data);
     let airduct = report.device.unwrap().airduct.unwrap();
     assert_eq!(airduct.mode_cur, None);
     assert!(airduct.mode_list.is_none());
@@ -716,10 +700,7 @@ fn test_print_type_and_action_fields() {
                 "fan_gear": 5373952
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.print_type.as_deref(), Some("local"));
     assert_eq!(print.print_gcode_action, Some(0));
     assert_eq!(print.print_real_action, Some(0));
@@ -739,10 +720,7 @@ fn test_job_identifiers_and_timing() {
                 "cali_version": 0
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.task_id.as_deref(), Some("9012"));
     assert_eq!(print.job_id.as_deref(), Some("0"));
     assert_eq!(print.remain_time, Some(549));
@@ -760,10 +738,7 @@ fn test_cfg_stg_mapping_fields() {
                 "mapping": [1]
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.cfg.as_deref(), Some("3C5FDAD9"));
     assert_eq!(print.stg, Some(vec![0, 1, 2, 3, 4, 5, 6, 7]));
     assert_eq!(print.mapping, Some(vec![1]));
@@ -777,10 +752,7 @@ fn test_error_and_failure_fields() {
                 "fail_reason": "0"
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.err.as_deref(), Some("0"));
     assert_eq!(print.fail_reason.as_deref(), Some("0"));
 }
@@ -795,10 +767,7 @@ fn test_cloud_project_ids() {
                 "project_id": "904240393"
             }
         }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.design_id.as_deref(), Some("467269"));
     assert_eq!(print.model_id.as_deref(), Some("US1fccd3bfcb9084"));
     assert_eq!(print.profile_id.as_deref(), Some("731239480"));
@@ -812,10 +781,7 @@ fn test_fire_ext_opaque_value() {
                 "fire_ext": { "status": 1, "alarm": false }
             }
         }"#;
-    let device = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .device
-        .unwrap();
+    let device = parse_report(json).device.unwrap();
     assert_eq!(
         device.fire_ext,
         Some(serde_json::json!({ "status": 1, "alarm": false }))
@@ -828,20 +794,14 @@ fn test_progress_field_removed() {
     // stray "progress" key in incoming JSON is silently ignored on deserialize rather than
     // erroring.
     let json = r#"{ "print": { "mc_percent": 75, "progress": 75 } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert_eq!(print.mc_percent, Some(75));
 }
 
 #[test]
 fn test_new_fields_absent_by_default() {
     let json = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json)
-        .unwrap()
-        .print
-        .unwrap();
+    let print = parse_print(json);
     assert!(print.print_type.is_none());
     assert!(print.lights_report.is_none());
     assert!(print.hw_switch_state.is_none());
@@ -895,7 +855,7 @@ fn test_h2d_pushall_comprehensive() {
                 }
             }
         }"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let print = report.print.unwrap();
 
     assert_eq!(print.print_type.as_deref(), Some("local"));
@@ -932,7 +892,7 @@ fn test_p_list_pause_schedule_deserialization() {
         {"p":45,"t":3600,"i":1,"l":120},
         {"p":20,"t":5400,"i":0,"l":60}
     ]}}}"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let p_list = report.print.as_ref().unwrap().p_list.as_ref().unwrap();
 
     assert_eq!(p_list.total, Some(2));
@@ -951,7 +911,7 @@ fn test_p_list_tolerates_partial_points_unlike_upstream() {
     // BambuStudio discards the whole schedule if any point is missing a key; bambino keeps
     // what parsed. A point with no index must not masquerade as the next pause.
     let json = r#"{"print":{"p_list":{"total":2,"list":[{"p":45},{"p":10,"i":3}]}}}"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     let p_list = report.print.as_ref().unwrap().p_list.as_ref().unwrap();
 
     assert_eq!(p_list.list.as_ref().unwrap().len(), 2);
@@ -962,7 +922,7 @@ fn test_p_list_tolerates_partial_points_unlike_upstream() {
 #[test]
 fn test_p_list_absent_is_not_an_error() {
     let json = r#"{"print":{"gcode_state":"RUNNING"}}"#;
-    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let report = parse_report(json);
     assert!(report.print.as_ref().unwrap().p_list.is_none());
 }
 
