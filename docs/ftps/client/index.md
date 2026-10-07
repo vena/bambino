@@ -112,9 +112,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Removes a targeted file from non-volatile storage.
 
-  A `550` reply is treated as "already absent" and returns `Ok`, with its text logged. FTP
-  also uses `550` for "permission denied" and "file in use", which this cannot yet tell
-  apart from absence (GitHub issue #392).
+  Idempotent: deleting a file that is already gone returns `Ok`; a target the printer refused
+  to remove is [`Error::FtpReply`](../../error/index.md#error). The printer answers both with a bare `550`, so on a `550`
+  this lists the parent directory and succeeds only if the target is no longer there
+  (GitHub issue #392).
 
 - <span id="ftpsclient-upload-file"></span>`async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
@@ -149,13 +150,16 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Creates a directory on the printer's MicroSD storage.
 
+  Accepts `257`, the RFC 959 reply, and `250`, which the printer's own server sends instead
+  (P1S capture, GitHub issue #613). An existing directory is refused with `550`, as
+  [`Error::FtpReply`](../../error/index.md#error).
+
 - <span id="ftpsclient-remove-directory"></span>`async fn remove_directory(&mut self, path: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
-  Removes a directory from the printer's MicroSD storage.
+  Removes an empty directory from the printer's MicroSD storage.
 
-  Returns success for both `250` (deleted) and `550` (treated as already absent, text
-  logged), matching `delete_file`. On common servers `550` also answers `RMD` of a non-empty
-  directory, which this cannot yet tell apart (GitHub issue #392).
+  Idempotent like [`delete_file`](#ftpsclient). A non-empty directory is refused with
+  [`Error::FtpReply`](../../error/index.md#error); remove its contents first.
 
 - <span id="ftpsclient-rename-file"></span>`async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
