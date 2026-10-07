@@ -208,7 +208,7 @@ time = "0.3"
 # entry — rustls is already in the lock file via `tokio-rustls`, and dev-dependencies never
 # reach consumers. Preferred over spawning `openssl s_server`, which would make the suite
 # depend on a binary outside cargo.
-rustls = "0.23.41"
+rustls = "0.23.45"
 
 # Supplies a `critical-section` implementation for host test binaries. `mbedtls-rs` calls
 # `critical_section::with` to guard its global RNG/hook state; on a real target the HAL
