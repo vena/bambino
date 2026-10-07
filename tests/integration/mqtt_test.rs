@@ -12,6 +12,7 @@ use bambino::io::TokioIo;
 use bambino::io::tokio::TokioTimer;
 use bambino::mqtt::{Liveness, MQTT_ZOMBIE_TIMEOUT_SECS, MqttClient};
 
+use crate::common::client::SERIAL;
 use crate::common::mock_mqtt::run_mock_mqtt_broker;
 
 #[tokio::test]
@@ -19,7 +20,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     let (client_stream, server_stream) = tokio::io::duplex(8192);
     let (inject_tx, inject_rx) = mpsc::channel(10);
     let (ack_tx, ack_rx) = oneshot::channel();
-    let serial = "01P000000000000";
+    let serial = SERIAL;
 
     let broker_handle = tokio::spawn(run_mock_mqtt_broker(
         server_stream,

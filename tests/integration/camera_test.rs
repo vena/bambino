@@ -7,75 +7,51 @@
 //! in-memory duplex stream, ensuring that JPEG magic marker bounds and payload
 //! length descriptors are accurately translated.
 
-use std::sync::Arc;
 use tokio::io::DuplexStream;
-use tokio::sync::Mutex;
 
 use bambino::camera::binary::BinaryCameraStream;
 use bambino::client::{DummyFactory, DummyTls, PrinterClient};
 use bambino::error::Error;
-use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
+use crate::common::client::{ACCESS_CODE, spawn_broker, test_identity};
 use crate::common::io::{CloseCountingTlsConnector, DummyTlsConnector, MockDataStreamFactory};
 use crate::common::mock_camera::{
-    run_mock_camera_server, run_mock_camera_server_closes_after_handshake,
+    mock_frame, run_mock_camera_server, run_mock_camera_server_closes_after_handshake,
     run_mock_camera_server_drops_mid_frame,
 };
 
-const SERIAL: &str = "01P000000000000";
+/// Wraps `stream` in a `BinaryCameraStream` and sends the handshake for [`ACCESS_CODE`].
+///
+/// `authenticate()` only confirms the handshake was written, so this succeeds whether or not
+/// the server goes on to accept it.
+async fn authenticated_camera(
+    stream: TokioIo<DuplexStream>,
+) -> BinaryCameraStream<TokioIo<DuplexStream>> {
+    let mut camera = BinaryCameraStream::new(stream);
+    camera
+        .authenticate(ACCESS_CODE)
+        .await
+        .expect("Failed to negotiate binary stream authentication handshake");
+    camera
+}
 
 #[tokio::test]
 async fn test_binary_camera_handshake_and_streaming() {
-    let access_code = "87654321";
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    // Command the mock server to emit exactly 3 sequential mock frames. It panics, failing the
+    // test, if the 80-byte handshake's magic identifiers or access code don't match.
+    let (stream, server_handle) =
+        spawn_broker(|server| run_mock_camera_server(server, ACCESS_CODE, 3));
+    let mut camera_client = authenticated_camera(stream).await;
 
-    // Command the mock server to emit exactly 3 sequential mock frames
-    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 3));
-
-    // We wrap the raw duplex stream in `TokioIo` to satisfy `AsyncIo` trait bounds.
-    let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo::new(client_stream));
-
-    // This transmits the 80-byte block. The mock server will panic and fail the test
-    // if the magic identifiers or access code do not match expectations.
-    camera_client
-        .authenticate(access_code)
-        .await
-        .expect("Failed to negotiate binary stream authentication handshake");
-
-    let frame_buf = camera_client
-        .read_next_frame()
-        .await
-        .expect("Failed to read first camera frame");
-    assert_eq!(frame_buf[0..2], [0xFF, 0xD8], "Missing JPEG start marker");
-    assert_eq!(
-        frame_buf[frame_buf.len() - 2..],
-        [0xFF, 0xD9],
-        "Missing JPEG end marker"
-    );
-    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2])
-        .expect("Camera frame inner payload is not valid UTF-8");
-    assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_0");
-
-    let frame_buf = camera_client
-        .read_next_frame()
-        .await
-        .expect("Failed to read second camera frame");
-    assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
-    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2])
-        .expect("Camera frame inner payload is not valid UTF-8");
-    assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_1");
-
-    let frame_buf = camera_client
-        .read_next_frame()
-        .await
-        .expect("Failed to read third camera frame");
-    assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
-    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2])
-        .expect("Camera frame inner payload is not valid UTF-8");
-    assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_2");
+    for i in 0..3 {
+        let frame_buf = camera_client
+            .read_next_frame()
+            .await
+            .unwrap_or_else(|e| panic!("Failed to read camera frame {i}: {e:?}"));
+        assert_eq!(frame_buf, mock_frame(i));
+    }
 
     // The server was instructed to send exactly 3 frames, then cleanly drop the socket.
     // Reading a 4th frame should result in a connection error, not a parse panic.
@@ -98,25 +74,12 @@ async fn test_binary_camera_handshake_and_streaming() {
 /// FTPS-through-`PrinterClient` pattern.
 #[tokio::test]
 async fn test_printer_client_camera_end_to_end() {
-    let access_code = "12345678";
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let (stream, server_handle) =
+        spawn_broker(|server| run_mock_camera_server(server, ACCESS_CODE, 1));
+    let (factory, _) = MockDataStreamFactory::with_stream(stream);
 
-    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
-    let factory = MockDataStreamFactory::new(data_container.clone());
-
-    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
-
-    let mut printer = PrinterClient::new(
-        DummyTls,
-        DummyFactory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: SERIAL.into(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        },
-    )
-    .with_camera(DummyTlsConnector, factory);
+    let mut printer = PrinterClient::new(DummyTls, DummyFactory, test_identity(PrinterModel::P1S))
+        .with_camera(DummyTlsConnector, factory);
 
     assert!(!printer.is_camera_connected());
     let frame_buf = printer
@@ -125,12 +88,7 @@ async fn test_printer_client_camera_end_to_end() {
         .expect("read_camera_frame should connect, authenticate, and read the mock frame");
 
     assert!(printer.is_camera_connected());
-    assert_eq!(frame_buf[0..2], [0xFF, 0xD8], "Missing JPEG start marker");
-    assert_eq!(
-        frame_buf[frame_buf.len() - 2..],
-        [0xFF, 0xD9],
-        "Missing JPEG end marker"
-    );
+    assert_eq!(frame_buf, mock_frame(0));
 
     server_handle.await.expect("Mock camera server panicked");
 }
@@ -141,16 +99,7 @@ async fn test_printer_client_camera_end_to_end() {
 /// connection type," not "you forgot to configure it."
 #[tokio::test]
 async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
-    let mut printer = PrinterClient::new(
-        DummyTls,
-        DummyFactory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: SERIAL.into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::X1C,
-        },
-    );
+    let mut printer = PrinterClient::new(DummyTls, DummyFactory, test_identity(PrinterModel::X1C));
     let result = printer.read_camera_frame().await;
 
     assert!(
@@ -170,20 +119,10 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
 /// dropped after the first attempt).
 #[tokio::test]
 async fn test_ensure_camera_retries_after_failed_dial() {
-    let data_container = Arc::new(Mutex::new(None));
-    let factory = MockDataStreamFactory::new(data_container.clone());
+    let factory = MockDataStreamFactory::empty();
 
-    let mut printer = PrinterClient::new(
-        DummyTls,
-        DummyFactory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: SERIAL.into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-    )
-    .with_camera(DummyTlsConnector, factory);
+    let mut printer = PrinterClient::new(DummyTls, DummyFactory, test_identity(PrinterModel::P1S))
+        .with_camera(DummyTlsConnector, factory);
     for attempt in 1..=2 {
         let result = printer.read_camera_frame().await;
         assert!(
@@ -203,21 +142,9 @@ async fn test_ensure_camera_retries_after_failed_dial() {
 /// error, not a hang or a misleading success.
 #[tokio::test]
 async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
-    let access_code = "87654321";
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
-
-    let server_handle = tokio::spawn(run_mock_camera_server_closes_after_handshake(
-        server_stream,
-        access_code,
-    ));
-
-    let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo::new(client_stream));
-
-    camera_client
-        .authenticate(access_code)
-        .await
-        .expect("authenticate() only confirms the handshake write, must still succeed here");
+    let (stream, server_handle) =
+        spawn_broker(|server| run_mock_camera_server_closes_after_handshake(server, ACCESS_CODE));
+    let mut camera_client = authenticated_camera(stream).await;
     let result = camera_client.read_next_frame().await;
     assert!(
         result.is_err(),
@@ -236,24 +163,10 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
 /// invalid payloads instead).
 #[tokio::test]
 async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
-    let access_code = "87654321";
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
-
     // Header declares a 40-byte payload; server only ever writes 10 before dropping.
-    let server_handle = tokio::spawn(run_mock_camera_server_drops_mid_frame(
-        server_stream,
-        access_code,
-        40,
-        10,
-    ));
-
-    let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo::new(client_stream));
-
-    camera_client
-        .authenticate(access_code)
-        .await
-        .expect("Failed to negotiate binary stream authentication handshake");
+    let (stream, server_handle) =
+        spawn_broker(|server| run_mock_camera_server_drops_mid_frame(server, ACCESS_CODE, 40, 10));
+    let mut camera_client = authenticated_camera(stream).await;
     let result = camera_client.read_next_frame().await;
     assert!(
         result.is_err(),
@@ -270,26 +183,14 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
 /// attach makes the client immediately usable for frame reads, and disconnect clears the slot.
 #[tokio::test]
 async fn test_attach_and_disconnect_camera() {
-    let access_code = "87654321";
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
-    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
-
-    let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo::new(client_stream));
-    camera_stream
-        .authenticate(access_code)
-        .await
-        .expect("Failed to negotiate binary stream authentication handshake");
+    let (stream, server_handle) =
+        spawn_broker(|server| run_mock_camera_server(server, ACCESS_CODE, 1));
+    let camera_stream = authenticated_camera(stream).await;
 
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         DummyFactory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: SERIAL.into(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        },
+        test_identity(PrinterModel::P1S),
     )
     .with_camera(DummyTlsConnector, MockDataStreamFactory::empty());
     assert!(!client.is_camera_connected());
@@ -327,27 +228,15 @@ async fn test_attach_and_disconnect_camera() {
 /// it only ever cost the teardown its connector and the client its ability to redial.
 #[tokio::test]
 async fn test_disconnect_camera_closes_the_tls_session() {
-    let access_code = "87654321";
-    let (client_stream, server_stream) = tokio::io::duplex(8192);
-    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
-
-    let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo::new(client_stream));
-    camera_stream
-        .authenticate(access_code)
-        .await
-        .expect("Failed to negotiate binary stream authentication handshake");
+    let (stream, server_handle) =
+        spawn_broker(|server| run_mock_camera_server(server, ACCESS_CODE, 1));
+    let camera_stream = authenticated_camera(stream).await;
 
     let (connector, closes) = CloseCountingTlsConnector::new();
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         DummyFactory,
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: SERIAL.into(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        },
+        test_identity(PrinterModel::P1S),
     )
     .with_camera(connector, MockDataStreamFactory::empty());
     client.attach_camera(camera_stream).await;

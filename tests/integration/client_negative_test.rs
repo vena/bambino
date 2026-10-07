@@ -2,7 +2,7 @@
 //!
 //! Split from `client_test.rs` (see issue #35).
 
-use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus};
+use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus, SEQUENCE_ID_FLOOR};
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -10,9 +10,9 @@ use bambino::mqtt::PrintJobConfig;
 use bambino::types::DryingMaterial;
 use bambino::types::telemetry::AmsUnitModel;
 
-use crate::common::client::connect_test_client;
+use crate::common::client::{SERIAL, connect_idle_client, connect_test_client, with_broker};
 use crate::common::mock_mqtt::{
-    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
+    ReportPublisher, handle_mqtt_handshake, read_gcode_param, read_packet, read_publish_payload,
 };
 
 // ============================================================================
@@ -22,16 +22,7 @@ use crate::common::mock_mqtt::{
 #[tokio::test]
 async fn test_set_nozzle_temperature_validates_nozzle_id() {
     // Single-nozzle model: nozzle_id 1 must be rejected.
-    let (client_stream_p1s, mut server_stream_p1s) = tokio::io::duplex(8192);
-    let broker_task_p1s = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_p1s).await;
-    });
-    let mut client_p1s = connect_test_client(
-        TokioIo::new(client_stream_p1s),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client_p1s, broker_task_p1s) = connect_idle_client(PrinterModel::P1S).await;
     assert!(matches!(
         client_p1s.set_nozzle_temperature(1, 220).await,
         Err(Error::ModelMismatch(_))
@@ -39,16 +30,16 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
     broker_task_p1s.await.expect("P1S broker task panicked");
 
     // IDEX model: nozzle_id 1 (secondary carriage) must be accepted.
-    let (client_stream_h2d, mut server_stream_h2d) = tokio::io::duplex(8192);
-    let broker_task_h2d = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_h2d).await;
-        let json = read_publish_payload(&mut server_stream_h2d).await;
-        assert_eq!(json["print"]["param"], "M104 T1 S220\n");
-    });
-    let mut client_h2d = connect_test_client(
-        TokioIo::new(client_stream_h2d),
-        "01P000000000000",
+    let (mut client_h2d, broker_task_h2d) = with_broker(
+        SERIAL,
         PrinterModel::H2D,
+        |mut server_stream_h2d| async move {
+            handle_mqtt_handshake(&mut server_stream_h2d).await;
+            assert_eq!(
+                read_gcode_param(&mut server_stream_h2d).await,
+                "M104 T1 S220\n"
+            );
+        },
     )
     .await;
     client_h2d
@@ -66,18 +57,11 @@ async fn test_in_flight_saturation() {
         handle_mqtt_handshake(&mut server_stream).await;
 
         // Read and discard all incoming PUBLISH packets without sending PUBACKs
-        while crate::common::mock_mqtt::read_packet(&mut server_stream)
-            .await
-            .is_ok()
-        {}
+        while read_packet(&mut server_stream).await.is_ok() {}
     });
 
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // Fill the in-flight queue to capacity (200 commands)
     for i in 0..200 {
@@ -100,20 +84,13 @@ async fn test_in_flight_saturation() {
 
 #[tokio::test]
 async fn test_connection_drop_during_operation() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // Drop the server stream immediately after handshake
-        drop(server_stream);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            // Drop the server stream immediately after handshake
+            drop(server_stream);
+        })
+        .await;
 
     broker_task.await.expect("Broker task panicked");
 
@@ -134,46 +111,39 @@ async fn test_connection_drop_during_operation() {
 
 #[tokio::test]
 async fn test_start_print_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "project_file");
-        assert_eq!(json["print"]["file"], "job.3mf");
-        assert_eq!(json["print"]["param"], "Metadata/plate_1.gcode");
-        assert_eq!(json["print"]["subtask_name"], "Test Print");
-        assert_eq!(json["print"]["bed_type"], "textured");
-        assert_eq!(json["print"]["url"], "ftp://job.3mf");
-        assert_eq!(json["print"]["use_ams"], false);
-        assert_eq!(json["print"]["ams_mapping"], "");
-        assert_eq!(json["print"]["bed_leveling"], true);
-        // Defaults to false on every model, matching BambuStudio (#375).
-        assert_eq!(json["print"]["vibration_cali"], false);
-        assert_eq!(json["print"]["timelapse"], true);
-        assert_eq!(json["print"]["layer_inspect"], true);
-        // P1S: single nozzle → nozzle_offset_cali forced to 0
-        assert_eq!(json["print"]["nozzle_offset_cali"], 0);
-        // PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
-        // default), which from_config() serializes as extrude_cali_flag: 1.
-        assert_eq!(json["print"]["extrude_cali_flag"], 1);
-        // flow_cali/profile_id/project_id/task_id, previously missing entirely.
-        // subtask_id/project_id/task_id all share one value (see ProjectFilePayload's
-        // project_id doc comment for why).
-        assert_eq!(json["print"]["flow_cali"], true);
-        assert_eq!(json["print"]["profile_id"], "0");
-        let subtask_id = json["print"]["subtask_id"].clone();
-        assert_eq!(json["print"]["project_id"], subtask_id);
-        assert_eq!(json["print"]["task_id"], subtask_id);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "project_file");
+            assert_eq!(json["print"]["file"], "job.3mf");
+            assert_eq!(json["print"]["param"], "Metadata/plate_1.gcode");
+            assert_eq!(json["print"]["subtask_name"], "Test Print");
+            assert_eq!(json["print"]["bed_type"], "textured");
+            assert_eq!(json["print"]["url"], "ftp://job.3mf");
+            assert_eq!(json["print"]["use_ams"], false);
+            assert_eq!(json["print"]["ams_mapping"], "");
+            assert_eq!(json["print"]["bed_leveling"], true);
+            // Defaults to false on every model, matching BambuStudio (#375).
+            assert_eq!(json["print"]["vibration_cali"], false);
+            assert_eq!(json["print"]["timelapse"], true);
+            assert_eq!(json["print"]["layer_inspect"], true);
+            // P1S: single nozzle → nozzle_offset_cali forced to 0
+            assert_eq!(json["print"]["nozzle_offset_cali"], 0);
+            // PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
+            // default), which from_config() serializes as extrude_cali_flag: 1.
+            assert_eq!(json["print"]["extrude_cali_flag"], 1);
+            // flow_cali/profile_id/project_id/task_id, previously missing entirely.
+            // subtask_id/project_id/task_id all share one value (see ProjectFilePayload's
+            // project_id doc comment for why).
+            assert_eq!(json["print"]["flow_cali"], true);
+            assert_eq!(json["print"]["profile_id"], "0");
+            let subtask_id = json["print"]["subtask_id"].clone();
+            assert_eq!(json["print"]["project_id"], subtask_id);
+            assert_eq!(json["print"]["task_id"], subtask_id);
+        })
+        .await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -192,22 +162,18 @@ async fn test_start_print_wire_payload() {
 
 #[tokio::test]
 async fn test_start_print_idex_nozzle_offset_default() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        // X2D: IDEX → nozzle_offset_cali defaults to 1
-        assert_eq!(json["print"]["nozzle_offset_cali"], 1);
-        assert_eq!(json["print"]["ams_mapping"], serde_json::json!([0, -1]));
-        assert_eq!(json["print"]["use_ams"], true);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
+    let (mut client, broker_task) = with_broker(
         "20P000000000000",
         PrinterModel::X2D,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            let json = read_publish_payload(&mut server_stream).await;
+            // X2D: IDEX → nozzle_offset_cali defaults to 1
+            assert_eq!(json["print"]["nozzle_offset_cali"], 1);
+            assert_eq!(json["print"]["ams_mapping"], serde_json::json!([0, -1]));
+            assert_eq!(json["print"]["use_ams"], true);
+        },
     )
     .await;
 
@@ -233,21 +199,15 @@ async fn test_start_print_single_nozzle_overrides_nozzle_offset_off() {
     // `.nozzle_offset_calibration(true)` sailed past the single-nozzle hardware gate and
     // serialized `nozzle_offset_cali: 1` to a printer with no second carriage. The quirk is a
     // hard ceiling, not a default.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["nozzle_offset_cali"], 0);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["nozzle_offset_cali"], 0);
+        })
+        .await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -267,37 +227,30 @@ async fn test_start_print_single_nozzle_overrides_nozzle_offset_off() {
 
 #[tokio::test]
 async fn test_set_print_speed_all_levels() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        for (expected_param, label) in [
-            ("1", "Silent"),
-            ("2", "Standard"),
-            ("3", "Sport"),
-            ("4", "Ludicrous"),
-        ] {
-            let json = read_publish_payload(&mut server_stream).await;
-            assert_eq!(
-                json["print"]["command"], "print_speed",
-                "Failed on {}",
-                label
-            );
-            assert_eq!(
-                json["print"]["param"], expected_param,
-                "Failed on {}",
-                label
-            );
-        }
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            for (expected_param, label) in [
+                ("1", "Silent"),
+                ("2", "Standard"),
+                ("3", "Sport"),
+                ("4", "Ludicrous"),
+            ] {
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(
+                    json["print"]["command"], "print_speed",
+                    "Failed on {}",
+                    label
+                );
+                assert_eq!(
+                    json["print"]["param"], expected_param,
+                    "Failed on {}",
+                    label
+                );
+            }
+        })
+        .await;
 
     for level in [
         PrintSpeed::Silent,
@@ -316,22 +269,15 @@ async fn test_set_print_speed_all_levels() {
 
 #[tokio::test]
 async fn test_skip_objects_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "skip_objects");
-        assert_eq!(json["print"]["obj_list"], serde_json::json!([0, 3, 7]));
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "skip_objects");
+            assert_eq!(json["print"]["obj_list"], serde_json::json!([0, 3, 7]));
+        })
+        .await;
 
     client
         .skip_objects(vec![0, 3, 7])
@@ -343,23 +289,16 @@ async fn test_skip_objects_wire_payload() {
 
 #[tokio::test]
 async fn test_start_calibration_combined_flags() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "calibration");
-        // BED_LEVELING (2) | VIBRATION_COMPENSATION (4) = 6
-        assert_eq!(json["print"]["option"], 6);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "calibration");
+            // BED_LEVELING (2) | VIBRATION_COMPENSATION (4) = 6
+            assert_eq!(json["print"]["option"], 6);
+        })
+        .await;
 
     client
         .start_calibration(
@@ -376,25 +315,18 @@ async fn test_start_calibration_combined_flags() {
 /// request that runs nothing from being reported as success (closed #229). Nothing tested it.
 #[tokio::test]
 async fn test_start_calibration_rejects_a_fully_unsupported_request_without_publishing() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // The rejected calibration must never reach the wire, so the *first* frame the broker
-        // sees has to be the follow-up command issued below.
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(
-            json["print"]["command"], "clean_print_error",
-            "a fully-unsupported calibration request must publish nothing at all"
-        );
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            // The rejected calibration must never reach the wire, so the *first* frame the broker
+            // sees has to be the follow-up command issued below.
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(
+                json["print"]["command"], "clean_print_error",
+                "a fully-unsupported calibration request must publish nothing at all"
+            );
+        })
+        .await;
 
     // The P1S mask is 0b0000_1110; neither NOZZLE_HEIGHT (16) nor HEATBED_THERMAL (32) is in it.
     let result = client
@@ -418,23 +350,16 @@ async fn test_start_calibration_rejects_a_fully_unsupported_request_without_publ
 /// still gets the routines the model runs.
 #[tokio::test]
 async fn test_start_calibration_publishes_only_the_supported_bits() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "calibration");
-        // BED_LEVELING (2) survives; NOZZLE_HEIGHT (16) is masked off for the P1S.
-        assert_eq!(json["print"]["option"], 2);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "calibration");
+            // BED_LEVELING (2) survives; NOZZLE_HEIGHT (16) is masked off for the P1S.
+            assert_eq!(json["print"]["option"], 2);
+        })
+        .await;
 
     client
         .start_calibration(CalibrationOption::BED_LEVELING | CalibrationOption::NOZZLE_HEIGHT)
@@ -446,21 +371,14 @@ async fn test_start_calibration_publishes_only_the_supported_bits() {
 
 #[tokio::test]
 async fn test_clear_print_error_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "clean_print_error");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "clean_print_error");
+        })
+        .await;
 
     client
         .clear_print_error()
@@ -472,26 +390,19 @@ async fn test_clear_print_error_wire_payload() {
 
 #[tokio::test]
 async fn test_set_led_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["system"]["command"], "ledctrl");
+            assert_eq!(json["system"]["led_node"], "chamber_light");
+            assert_eq!(json["system"]["led_mode"], "on");
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["system"]["command"], "ledctrl");
-        assert_eq!(json["system"]["led_node"], "chamber_light");
-        assert_eq!(json["system"]["led_mode"], "on");
-
-        let json_off = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_off["system"]["led_mode"], "off");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json_off = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_off["system"]["led_mode"], "off");
+        })
+        .await;
 
     client
         .set_led(bambino::client::LedNode::Chamber, true)
@@ -513,27 +424,21 @@ async fn test_set_led_wire_payload() {
 
 #[tokio::test]
 async fn test_preheat_chamber_sets_heating_flap_then_target_on_a_flap_and_heater_model() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // The flap must be sealed *before* the target is raised: its default cooling position
-        // actively vents the chamber, so a heat request with the flap left cooling never
-        // converges.
-        let flap = read_publish_payload(&mut server_stream).await;
-        assert_eq!(flap["print"]["command"], "set_airduct");
-        assert_eq!(flap["print"]["modeId"], 1); // Heating
-
-        let heat = read_publish_payload(&mut server_stream).await;
-        assert_eq!(heat["print"]["command"], "gcode_line");
-        assert_eq!(heat["print"]["param"], "M141 S50\n");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
+    let (mut client, broker_task) = with_broker(
         "09400000000000",
         PrinterModel::H2D,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // The flap must be sealed *before* the target is raised: its default cooling position
+            // actively vents the chamber, so a heat request with the flap left cooling never
+            // converges.
+            let flap = read_publish_payload(&mut server_stream).await;
+            assert_eq!(flap["print"]["command"], "set_airduct");
+            assert_eq!(flap["print"]["modeId"], 1); // Heating
+
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M141 S50\n");
+        },
     )
     .await;
 
@@ -547,26 +452,21 @@ async fn test_preheat_chamber_sets_heating_flap_then_target_on_a_flap_and_heater
 
 #[tokio::test]
 async fn test_preheat_chamber_resets_the_flap_to_cooling_on_a_zero_target() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let flap = read_publish_payload(&mut server_stream).await;
-        assert_eq!(flap["print"]["command"], "set_airduct");
-        assert_eq!(
-            flap["print"]["modeId"], 0,
-            "a zero target must reset the flap to cooling — the flap persists across jobs"
-        );
-
-        let heat = read_publish_payload(&mut server_stream).await;
-        assert_eq!(heat["print"]["param"], "M141 S0\n");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
+    let (mut client, broker_task) = with_broker(
         "09400000000000",
         PrinterModel::H2D,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            let flap = read_publish_payload(&mut server_stream).await;
+            assert_eq!(flap["print"]["command"], "set_airduct");
+            assert_eq!(
+                flap["print"]["modeId"], 0,
+                "a zero target must reset the flap to cooling — the flap persists across jobs"
+            );
+
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M141 S0\n");
+        },
     )
     .await;
 
@@ -580,28 +480,24 @@ async fn test_preheat_chamber_resets_the_flap_to_cooling_on_a_zero_target() {
 
 #[tokio::test]
 async fn test_preheat_chamber_on_a_flap_only_model_stops_after_the_flap() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // A P2S has the flap but no active chamber heater, so "stop venting for cooling" is
-        // actionable while `M141` is not — and must not be sent.
-        let flap = read_publish_payload(&mut server_stream).await;
-        assert_eq!(flap["print"]["command"], "set_airduct");
-        assert_eq!(flap["print"]["modeId"], 0);
-
-        let next = read_publish_payload(&mut server_stream).await;
-        assert_eq!(
-            next["print"]["command"], "clean_print_error",
-            "no M141 may follow the flap command on a heaterless model"
-        );
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
+    let (mut client, broker_task) = with_broker(
         "N7000000000000",
         PrinterModel::P2S,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // A P2S has the flap but no active chamber heater, so "stop venting for cooling" is
+            // actionable while `M141` is not — and must not be sent.
+            let flap = read_publish_payload(&mut server_stream).await;
+            assert_eq!(flap["print"]["command"], "set_airduct");
+            assert_eq!(flap["print"]["modeId"], 0);
+
+            let next = read_publish_payload(&mut server_stream).await;
+            assert_eq!(
+                next["print"]["command"], "clean_print_error",
+                "no M141 may follow the flap command on a heaterless model"
+            );
+        },
     )
     .await;
 
@@ -619,20 +515,16 @@ async fn test_preheat_chamber_on_a_flap_only_model_stops_after_the_flap() {
 
 #[tokio::test]
 async fn test_preheat_chamber_on_a_flap_only_model_rejects_heat_without_touching_the_flap() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // The caller wanted heat this model cannot make; the flap is left alone, so the first
-        // frame on the wire is the follow-up command.
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "clean_print_error");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
+    let (mut client, broker_task) = with_broker(
         "N7000000000000",
         PrinterModel::P2S,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            // The caller wanted heat this model cannot make; the flap is left alone, so the first
+            // frame on the wire is the follow-up command.
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "clean_print_error");
+        },
     )
     .await;
 
@@ -652,26 +544,19 @@ async fn test_preheat_chamber_on_a_flap_only_model_rejects_heat_without_touching
 
 #[tokio::test]
 async fn test_change_filament_load_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_change_filament");
-        assert_eq!(json["print"]["ams_id"], 0);
-        assert_eq!(json["print"]["slot_id"], 1);
-        assert_eq!(json["print"]["target"], 1);
-        assert_eq!(json["print"]["curr_temp"], -1);
-        assert_eq!(json["print"]["tar_temp"], -1);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_change_filament");
+            assert_eq!(json["print"]["ams_id"], 0);
+            assert_eq!(json["print"]["slot_id"], 1);
+            assert_eq!(json["print"]["target"], 1);
+            assert_eq!(json["print"]["curr_temp"], -1);
+            assert_eq!(json["print"]["tar_temp"], -1);
+        })
+        .await;
 
     client
         .change_filament(0, 1, -1, -1, None)
@@ -686,23 +571,17 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
     // For any standard AMS unit other than 0, target is the flat global tray ID
     // (ams_id*4 + slot_id), not slot_id — ams_id 0 previously masked this since the two
     // values coincide there.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["ams_id"], 1);
-        assert_eq!(json["print"]["slot_id"], 2);
-        assert_eq!(json["print"]["target"], 6); // 1*4 + 2, not 2
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["ams_id"], 1);
+            assert_eq!(json["print"]["slot_id"], 2);
+            assert_eq!(json["print"]["target"], 6); // 1*4 + 2, not 2
+        })
+        .await;
 
     client
         .change_filament(1, 2, -1, -1, None)
@@ -716,23 +595,17 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
 async fn test_change_filament_derives_target_for_external_spool() {
     // An external-spool load's target is the ams_id itself (255), not slot_id
     // (254) — the reference doc's worked examples for this case were previously wrong too.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["ams_id"], 255);
-        assert_eq!(json["print"]["slot_id"], 254);
-        assert_eq!(json["print"]["target"], 255);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["ams_id"], 255);
+            assert_eq!(json["print"]["slot_id"], 254);
+            assert_eq!(json["print"]["target"], 255);
+        })
+        .await;
 
     client
         .change_filament(255, 254, -1, -1, None)
@@ -744,17 +617,7 @@ async fn test_change_filament_derives_target_for_external_spool() {
 
 #[tokio::test]
 async fn test_change_filament_rejects_invalid_ams_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let result = client.change_filament(99, 1, -1, -1, None).await;
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
@@ -768,17 +631,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
 /// nonsensical slot to real hardware (closed #9). Every existing test used `(255, 254)`.
 #[tokio::test]
 async fn test_change_filament_rejects_external_spool_sentinel_on_an_ams_ht_bus_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let result = client.change_filament(130, 254, -1, -1, None).await;
     assert!(
@@ -794,22 +647,15 @@ async fn test_change_filament_rejects_external_spool_sentinel_on_an_ams_ht_bus_i
 /// whose absence makes such a machine discard the command in silence — was never asserted.
 #[tokio::test]
 async fn test_change_filament_routes_extruder_id_onto_the_wire() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_change_filament");
-        assert_eq!(json["print"]["extruder_id"], 1);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_change_filament");
+            assert_eq!(json["print"]["extruder_id"], 1);
+        })
+        .await;
 
     client
         .change_filament(0, 1, -1, -1, Some(1))
@@ -821,30 +667,23 @@ async fn test_change_filament_routes_extruder_id_onto_the_wire() {
 
 #[tokio::test]
 async fn test_drying_lifecycle_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            let json_start = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_start["print"]["command"], "ams_filament_drying");
+            assert_eq!(json_start["print"]["ams_id"], 128);
+            assert_eq!(json_start["print"]["mode"], 1);
+            assert_eq!(json_start["print"]["temp"], 55);
+            assert_eq!(json_start["print"]["duration"], 8);
+            assert_eq!(json_start["print"]["filament"], "PA-CF");
 
-        let json_start = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_start["print"]["command"], "ams_filament_drying");
-        assert_eq!(json_start["print"]["ams_id"], 128);
-        assert_eq!(json_start["print"]["mode"], 1);
-        assert_eq!(json_start["print"]["temp"], 55);
-        assert_eq!(json_start["print"]["duration"], 8);
-        assert_eq!(json_start["print"]["filament"], "PA-CF");
-
-        let json_stop = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_stop["print"]["command"], "ams_filament_drying");
-        assert_eq!(json_stop["print"]["mode"], 0);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+            let json_stop = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_stop["print"]["command"], "ams_filament_drying");
+            assert_eq!(json_stop["print"]["mode"], 0);
+        })
+        .await;
 
     client
         .dry(128)
@@ -865,18 +704,7 @@ async fn test_drying_lifecycle_wire_payload() {
 
 #[tokio::test]
 async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::X1E).await;
 
     // No AMS snapshot has been polled, so the unit-model gate passes through and the range
     // falls back to the `ams_id`-derived one: 45-85 for an AMS-HT address, 45-65 otherwise.
@@ -887,11 +715,6 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
             .dry(ams_id)
             .temp(temp)
             .duration_hours(8)
-            .humidity(0)
-            .rotate_tray(true)
-            .cooling_temp(20)
-            .close_power_conflict(false)
-            .filament("PA-CF")
             .send()
             .await
             .expect_err("start_drying must reject an out-of-range temperature");
@@ -906,11 +729,6 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
         .dry(0)
         .temp(85)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PLA")
         .send()
         .await
         .expect_err("85°C must be rejected at a standard-AMS address");
@@ -918,6 +736,17 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
 
     drop(client);
     broker_task.await.expect("Broker task panicked");
+}
+
+/// Builds an AMS telemetry report with one unit at `id`, its type in `info` bits 0-3.
+///
+/// `fun2`, when given, rides along in the same frame.
+fn ams_snapshot(id: &str, info: &str, fun2: Option<&str>) -> Vec<u8> {
+    let fun2 = fun2.map_or(String::new(), |f| format!(r#""fun2":"{f}","#));
+    format!(
+        r#"{{"print":{{{fun2}"ams":{{"ams":[{{"id":"{id}","temp":"25","humidity":"4","info":"{info}"}}]}}}}}}"#
+    )
+    .into_bytes()
 }
 
 /// A reported `fun2` bit 5 outranks the model's own rule, end to end through the client.
@@ -929,27 +758,19 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
 /// "a P1S can report this".
 #[tokio::test]
 async fn test_reported_fun2_overrides_the_model_rule() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // fun2 "20" = bit 5 set, plus an AMS 2 Pro so the unit gate passes too.
+            reports
+                .publish(&mut server_stream, &ams_snapshot("0", "3", Some("20")))
+                .await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // fun2 "20" = bit 5 set, plus an AMS 2 Pro so the unit gate passes too.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4503,
-            br#"{"print":{"fun2":"20","ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"3"}]}}}"#,
-        )
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_filament_drying");
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_filament_drying");
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     // Before any telemetry, the P1S screen-only rule stands.
     assert!(!client.supports_ams_remote_drying());
 
@@ -963,11 +784,6 @@ async fn test_reported_fun2_overrides_the_model_rule() {
         .dry(0)
         .temp(55)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PLA")
         .send()
         .await
         .expect("a P1S reporting fun2 bit 5 must be allowed to dry");
@@ -978,24 +794,16 @@ async fn test_reported_fun2_overrides_the_model_rule() {
 /// The inverse: a printer reporting bit 5 *clear* is refused even where the quirk says `true`.
 #[tokio::test]
 async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // fun2 "00" = bit 5 clear. An X1E's quirk default is true.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4504,
-            br#"{"print":{"fun2":"00","ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"3"}]}}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // fun2 "00" = bit 5 clear. An X1E's quirk default is true.
+            reports
+                .publish(&mut server_stream, &ams_snapshot("0", "3", Some("00")))
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     assert!(client.supports_ams_remote_drying());
 
     client
@@ -1017,11 +825,6 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
         .dry(0)
         .temp(55)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PLA")
         .send()
         .await
         .expect_err("a printer reporting fun2 bit 5 clear must be refused");
@@ -1036,27 +839,20 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
 /// fallback of 50 (`AMSDryControl.cpp:813`), not to zero.
 #[tokio::test]
 async fn test_dry_builder_defaults_reach_the_wire() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_filament_drying");
-        assert_eq!(json["print"]["temp"], 55);
-        assert_eq!(json["print"]["duration"], 8);
-        // Unset by the caller — these are the builder's defaults.
-        assert_eq!(json["print"]["humidity"], 0);
-        assert_eq!(json["print"]["rotate_tray"], false);
-        assert_eq!(json["print"]["cooling_temp"], 50);
-        assert_eq!(json["print"]["close_power_conflict"], false);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_filament_drying");
+            assert_eq!(json["print"]["temp"], 55);
+            assert_eq!(json["print"]["duration"], 8);
+            // Unset by the caller — these are the builder's defaults.
+            assert_eq!(json["print"]["humidity"], 0);
+            assert_eq!(json["print"]["rotate_tray"], false);
+            assert_eq!(json["print"]["cooling_temp"], 50);
+            assert_eq!(json["print"]["close_power_conflict"], false);
+        })
+        .await;
 
     client
         .dry(128)
@@ -1074,23 +870,16 @@ async fn test_dry_builder_defaults_reach_the_wire() {
 /// 60 °C softening temperature as the wire `cooling_temp`.
 #[tokio::test]
 async fn test_dry_builder_material_fills_four_fields() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["temp"], 65);
-        assert_eq!(json["print"]["duration"], 12);
-        assert_eq!(json["print"]["cooling_temp"], 60);
-        assert_eq!(json["print"]["filament"], "PETG");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["temp"], 65);
+            assert_eq!(json["print"]["duration"], 12);
+            assert_eq!(json["print"]["cooling_temp"], 60);
+            assert_eq!(json["print"]["filament"], "PETG");
+        })
+        .await;
 
     client
         .dry(128)
@@ -1105,20 +894,13 @@ async fn test_dry_builder_material_fills_four_fields() {
 /// `.printing()` re-reads the lower while-printing column: PETG drops 65 -> 55 °C.
 #[tokio::test]
 async fn test_dry_builder_printing_column() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["temp"], 55);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["temp"], 55);
+        })
+        .await;
 
     client
         .dry(128)
@@ -1135,23 +917,16 @@ async fn test_dry_builder_printing_column() {
 /// before `.material(..)` used to be overwritten by it.
 #[tokio::test]
 async fn test_dry_builder_explicit_values_beat_material_in_any_order() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["temp"], 60);
-        assert_eq!(json["print"]["duration"], 12);
-        assert_eq!(json["print"]["cooling_temp"], 40);
-        assert_eq!(json["print"]["filament"], "PETG");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["temp"], 60);
+            assert_eq!(json["print"]["duration"], 12);
+            assert_eq!(json["print"]["cooling_temp"], 40);
+            assert_eq!(json["print"]["filament"], "PETG");
+        })
+        .await;
 
     client
         .dry(128)
@@ -1170,17 +945,7 @@ async fn test_dry_builder_explicit_values_beat_material_in_any_order() {
 /// out-of-range temperatures instead of clamping them.
 #[tokio::test]
 async fn test_dry_builder_refuses_unset_temp_or_duration() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::X1E).await;
 
     let err = client
         .dry(128)
@@ -1216,17 +981,7 @@ async fn test_dry_builder_refuses_unset_temp_or_duration() {
 /// anything else, so a fully-configured cycle still never reaches the wire.
 #[tokio::test]
 async fn test_dry_builder_inherits_the_gates() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let err = client
         .dry(0)
@@ -1245,24 +1000,16 @@ async fn test_dry_builder_inherits_the_gates() {
 /// drying command to a heaterless one must be refused rather than acked into the void.
 #[tokio::test]
 async fn test_start_drying_refuses_heaterless_unit_once_observed() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // `info` bits 0-3 = 1 → the original 4-slot AMS. No drying chamber.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4500,
-            br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"1"}]}}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // `info` bits 0-3 = 1 → the original 4-slot AMS. No drying chamber.
+            reports
+                .publish(&mut server_stream, &ams_snapshot("0", "1", None))
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1273,11 +1020,6 @@ async fn test_start_drying_refuses_heaterless_unit_once_observed() {
         .dry(0)
         .temp(55)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PLA")
         .send()
         .await
         .expect_err("start_drying must refuse an original AMS — it has no heater");
@@ -1290,28 +1032,20 @@ async fn test_start_drying_refuses_heaterless_unit_once_observed() {
 /// Same address, same temperature, but the unit reports as an AMS 2 Pro — it must publish.
 #[tokio::test]
 async fn test_start_drying_allows_observed_ams_2_pro() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // `info` bits 0-3 = 3 → AMS 2 Pro (BambuStudio `N3F`). Dries, 45-65°C.
+            reports
+                .publish(&mut server_stream, &ams_snapshot("0", "3", None))
+                .await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // `info` bits 0-3 = 3 → AMS 2 Pro (BambuStudio `N3F`). Dries, 45-65°C.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4501,
-            br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"3"}]}}}"#,
-        )
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_filament_drying");
+            assert_eq!(json["print"]["temp"], 55);
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_filament_drying");
-        assert_eq!(json["print"]["temp"], 55);
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1321,11 +1055,6 @@ async fn test_start_drying_allows_observed_ams_2_pro() {
         .dry(0)
         .temp(55)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PLA")
         .send()
         .await
         .expect("start_drying must be allowed on an observed AMS 2 Pro");
@@ -1337,25 +1066,17 @@ async fn test_start_drying_allows_observed_ams_2_pro() {
 /// address — the observed unit, not the address, sets the ceiling.
 #[tokio::test]
 async fn test_start_drying_range_follows_observed_unit_not_address() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        // An AMS-HT bus address carrying an AMS 2 Pro's unit type. Contrived, but it pins
-        // which of the two sources the range comes from.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4502,
-            br#"{"print":{"ams":{"ams":[{"id":"128","temp":"25","humidity":"4","info":"3"}]}}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1E, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // An AMS-HT bus address carrying an AMS 2 Pro's unit type. Contrived, but it pins
+            // which of the two sources the range comes from.
+            reports
+                .publish(&mut server_stream, &ams_snapshot("128", "3", None))
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1366,11 +1087,6 @@ async fn test_start_drying_range_follows_observed_unit_not_address() {
         .dry(128)
         .temp(80)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PLA")
         .send()
         .await
         .expect_err("the observed AMS 2 Pro's 65°C ceiling must win over the AMS-HT address");
@@ -1382,17 +1098,7 @@ async fn test_start_drying_range_follows_observed_unit_not_address() {
 
 #[tokio::test]
 async fn test_start_drying_rejects_external_spool() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::X1E).await;
 
     // 254/255 pass `is_valid_ams_id` (they are real addresses for change_filament), but an
     // external spool is a bracket with no heater, so drying can never act on one. Unlike the
@@ -1402,11 +1108,6 @@ async fn test_start_drying_rejects_external_spool() {
             .dry(ams_id)
             .temp(55)
             .duration_hours(8)
-            .humidity(0)
-            .rotate_tray(true)
-            .cooling_temp(20)
-            .close_power_conflict(false)
-            .filament("PLA")
             .send()
             .await
             .expect_err("start_drying must reject an external spool");
@@ -1419,18 +1120,7 @@ async fn test_start_drying_rejects_external_spool() {
 
 #[tokio::test]
 async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     // P1S firmware acks ams_filament_drying with `result: success` and then silently
     // discards it — no heater/fan activation, dry_status stays 0 — confirmed against real
@@ -1440,11 +1130,6 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
         .dry(0)
         .temp(55)
         .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PA-CF")
         .send()
         .await
         .expect_err("start_drying must reject on P1 (screen-only AMS drying)");
@@ -1456,29 +1141,9 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
 
 #[tokio::test]
 async fn test_start_drying_rejects_invalid_ams_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::X1E).await;
 
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
-
-    let result = client
-        .dry(200)
-        .temp(55)
-        .duration_hours(8)
-        .humidity(0)
-        .rotate_tray(true)
-        .cooling_temp(20)
-        .close_power_conflict(false)
-        .filament("PA-CF")
-        .send()
-        .await;
+    let result = client.dry(200).temp(55).duration_hours(8).send().await;
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     broker_task.await.expect("Broker task panicked");
@@ -1486,17 +1151,7 @@ async fn test_start_drying_rejects_invalid_ams_id() {
 
 #[tokio::test]
 async fn test_stop_drying_rejects_invalid_ams_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::X1E,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::X1E).await;
 
     // 16 is an A2L-attached AMS Lite's physical id and valid; 17 addresses nothing.
     let result = client.stop_drying(17).await;
@@ -1507,78 +1162,77 @@ async fn test_stop_drying_rejects_invalid_ams_id() {
 
 #[tokio::test]
 async fn test_scan_rfid_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_get_rfid");
-        assert_eq!(json["print"]["ams_id"], 0);
-        assert_eq!(json["print"]["slot_id"], 2);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_get_rfid");
+            assert_eq!(json["print"]["ams_id"], 0);
+            assert_eq!(json["print"]["slot_id"], 2);
+        })
+        .await;
 
     client.scan_rfid(0, 2).await.expect("scan_rfid failed");
 
     broker_task.await.expect("Broker task panicked");
 }
 
+/// The A2L-attached AMS Lite's normalized id and its physical id.
+const AMS_LITE_ON_A2L_IDS: [u8; 2] = [6, 16];
+
 /// Issue #271: every `ams_id`-taking command accepts the A2L-attached AMS Lite under both its
 /// normalized id 6 and physical id 16, and sends the physical 16 with a local slot.
 #[tokio::test]
 async fn test_ams_commands_address_ams_lite_on_a2l() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::A2L, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // Each spelling below must reach the wire as the physical 16.
+            for _ in AMS_LITE_ON_A2L_IDS {
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "ams_change_filament");
+                assert_eq!(json["print"]["ams_id"], 16);
+                assert_eq!(json["print"]["slot_id"], 1);
+                assert_eq!(json["print"]["target"], 16);
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_change_filament");
-        assert_eq!(json["print"]["ams_id"], 16);
-        assert_eq!(json["print"]["slot_id"], 1);
-        assert_eq!(json["print"]["target"], 16);
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "ams_get_rfid");
+                assert_eq!(json["print"]["ams_id"], 16);
+                assert_eq!(json["print"]["slot_id"], 2);
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_get_rfid");
-        assert_eq!(json["print"]["ams_id"], 16);
-        assert_eq!(json["print"]["slot_id"], 2);
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "ams_filament_drying");
+                assert_eq!(json["print"]["ams_id"], 16);
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_filament_drying");
-        assert_eq!(json["print"]["ams_id"], 16);
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "extrusion_cali_sel");
+                assert_eq!(json["print"]["ams_id"], 16);
+                assert_eq!(json["print"]["tray_id"], 25);
+            }
+        })
+        .await;
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "extrusion_cali_sel");
-        assert_eq!(json["print"]["ams_id"], 16);
-        assert_eq!(json["print"]["tray_id"], 25);
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::A2L,
-    )
-    .await;
-
-    client
-        .change_filament(6, 1, -1, -1, None)
-        .await
-        .expect("change_filament failed");
-    client.scan_rfid(16, 2).await.expect("scan_rfid failed");
-    client.stop_drying(6).await.expect("stop_drying failed");
-    client
-        .select_k_profile(6, 1, 4, "GFA01", "0.4")
-        .await
-        .expect("select_k_profile failed");
-    // Issue #355: no AMS telemetry has arrived, but the address alone says AMS Lite — no heater.
-    for id in [6, 16] {
+    for id in AMS_LITE_ON_A2L_IDS {
+        client
+            .change_filament(id, 1, -1, -1, None)
+            .await
+            .unwrap_or_else(|e| panic!("change_filament({id}) failed: {e:?}"));
+        client
+            .scan_rfid(id, 2)
+            .await
+            .unwrap_or_else(|e| panic!("scan_rfid({id}) failed: {e:?}"));
+        client
+            .stop_drying(id)
+            .await
+            .unwrap_or_else(|e| panic!("stop_drying({id}) failed: {e:?}"));
+        client
+            .select_k_profile(id, 1, 4, "GFA01", "0.4")
+            .await
+            .unwrap_or_else(|e| panic!("select_k_profile({id}) failed: {e:?}"));
+        // Issue #355: no AMS telemetry has arrived, but the address alone says AMS Lite — no
+        // heater.
         let err = client.dry(id).temp(50).duration_hours(4).send().await;
         assert!(
             matches!(err, Err(Error::ModelMismatch(_))),
@@ -1608,28 +1262,25 @@ async fn test_scan_rfid_selects_command_by_np_format() {
             true,
         ),
     ] {
-        let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-        let topic = format!("device/{}/report", SERIAL);
         let frame = frame.to_vec();
 
-        let broker_task = tokio::spawn(async move {
-            handle_mqtt_handshake(&mut server_stream).await;
-            send_publish_payload(&mut server_stream, &topic, 4601, &frame).await;
-            read_puback(&mut server_stream).await;
+        let (mut client, broker_task) =
+            with_broker(SERIAL, PrinterModel::X1C, |mut server_stream| async move {
+                let mut reports = ReportPublisher::new(SERIAL);
+                handle_mqtt_handshake(&mut server_stream).await;
+                reports.publish(&mut server_stream, &frame).await;
 
-            let json = read_publish_payload(&mut server_stream).await;
-            if np_format {
-                assert_eq!(json["print"]["command"], "ams_get_rfid");
-                assert_eq!(json["print"]["ams_id"], 1);
-                assert_eq!(json["print"]["slot_id"], 2);
-            } else {
-                assert_eq!(json["print"]["command"], "gcode_line");
-                assert_eq!(json["print"]["param"], "M620 R6\n");
-            }
-        });
-
-        let mut client =
-            connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1C).await;
+                let json = read_publish_payload(&mut server_stream).await;
+                if np_format {
+                    assert_eq!(json["print"]["command"], "ams_get_rfid");
+                    assert_eq!(json["print"]["ams_id"], 1);
+                    assert_eq!(json["print"]["slot_id"], 2);
+                } else {
+                    assert_eq!(json["print"]["command"], "gcode_line");
+                    assert_eq!(json["print"]["param"], "M620 R6\n");
+                }
+            })
+            .await;
         client
             .poll_telemetry()
             .await
@@ -1644,23 +1295,18 @@ async fn test_scan_rfid_selects_command_by_np_format() {
 /// filament loaded to the toolhead.
 #[tokio::test]
 async fn test_scan_rfid_refuses_with_filament_loaded() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4602,
-            br#"{"print":{"command":"push_status","ams":{"tray_now":"3","ams":[]}}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","ams":{"tray_now":"3","ams":[]}}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1C).await;
     client
         .poll_telemetry()
         .await
@@ -1673,17 +1319,7 @@ async fn test_scan_rfid_refuses_with_filament_loaded() {
 
 #[tokio::test]
 async fn test_scan_rfid_rejects_invalid_ams_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let result = client.scan_rfid(255, 2).await;
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
@@ -1693,26 +1329,19 @@ async fn test_scan_rfid_rejects_invalid_ams_id() {
 
 #[tokio::test]
 async fn test_select_k_profile_wire_payload() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "extrusion_cali_sel");
-        assert_eq!(json["print"]["ams_id"], 0);
-        assert_eq!(json["print"]["tray_id"], 1);
-        assert_eq!(json["print"]["cali_idx"], 4);
-        assert_eq!(json["print"]["filament_id"], "GFA01");
-        assert_eq!(json["print"]["nozzle_diameter"], "0.4");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "extrusion_cali_sel");
+            assert_eq!(json["print"]["ams_id"], 0);
+            assert_eq!(json["print"]["tray_id"], 1);
+            assert_eq!(json["print"]["cali_idx"], 4);
+            assert_eq!(json["print"]["filament_id"], "GFA01");
+            assert_eq!(json["print"]["nozzle_diameter"], "0.4");
+        })
+        .await;
 
     client
         .select_k_profile(0, 1, 4, "GFA01", "0.4")
@@ -1724,17 +1353,7 @@ async fn test_select_k_profile_wire_payload() {
 
 #[tokio::test]
 async fn test_select_k_profile_rejects_invalid_combo() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let result = client.select_k_profile(200, 200, 4, "GFA01", "0.4").await;
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
@@ -1746,27 +1365,21 @@ async fn test_select_k_profile_rejects_invalid_combo() {
 /// bind unit 0's tray 1 while claiming unit 2, and `(0, 15)` unit 3's last tray.
 #[tokio::test]
 async fn test_select_k_profile_derives_tray_from_unit_and_slot() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // Only the valid calls dispatch — a leaked publish from a rejected one would be read
-        // here first and fail the asserts.
-        for (ams_id, tray_id, slot_id) in [(2, 9, 1), (3, 15, 3), (128, 128, 0)] {
-            let json = read_publish_payload(&mut server_stream).await;
-            assert_eq!(json["print"]["command"], "extrusion_cali_sel");
-            assert_eq!(json["print"]["ams_id"], ams_id);
-            assert_eq!(json["print"]["tray_id"], tray_id);
-            assert_eq!(json["print"]["slot_id"], slot_id);
-        }
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            // Only the valid calls dispatch — a leaked publish from a rejected one would be read
+            // here first and fail the asserts.
+            for (ams_id, tray_id, slot_id) in [(2, 9, 1), (3, 15, 3), (128, 128, 0)] {
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "extrusion_cali_sel");
+                assert_eq!(json["print"]["ams_id"], ams_id);
+                assert_eq!(json["print"]["tray_id"], tray_id);
+                assert_eq!(json["print"]["slot_id"], slot_id);
+            }
+        })
+        .await;
 
     for (ams_id, slot_id) in [(0, 4), (0, 15), (128, 1)] {
         let result = client
@@ -1787,15 +1400,17 @@ async fn test_select_k_profile_derives_tray_from_unit_and_slot() {
     broker_task.await.expect("Broker task panicked");
 }
 
-const K_PROFILE_RESPONSE: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"30002","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
-
-// Second `get_k_profiles()` call on an already-primed client: sequence ID advances
-// past the first call's prime (30001) and real query (30002).
-const K_PROFILE_RESPONSE_SECOND_CALL: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"30003","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
-
-// Manual-prime-skip call: only the real query is sent, so it lands on the first
-// sequence ID issued (30001), not the second (30002) that auto-priming would consume.
-const K_PROFILE_RESPONSE_NO_PRIME: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"30001","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+/// The `extrusion_cali_get` response to the session's `nth` command (1-based).
+///
+/// A fresh client mints its first `sequence_id` at `SEQUENCE_ID_FLOOR + 1`. Auto-priming spends
+/// the first on the prime, so the first real query is the 2nd and a second call on a primed
+/// client is the 3rd; with priming skipped, the real query is the 1st.
+fn k_profile_response(nth: u64) -> String {
+    let seq = SEQUENCE_ID_FLOOR + nth;
+    format!(
+        r#"{{"print":{{"command":"extrusion_cali_get","sequence_id":"{seq}","nozzle_diameter":"0.4","filaments":[{{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}}]}}}}"#
+    )
+}
 
 // Correct command but a sequence ID that belongs to nobody — simulates a stray
 // response from another MQTT client (Orca/Studio/a second instance of us) querying
@@ -1804,50 +1419,35 @@ const K_PROFILE_RESPONSE_NO_PRIME: &str = r#"{"print":{"command":"extrusion_cali
 // decoy fails on content, not just on a missed assertion.
 const K_PROFILE_RESPONSE_DECOY_SEQ: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"99999","nozzle_diameter":"0.4","filaments":[{"cali_idx":9,"filament_id":"DECOY01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Decoy PLA","k_value":"0.099000","setting_id":"PF99999999999999999"}]}}"#;
 
-const SERIAL: &str = "01P000000000000";
-
 #[tokio::test]
 async fn test_get_k_profiles_auto_priming() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // First call: auto-prime sends two extrusion_cali_get commands
+            let json_prime = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_prime["print"]["command"], "extrusion_cali_get");
 
-        // First call: auto-prime sends two extrusion_cali_get commands
-        let json_prime = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_prime["print"]["command"], "extrusion_cali_get");
+            let json_real = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_real["print"]["command"], "extrusion_cali_get");
 
-        let json_real = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_real["print"]["command"], "extrusion_cali_get");
+            // Send response and wait for client's PUBACK
+            reports
+                .publish(&mut server_stream, k_profile_response(2).as_bytes())
+                .await;
 
-        // Send response and wait for client's PUBACK
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1000,
-            K_PROFILE_RESPONSE.as_bytes(),
-        )
+            // Second call: already primed, only one command
+            let json_second = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_second["print"]["command"], "extrusion_cali_get");
+
+            // Send response for second call
+            reports
+                .publish(&mut server_stream, k_profile_response(3).as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // Second call: already primed, only one command
-        let json_second = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_second["print"]["command"], "extrusion_cali_get");
-
-        // Send response for second call
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1001,
-            K_PROFILE_RESPONSE_SECOND_CALL.as_bytes(),
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // First call triggers auto-prime (2 publishes)
     let resp = client
@@ -1872,33 +1472,25 @@ async fn test_get_k_profiles_auto_priming() {
 /// this wrapper and hand-managing the priming quirk.
 #[tokio::test]
 async fn test_get_k_profiles_threads_filament_id_onto_the_wire() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            let json_prime = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_prime["print"]["command"], "extrusion_cali_get");
+            assert_eq!(json_prime["print"]["filament_id"], "GFA01");
+            assert_eq!(json_prime["print"]["nozzle_diameter"], "0.4");
 
-        let json_prime = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_prime["print"]["command"], "extrusion_cali_get");
-        assert_eq!(json_prime["print"]["filament_id"], "GFA01");
-        assert_eq!(json_prime["print"]["nozzle_diameter"], "0.4");
+            let json_real = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_real["print"]["filament_id"], "GFA01");
+            assert_eq!(json_real["print"]["nozzle_diameter"], "0.4");
 
-        let json_real = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_real["print"]["filament_id"], "GFA01");
-        assert_eq!(json_real["print"]["nozzle_diameter"], "0.4");
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1000,
-            K_PROFILE_RESPONSE.as_bytes(),
-        )
+            reports
+                .publish(&mut server_stream, k_profile_response(2).as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let resp = client
         .get_k_profiles(Some("GFA01"), Some("0.4"))
         .await
@@ -1910,29 +1502,21 @@ async fn test_get_k_profiles_threads_filament_id_onto_the_wire() {
 
 #[tokio::test]
 async fn test_get_k_profiles_manual_prime_skip() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // With manual priming, only one command should be sent
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "extrusion_cali_get");
 
-        // With manual priming, only one command should be sent
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "extrusion_cali_get");
-
-        // Send response and wait for client's PUBACK
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1000,
-            K_PROFILE_RESPONSE_NO_PRIME.as_bytes(),
-        )
+            // Send response and wait for client's PUBACK
+            reports
+                .publish(&mut server_stream, k_profile_response(1).as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -1948,40 +1532,27 @@ async fn test_get_k_profiles_manual_prime_skip() {
 
 #[tokio::test]
 async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // Manual priming, only one command should be sent
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "extrusion_cali_get");
 
-        // Manual priming, only one command should be sent
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "extrusion_cali_get");
+            // A decoy response with the right command but a sequence ID that doesn't
+            // belong to us (e.g. a second MQTT client querying the same printer).
+            reports
+                .publish(&mut server_stream, K_PROFILE_RESPONSE_DECOY_SEQ.as_bytes())
+                .await;
 
-        // A decoy response with the right command but a sequence ID that doesn't
-        // belong to us (e.g. a second MQTT client querying the same printer).
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1000,
-            K_PROFILE_RESPONSE_DECOY_SEQ.as_bytes(),
-        )
+            // Then the real response, correctly sequenced.
+            reports
+                .publish(&mut server_stream, k_profile_response(1).as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // Then the real response, correctly sequenced.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1001,
-            K_PROFILE_RESPONSE_NO_PRIME.as_bytes(),
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -2004,26 +1575,19 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
 // mqtt::commands::tests::test_clamp_task_id_wraps_near_max, colocated with clamp_task_id().
 #[tokio::test]
 async fn test_sequence_id_fits_in_i32() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        let seq: u64 = json["print"]["sequence_id"]
-            .as_str()
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert!(seq <= i32::MAX as u64, "Sequence ID must fit in i32");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            let seq: u64 = json["print"]["sequence_id"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(seq <= i32::MAX as u64, "Sequence ID must fit in i32");
+        })
+        .await;
 
     client.send_gcode("G28").await.expect("send_gcode failed");
 
@@ -2038,23 +1602,15 @@ async fn test_sequence_id_fits_in_i32() {
 /// `identify_id` values from the loaded 3MF, so they reference nothing when idle.
 #[tokio::test]
 async fn test_skip_objects_refuses_when_idle() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4400,
-            br#"{"print":{"gcode_state":"IDLE"}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, br#"{"print":{"gcode_state":"IDLE"}}"#)
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
@@ -2073,26 +1629,18 @@ async fn test_skip_objects_refuses_when_idle() {
 /// must let it through and actually publish.
 #[tokio::test]
 async fn test_skip_objects_allowed_when_paused() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, br#"{"print":{"gcode_state":"PAUSE"}}"#)
+                .await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4401,
-            br#"{"print":{"gcode_state":"PAUSE"}}"#,
-        )
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "skip_objects");
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "skip_objects");
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
@@ -2111,13 +1659,7 @@ async fn test_skip_objects_allowed_when_paused() {
 /// state gate is even consulted.
 #[tokio::test]
 async fn test_skip_objects_rejects_empty_object_ids() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
     assert!(matches!(
         client.skip_objects(vec![]).await,
         Err(Error::InvalidArgument(_))
@@ -2135,28 +1677,20 @@ async fn test_skip_objects_rejects_empty_object_ids() {
 /// client-side refusal would silently defeat.
 #[tokio::test]
 async fn test_lifecycle_commands_are_not_state_gated() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, br#"{"print":{"gcode_state":"IDLE"}}"#)
+                .await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4402,
-            br#"{"print":{"gcode_state":"IDLE"}}"#,
-        )
+            for expected in ["pause", "resume", "stop"] {
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], expected);
+            }
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        for expected in ["pause", "resume", "stop"] {
-            let json = read_publish_payload(&mut server_stream).await;
-            assert_eq!(json["print"]["command"], expected);
-        }
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await

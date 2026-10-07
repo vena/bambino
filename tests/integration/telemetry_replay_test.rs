@@ -21,12 +21,11 @@
 use bambino::client::{FanTarget, HeaterTemps, NozzleTemps, PrintStatus, TelemetryEvent};
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
-use bambino::mqtt::report_topic;
 use tokio::io::DuplexStream;
 use tokio::task::JoinHandle;
 
 use crate::common::client::{SERIAL, TestClient, with_broker};
-use crate::common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
+use crate::common::mock_mqtt::{ReportPublisher, handle_mqtt_handshake};
 
 /// Generously-wide plausibility bound for any single-value temperature accessor here, in °C.
 /// Not a precision spec — a sanity net catching a broken composite-temperature unpack (which
@@ -40,11 +39,9 @@ async fn replay_client(
 ) -> (TestClient<TokioIo<DuplexStream>>, JoinHandle<()>) {
     with_broker(SERIAL, model, |mut server| async move {
         handle_mqtt_handshake(&mut server).await;
-        let topic = report_topic(SERIAL);
-        for (i, payload) in payloads.iter().enumerate() {
-            send_publish_payload(&mut server, &topic, 2000u16.wrapping_add(i as u16), payload)
-                .await;
-            read_puback(&mut server).await;
+        let mut reports = ReportPublisher::new(SERIAL);
+        for payload in &payloads {
+            reports.publish(&mut server, payload).await;
         }
     })
     .await

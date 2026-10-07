@@ -317,8 +317,8 @@ impl MockDataStreamFactory {
     }
 
     /// A factory preloaded with `stream`, plus a handle to its slot for refilling it later.
-    pub fn with_stream(stream: tokio::io::DuplexStream) -> (Self, DataContainer) {
-        let container: DataContainer = Arc::new(Mutex::new(Some(TokioIo::new(stream))));
+    pub fn with_stream(stream: TokioIo<tokio::io::DuplexStream>) -> (Self, DataContainer) {
+        let container: DataContainer = Arc::new(Mutex::new(Some(stream)));
         (Self::new(container.clone()), container)
     }
 }

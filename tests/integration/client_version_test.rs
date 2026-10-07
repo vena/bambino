@@ -4,13 +4,10 @@
 //! `client_test.rs` (see issue #35).
 
 use bambino::error::Error;
-use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use crate::common::client::{SERIAL, connect_test_client};
-use crate::common::mock_mqtt::{
-    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
-};
+use crate::common::client::{SERIAL, with_broker};
+use crate::common::mock_mqtt::{ReportPublisher, handle_mqtt_handshake, read_publish_payload};
 
 // ============================================================================
 // Command-response round-trip tests
@@ -26,34 +23,25 @@ const VERSION_RESPONSE_DECOY_SEQ: &str = r#"{"info":{"command":"get_version","se
 
 #[tokio::test]
 async fn test_get_version_round_trip() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // Read the get_version request
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["info"]["command"], "get_version");
 
-        // Read the get_version request
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["info"]["command"], "get_version");
+            // Send a telemetry message first (should get buffered by poll_until)
+            let telemetry = br#"{"print":{"gcode_state":"IDLE","mc_percent":0}}"#;
+            reports.publish(&mut server_stream, telemetry).await;
 
-        // Send a telemetry message first (should get buffered by poll_until)
-        let telemetry = br#"{"print":{"gcode_state":"IDLE","mc_percent":0}}"#;
-        send_publish_payload(&mut server_stream, &topic, 1000, telemetry).await;
-        read_puback(&mut server_stream).await;
-
-        // Then send the version response
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1001,
-            VERSION_RESPONSE.as_bytes(),
-        )
+            // Then send the version response
+            reports
+                .publish(&mut server_stream, VERSION_RESPONSE.as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client.get_version().await.expect("get_version failed");
 
@@ -80,27 +68,19 @@ async fn test_get_version_round_trip() {
 
 #[tokio::test]
 async fn test_get_version_huge_command_timeout_saturates_without_panic() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["info"]["command"], "get_version");
 
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["info"]["command"], "get_version");
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1000,
-            VERSION_RESPONSE.as_bytes(),
-        )
+            reports
+                .publish(&mut server_stream, VERSION_RESPONSE.as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // `secs * 1000` overflowed (debug: panic, release: wrap) before the multiplication
     // became saturating; a saturated timeout behaves as "effectively disabled".
@@ -117,40 +97,27 @@ async fn test_get_version_huge_command_timeout_saturates_without_panic() {
 
 #[tokio::test]
 async fn test_get_version_ignores_mismatched_sequence_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // Read the get_version request
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["info"]["command"], "get_version");
 
-        // Read the get_version request
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["info"]["command"], "get_version");
+            // A decoy response with the right command but a sequence ID that doesn't
+            // belong to us (e.g. a second MQTT client querying the same printer).
+            reports
+                .publish(&mut server_stream, VERSION_RESPONSE_DECOY_SEQ.as_bytes())
+                .await;
 
-        // A decoy response with the right command but a sequence ID that doesn't
-        // belong to us (e.g. a second MQTT client querying the same printer).
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1000,
-            VERSION_RESPONSE_DECOY_SEQ.as_bytes(),
-        )
+            // Then the real response, correctly sequenced.
+            reports
+                .publish(&mut server_stream, VERSION_RESPONSE.as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // Then the real response, correctly sequenced.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1001,
-            VERSION_RESPONSE.as_bytes(),
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client
         .get_version()
@@ -166,30 +133,22 @@ async fn test_get_version_ignores_mismatched_sequence_id() {
 
 #[tokio::test]
 async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            let _json = read_publish_payload(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let _json = read_publish_payload(&mut server_stream).await;
-
-        // The correctly-sequenced response never arrives — only decoys with someone
-        // else's sequence ID — so get_version must exhaust the message-count safety
-        // valve and time out rather than ever accepting a mismatched response.
-        for i in 0..200u16 {
-            send_publish_payload(
-                &mut server_stream,
-                &topic,
-                5000 + i,
-                VERSION_RESPONSE_DECOY_SEQ.as_bytes(),
-            )
-            .await;
-            read_puback(&mut server_stream).await;
-        }
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+            // The correctly-sequenced response never arrives — only decoys with someone
+            // else's sequence ID — so get_version must exhaust the message-count safety
+            // valve and time out rather than ever accepting a mismatched response.
+            for _ in 0..200 {
+                reports
+                    .publish(&mut server_stream, VERSION_RESPONSE_DECOY_SEQ.as_bytes())
+                    .await;
+            }
+        })
+        .await;
 
     let result = client.get_version().await;
     assert!(
@@ -209,25 +168,17 @@ const VERSION_RESPONSE_MALFORMED: &str =
 
 #[tokio::test]
 async fn test_get_version_surfaces_serialization_error_on_malformed_matching_response() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            let _json = read_publish_payload(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let _json = read_publish_payload(&mut server_stream).await;
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1001,
-            VERSION_RESPONSE_MALFORMED.as_bytes(),
-        )
+            reports
+                .publish(&mut server_stream, VERSION_RESPONSE_MALFORMED.as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let result = client.get_version().await;
     assert!(
@@ -242,38 +193,31 @@ async fn test_get_version_surfaces_serialization_error_on_malformed_matching_res
 
 #[tokio::test]
 async fn test_poll_until_buffers_unmatched_messages() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // Read the get_version request
+            let _json = read_publish_payload(&mut server_stream).await;
 
-        // Read the get_version request
-        let _json = read_publish_payload(&mut server_stream).await;
+            // Send 3 telemetry messages before the version response
+            for i in 0..3u16 {
+                let telemetry = format!(
+                    r#"{{"print":{{"gcode_state":"RUNNING","mc_percent":{}}}}}"#,
+                    i * 10
+                );
+                reports
+                    .publish(&mut server_stream, telemetry.as_bytes())
+                    .await;
+            }
 
-        // Send 3 telemetry messages before the version response
-        for i in 0..3u16 {
-            let telemetry = format!(
-                r#"{{"print":{{"gcode_state":"RUNNING","mc_percent":{}}}}}"#,
-                i * 10
-            );
-            send_publish_payload(&mut server_stream, &topic, 1000 + i, telemetry.as_bytes()).await;
-            read_puback(&mut server_stream).await;
-        }
-
-        // Finally send the matching response
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            1003,
-            VERSION_RESPONSE.as_bytes(),
-        )
+            // Finally send the matching response
+            reports
+                .publish(&mut server_stream, VERSION_RESPONSE.as_bytes())
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client
         .get_version()

@@ -9,14 +9,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bambino::client::{AckExpectation, CommandOutcome, CommandRefusal, TelemetryEvent};
 use bambino::error::Error;
-use bambino::io::{TimerError, TimerProvider, TokioIo};
+use bambino::io::{TimerError, TimerProvider};
 use bambino::models::PrinterModel;
 use tokio::io::DuplexStream;
 
-use crate::common::client::{SERIAL, connect_test_client};
-use crate::common::mock_mqtt::{
-    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
-};
+use crate::common::client::{SERIAL, with_broker};
+use crate::common::mock_mqtt::{ReportPublisher, handle_mqtt_handshake, read_publish_payload};
 
 /// A real-clock timer whose `now_millis()` only moves when a test advances it, so a deadline
 /// can be crossed without sleeping through it.
@@ -40,10 +38,6 @@ impl TimerProvider for ManualClock {
     }
 }
 
-fn report_topic() -> String {
-    format!("device/{SERIAL}/report")
-}
-
 /// Reads the client's next command and returns its `(wrapper, command, sequence_id)`.
 async fn read_command(stream: &mut DuplexStream) -> (String, String, String) {
     let json = read_publish_payload(stream).await;
@@ -55,45 +49,38 @@ async fn read_command(stream: &mut DuplexStream) -> (String, String, String) {
     )
 }
 
-async fn publish(stream: &mut DuplexStream, packet_id: u16, payload: &str) {
-    send_publish_payload(stream, &report_topic(), packet_id, payload.as_bytes()).await;
-    read_puback(stream).await;
-}
-
 #[tokio::test]
 async fn test_echo_resolves_its_command_with_the_decoded_verdict() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            let (_, command, seq) = read_command(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    r#"{"print":{"command":"push_status","sequence_id":"58","home_flag":7}}"#.as_bytes(),
+                )
+                .await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    format!(r#"{{"print":{{"command":"{command}","sequence_id":"{seq}","result":"success","reason":"success"}}}}"#).as_bytes(),
+                )
+                .await;
 
-        let (_, command, seq) = read_command(&mut server_stream).await;
-        publish(
-            &mut server_stream,
-            1,
-            r#"{"print":{"command":"push_status","sequence_id":"58","home_flag":7}}"#,
-        )
+            // A system-wrapped refusal answers the second command.
+            let (wrapper, command, seq) = read_command(&mut server_stream).await;
+            assert_eq!(wrapper, "system");
+            reports
+                .publish(
+                    &mut server_stream,
+                    format!(r#"{{"system":{{"command":"{command}","sequence_id":"{seq}","result":"failed","reason":"mqtt message verify failed"}}}}"#).as_bytes(),
+                )
+                .await;
+            })
         .await;
-        publish(
-            &mut server_stream,
-            2,
-            &format!(r#"{{"print":{{"command":"{command}","sequence_id":"{seq}","result":"success","reason":"success"}}}}"#),
-        )
-        .await;
-
-        // A system-wrapped refusal answers the second command.
-        let (wrapper, command, seq) = read_command(&mut server_stream).await;
-        assert_eq!(wrapper, "system");
-        publish(
-            &mut server_stream,
-            3,
-            &format!(r#"{{"system":{{"command":"{command}","sequence_id":"{seq}","result":"failed","reason":"mqtt message verify failed"}}}}"#),
-        )
-        .await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let gcode = client.send_gcode("G28").await.expect("send_gcode failed");
     assert!(matches!(
@@ -137,26 +124,24 @@ async fn test_echo_resolves_its_command_with_the_decoded_verdict() {
 /// — another client's command on the shared report topic — must be `Unknown`.
 #[tokio::test]
 async fn test_foreign_echo_under_any_wrapper_is_unknown() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        publish(
-            &mut server_stream,
-            1,
-            r#"{"system":{"command":"ledctrl","sequence_id":"20001","result":"success","reason":"success"}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let mut reports = ReportPublisher::new(SERIAL);
+            reports
+                .publish(
+                    &mut server_stream,
+                    r#"{"system":{"command":"ledctrl","sequence_id":"20001","result":"success","reason":"success"}}"#.as_bytes(),
+                )
+                .await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    r#"{"print":{"command":"pause","sequence_id":"0","result":"success"}}"#.as_bytes(),
+                )
+                .await;
+            })
         .await;
-        publish(
-            &mut server_stream,
-            2,
-            r#"{"print":{"command":"pause","sequence_id":"0","result":"success"}}"#,
-        )
-        .await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     for _ in 0..2 {
         let event = client.poll_telemetry().await.unwrap();
@@ -171,18 +156,16 @@ async fn test_foreign_echo_under_any_wrapper_is_unknown() {
 
 #[tokio::test]
 async fn test_unanswered_command_times_out_at_its_deadline() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        read_command(&mut server_stream).await;
-        // No echo: the printer never answers.
-    });
+    let (client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            read_command(&mut server_stream).await;
+            // No echo: the printer never answers.
+        })
+        .await;
 
     let clock = ManualClock::default();
-    let mut client = connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S)
-        .await
-        .with_timer(clock.clone());
+    let mut client = client.with_timer(clock.clone());
     client.set_command_timeout(Some(std::time::Duration::from_secs(5)));
 
     let handle = client.pause_print().await.expect("pause_print failed");
@@ -206,15 +189,12 @@ async fn test_unanswered_command_times_out_at_its_deadline() {
 
 #[tokio::test]
 async fn test_disconnect_resolves_pending_commands_as_connection_lost() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        read_command(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            read_command(&mut server_stream).await;
+        })
+        .await;
     let handle = client.resume_print().await.expect("resume_print failed");
     broker_task.await.expect("broker task panicked");
 
@@ -233,15 +213,13 @@ async fn test_disconnect_resolves_pending_commands_as_connection_lost() {
 async fn test_await_ack_after_disconnect_returns_connection_lost_without_redialing() {
     // Regression (#351): await_ack called ensure_mqtt() before take_known(), so on this
     // from_mqtt() client, which cannot redial, the known ConnectionLost outcome became an error.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        read_command(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            read_command(&mut server_stream).await;
+        })
+        .await;
     let handle = client.resume_print().await.expect("resume_print failed");
     broker_task.await.expect("broker task panicked");
 
@@ -257,33 +235,31 @@ async fn test_await_ack_after_disconnect_returns_connection_lost_without_rediali
 
 #[tokio::test]
 async fn test_await_ack_returns_the_outcome_once_and_keeps_other_traffic() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let (_, command, seq) = read_command(&mut server_stream).await;
-        publish(
-            &mut server_stream,
-            1,
-            r#"{"print":{"command":"push_status","sequence_id":"59","gcode_state":"RUNNING"}}"#,
-        )
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let mut reports = ReportPublisher::new(SERIAL);
+            let (_, command, seq) = read_command(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    r#"{"print":{"command":"push_status","sequence_id":"59","gcode_state":"RUNNING"}}"#.as_bytes(),
+                )
+                .await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    format!(r#"{{"print":{{"command":"{command}","sequence_id":"{seq}","errno":-2,"soft_temp":45}}}}"#).as_bytes(),
+                )
+                .await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    r#"{"print":{"command":"push_status","sequence_id":"60","gcode_state":"RUNNING"}}"#.as_bytes(),
+                )
+                .await;
+            })
         .await;
-        publish(
-            &mut server_stream,
-            2,
-            &format!(r#"{{"print":{{"command":"{command}","sequence_id":"{seq}","errno":-2,"soft_temp":45}}}}"#),
-        )
-        .await;
-        publish(
-            &mut server_stream,
-            3,
-            r#"{"print":{"command":"push_status","sequence_id":"60","gcode_state":"RUNNING"}}"#,
-        )
-        .await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let handle = client
         .change_filament(0, 1, 220, 220, None)
         .await
@@ -322,15 +298,12 @@ async fn test_await_ack_returns_the_outcome_once_and_keeps_other_traffic() {
 
 #[tokio::test]
 async fn test_pushall_settles_on_publish() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        read_command(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            read_command(&mut server_stream).await;
+        })
+        .await;
     let handle = client
         .request_pushall()
         .await

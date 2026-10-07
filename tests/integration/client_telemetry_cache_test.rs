@@ -3,51 +3,39 @@
 //! Split from the "Command-response round-trip tests" section of the former
 //! `client_test.rs` (see issue #35).
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
-
 use bambino::client::HeaterTemps;
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
-use bambino::identity::PrinterIdentity;
-use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use crate::common::client::{SERIAL, connect_test_client, connect_test_mqtt};
-use crate::common::io::{DummyTlsConnector, MockDataStreamFactory};
-use crate::common::mock_mqtt::{
-    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
+use crate::common::client::{
+    SERIAL, X1_SERIAL, connect_test_mqtt, spawn_broker, test_identity, with_broker,
 };
+use crate::common::io::{DummyTlsConnector, MockDataStreamFactory};
+use crate::common::mock_mqtt::{ReportPublisher, handle_mqtt_handshake, read_publish_payload};
 
 #[tokio::test]
 async fn test_print_status_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"gcode_state":"RUNNING"}}"#,
+                )
+                .await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4300,
-            br#"{"print":{"gcode_state":"RUNNING"}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"gcode_state":"BOGUS_STATE"}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4301,
-            br#"{"print":{"gcode_state":"BOGUS_STATE"}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet — cache must read as unknown-state, not a stale guess.
     assert_eq!(client.print_status(), None);
@@ -71,26 +59,18 @@ async fn test_print_status_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_door_open_none_on_sensorless_model() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Bit 23 set — would read as "open" on a sensor-equipped model.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5000,
-            br#"{"print":{"home_flag":8388608}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
     // P1S has no door sensor.
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // Bit 23 set — would read as "open" on a sensor-equipped model.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":8388608}}"#)
+                .await;
+        })
+        .await;
 
     assert_eq!(client.is_door_open(), None);
 
@@ -107,38 +87,24 @@ async fn test_door_open_none_on_sensorless_model() {
 
 #[tokio::test]
 async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", "00M000000000000");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Bit 23 set: door open.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5100,
-            br#"{"print":{"home_flag":8388608}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-
-        // Bit 23 clear: door closed.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5101,
-            br#"{"print":{"home_flag":0}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
     // X1C has a door sensor, read from home_flag bit 23.
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "00M000000000000",
+    let (mut client, broker_task) = with_broker(
+        X1_SERIAL,
         PrinterModel::X1C,
+        |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(X1_SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // Bit 23 set: door open.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":8388608}}"#)
+                .await;
+
+            // Bit 23 clear: door closed.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":0}}"#)
+                .await;
+        },
     )
     .await;
 
@@ -166,38 +132,25 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
     // message, ignoring the same absent-field staleness contract every other cache field
     // respects. A print-carrying message that omits home_flag (X1C's door-sensor field)
     // must leave a previously-observed "door open" cached, not reset it to Some(false).
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", "00M000000000000");
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Bit 23 set: door open.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5110,
-            br#"{"print":{"home_flag":8388608}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-
-        // A print-carrying message with no home_flag at all (e.g. an incremental update
-        // only touching an unrelated field) must not reset the cached door state.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5111,
-            br#"{"print":{"mc_percent":42}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "00M000000000000",
+    let (mut client, broker_task) = with_broker(
+        X1_SERIAL,
         PrinterModel::X1C,
+        |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(X1_SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // Bit 23 set: door open.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":8388608}}"#)
+                .await;
+
+            // A print-carrying message with no home_flag at all (e.g. an incremental update
+            // only touching an unrelated field) must not reset the cached door state.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"mc_percent":42}}"#)
+                .await;
+        },
     )
     .await;
 
@@ -222,35 +175,22 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
 
 #[tokio::test]
 async fn test_active_fault_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // print_error = 83902476 decimal -> 0x0500400C, a genuine fault.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"print_error":83902476}}"#)
+                .await;
 
-        // print_error = 83902476 decimal -> 0x0500400C, a genuine fault.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5200,
-            br#"{"print":{"print_error":83902476}}"#,
-        )
+            // Register reads back to 0 — no fault.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"print_error":0}}"#)
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // Register reads back to 0 — no fault.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5201,
-            br#"{"print":{"print_error":0}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet.
     assert_eq!(client.active_fault(), None);
@@ -281,34 +221,23 @@ async fn test_active_fault_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_print_progress_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5300,
-            br#"{"print":{"mc_percent":42,"mc_remaining_time":30,"layer_num":5,"total_layer_num":100}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"mc_percent":42,"mc_remaining_time":30,"layer_num":5,"total_layer_num":100}}"#,
+                )
+                .await;
+
+            // Only `mc_percent` present this time — the other three fields must stay cached.
+            reports.publish(&mut server_stream, br#"{"print":{"mc_percent":50}}"#).await;
+            })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // Only `mc_percent` present this time — the other three fields must stay cached.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5301,
-            br#"{"print":{"mc_percent":50}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.print_progress(), PrintProgress::default());
 
@@ -347,35 +276,26 @@ async fn test_print_progress_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_print_progress_total_layers_zero_does_not_clobber_cache() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5310,
-            br#"{"print":{"layer_num":5,"total_layer_num":100}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"layer_num":5,"total_layer_num":100}}"#,
+                )
+                .await;
+
+            // End-of-print: firmware resets total_layer_num to 0. That is not a real layer
+            // count, and must not overwrite the cached 100.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"total_layer_num":0}}"#)
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // End-of-print: firmware resets total_layer_num to 0. That is not a real layer
-        // count, and must not overwrite the cached 100.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5311,
-            br#"{"print":{"total_layer_num":0}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .poll_telemetry()
@@ -396,34 +316,25 @@ async fn test_print_progress_total_layers_zero_does_not_clobber_cache() {
 
 #[tokio::test]
 async fn test_bed_temperatures_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5400,
-            br#"{"print":{"bed_temper":60.0,"bed_target_temper":65.0}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"bed_temper":60.0,"bed_target_temper":65.0}}"#,
+                )
+                .await;
+
+            // Only `bed_temper` present this time — target must stay cached at 65.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"bed_temper":61.0}}"#)
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // Only `bed_temper` present this time — target must stay cached at 65.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5401,
-            br#"{"print":{"bed_temper":61.0}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.bed_temperatures(), None);
 
@@ -456,28 +367,25 @@ async fn test_bed_temperatures_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_ams_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5500,
-            br#"{"print":{"ams":{"ams_exist_bits":"1","tray_exist_bits":"3"}}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"ams":{"ams_exist_bits":"1","tray_exist_bits":"3"}}}"#,
+                )
+                .await;
+
+            // A report with no `ams` key at all must leave the cache untouched.
+            reports
+                .publish(&mut server_stream, br#"{"print":{}}"#)
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // A report with no `ams` key at all must leave the cache untouched.
-        send_publish_payload(&mut server_stream, &topic, 5501, br#"{"print":{}}"#).await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.ams().is_none());
 
@@ -504,24 +412,20 @@ async fn test_ams_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5600,
-            br#"{"print":{"vt_tray":{"id":"254"},"vir_slot":[{"id":"0"},{"id":"1"}]}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"vt_tray":{"id":"254"},"vir_slot":[{"id":"0"},{"id":"1"}]}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.vt_tray().is_none());
     assert!(client.vir_slot().is_none());
@@ -545,41 +449,35 @@ async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
 async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
     // issue #43: a partial id-only push must not wholesale-clobber prior tray_type/tray_color/
     // etc., and a vir_slot push carrying only one extruder's entry must not drop the other.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // Seed full fields for vt_tray and both vir_slot entries.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5610,
-            br#"{"print":{
+            // Seed full fields for vt_tray and both vir_slot entries.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{
                 "vt_tray":{"id":"254","tray_type":"PLA","tray_color":"FF0000FF","remain":80},
                 "vir_slot":[
                     {"id":"0","tray_type":"PLA","remain":80},
                     {"id":"1","tray_type":"PETG","remain":60}
                 ]
             }}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
+                )
+                .await;
 
-        // Follow-up: id-only vt_tray, and a vir_slot array carrying only id "0".
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5611,
-            br#"{"print":{"vt_tray":{"id":"254"},"vir_slot":[{"id":"0","remain":70}]}}"#,
-        )
+            // Follow-up: id-only vt_tray, and a vir_slot array carrying only id "0".
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"vt_tray":{"id":"254"},"vir_slot":[{"id":"0","remain":70}]}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .poll_telemetry()
@@ -632,24 +530,20 @@ async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
 
 #[tokio::test]
 async fn test_nozzle_temperatures_cache_single_nozzle_model() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5700,
-            br#"{"print":{"nozzle_temper":200.0,"nozzle_target_temper":210.0}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"nozzle_temper":200.0,"nozzle_target_temper":210.0}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(
         client
@@ -680,29 +574,25 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
 async fn test_printing_tray_global_id_prefers_snow_field() {
     // printing_tray_global_id() decodes device.extruder.info[active].snow directly,
     // no ams_extruder_map needed.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // Extruder 0 (right/main): state selects active_extruder_index()=1 (left), snow
-        // routes it to ams_id=2, slot_id=1 (raw = (2<<8)|1 = 513).
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5700,
-            br#"{"device":{"extruder":{"info":[
+            // Extruder 0 (right/main): state selects active_extruder_index()=1 (left), snow
+            // routes it to ams_id=2, slot_id=1 (raw = (2<<8)|1 = 513).
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"device":{"extruder":{"info":[
                 {"id":0,"snow":65535},
                 {"id":1,"snow":513}
             ],"state":18}}}"#,
-        )
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.printing_tray_global_id(), None);
 
@@ -723,29 +613,25 @@ async fn test_printing_tray_global_id_prefers_snow_field() {
 /// active tray" while the machine was printing from that unit.
 #[tokio::test]
 async fn test_printing_tray_global_id_normalizes_the_ams_lite_on_a2l_unit_id() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::A2L, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // Same extruder shape as the sibling test above (state 18 selects index 1), with snow
-        // routing to the AMS Lite's physical id 16, slot 2: raw = (16 << 8) | 2 = 4098.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5701,
-            br#"{"device":{"extruder":{"info":[
+            // Same extruder shape as the sibling test above (state 18 selects index 1), with snow
+            // routing to the AMS Lite's physical id 16, slot 2: raw = (16 << 8) | 2 = 4098.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"device":{"extruder":{"info":[
                 {"id":0,"snow":65535},
                 {"id":1,"snow":4098}
             ],"state":18}}}"#,
-        )
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::A2L).await;
 
     client
         .poll_telemetry()
@@ -765,28 +651,24 @@ async fn test_printing_tray_global_id_normalizes_the_ams_lite_on_a2l_unit_id() {
 
 #[tokio::test]
 async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // IDEX hardware present (`device.nozzle.info` has 2 entries) but no live
-        // `device.extruder.info` temps yet — the flat-field routing quirk applies:
-        // nozzle_temper (100) is nozzle 1 (left) actual, nozzle_target_temper (220) is
-        // nozzle 0 (right) target.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5701,
-            br#"{"print":{"device":{"nozzle":{"info":[{"id":0},{"id":1}]}},"nozzle_temper":100.0,"nozzle_target_temper":220.0}}"#,
-        )
+            // IDEX hardware present (`device.nozzle.info` has 2 entries) but no live
+            // `device.extruder.info` temps yet — the flat-field routing quirk applies:
+            // nozzle_temper (100) is nozzle 1 (left) actual, nozzle_target_temper (220) is
+            // nozzle 0 (right) target.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"device":{"nozzle":{"info":[{"id":0},{"id":1}]}},"nozzle_temper":100.0,"nozzle_target_temper":220.0}}"#,
+                )
+                .await;
+            })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::H2D).await;
 
     client
         .poll_telemetry()
@@ -806,26 +688,22 @@ async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
 
 #[tokio::test]
 async fn test_chamber_temperature_cache() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Composite-packed: (60 << 16) | 50 = actual 50, target 60.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5702,
-            br#"{"print":{"chamber_temper":3932210.0}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
+    let mut reports = ReportPublisher::new(SERIAL);
 
     // P1S has no chamber heater/sensor — always None regardless of telemetry.
-    let mut sensorless_client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
+    let (mut sensorless_client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // Composite-packed: (60 << 16) | 50 = actual 50, target 60.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"chamber_temper":3932210.0}}"#,
+                )
+                .await;
+        })
+        .await;
     assert_eq!(sensorless_client.chamber_temperature(), None);
     sensorless_client
         .poll_telemetry()
@@ -833,21 +711,18 @@ async fn test_chamber_temperature_cache() {
         .expect("poll_telemetry should parse chamber temperature report");
     assert_eq!(sensorless_client.chamber_temperature(), None);
 
-    let (client_stream2, mut server_stream2) = tokio::io::duplex(8192);
-    let topic2 = format!("device/{SERIAL}/report");
-    let broker_task2 = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream2).await;
-        send_publish_payload(
-            &mut server_stream2,
-            &topic2,
-            5703,
-            br#"{"print":{"chamber_temper":3932210.0}}"#,
-        )
+    let mut reports2 = ReportPublisher::new(SERIAL);
+    let (mut heated_client, broker_task2) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream2| async move {
+            handle_mqtt_handshake(&mut server_stream2).await;
+            reports2
+                .publish(
+                    &mut server_stream2,
+                    br#"{"print":{"chamber_temper":3932210.0}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream2).await;
-    });
-    let mut heated_client =
-        connect_test_client(TokioIo::new(client_stream2), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(heated_client.chamber_temperature(), None);
     heated_client
@@ -868,26 +743,22 @@ async fn test_chamber_temperature_cache() {
 
 #[tokio::test]
 async fn test_hms_cache_and_active_alerts() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // One genuine fault (attr 0x05000100 / code 0x0001400C) and one cancellation
-        // echo (attr 0x05000100 / code 0x0001400E) that must be filtered out.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5704,
-            br#"{"print":{"hms":[{"attr":83886336,"code":81932},{"attr":83886336,"code":81934}]}}"#,
-        )
+            // One genuine fault (attr 0x05000100 / code 0x0001400C) and one cancellation
+            // echo (attr 0x05000100 / code 0x0001400E) that must be filtered out.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"hms":[{"attr":83886336,"code":81932},{"attr":83886336,"code":81934}]}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.hms().is_none());
     assert!(client.active_hms_alerts().is_empty());
@@ -907,27 +778,23 @@ async fn test_hms_cache_and_active_alerts() {
 
 #[tokio::test]
 async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        // A tray in state 9 (empty) that still carries stale material fields from a
-        // previously loaded spool — the exact case `ams()`'s doc comment says stays raw
-        // and `sanitized_ams()` scrubs.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5705,
-            br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25.0","humidity":"3","tray":[{"id":"0","state":9,"tray_type":"PLA","tray_color":"FF0000FF","remain":42}]}]}}}"#,
-        )
+            // A tray in state 9 (empty) that still carries stale material fields from a
+            // previously loaded spool — the exact case `ams()`'s doc comment says stays raw
+            // and `sanitized_ams()` scrubs.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25.0","humidity":"3","tray":[{"id":"0","state":9,"tray_type":"PLA","tray_color":"FF0000FF","remain":42}]}]}}}"#,
+                )
+                .await;
+            })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.ams().is_none());
     assert!(client.sanitized_ams().is_none());
@@ -962,26 +829,22 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
 
 #[tokio::test]
 async fn test_fan_speed_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5705,
-            br#"{"print":{"cooling_fan_speed":"15","big_fan1_speed":"8","big_fan2_speed":"0","heatbreak_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":75}]}}}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
+    let mut reports = ReportPublisher::new(SERIAL);
 
     // The four flat fan keys are step-encoded (0-15) on every model, including P2S/X2D — see
     // test_fan_speed_cache_from_telemetry_x2d_step_encoded below.
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::H2D).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"cooling_fan_speed":"15","big_fan1_speed":"8","big_fan2_speed":"0","heatbreak_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":75}]}}}}"#,
+                )
+                .await;
+            })
+        .await;
 
     assert_eq!(
         client.fan_speed(bambino::client::FanTarget::PartCooling),
@@ -1020,28 +883,24 @@ async fn test_fan_speed_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5706,
-            br#"{"print":{"cooling_fan_speed":"15","big_fan1_speed":"8","big_fan2_speed":"0","heatbreak_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":75}]}}}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
+    let mut reports = ReportPublisher::new(SERIAL);
 
     // Regression for #38: X2D/P2S previously decoded the four flat fan keys as
     // already-percentage (ModelQuirks::reports_auxiliary_fan_percentage), reading ~6.7x too low.
     // They must step-decode identically to every other model — only the id-160 airduct part
     // (auxiliary_left2_fan_speed) is a true wire percentage.
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X2D).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"cooling_fan_speed":"15","big_fan1_speed":"8","big_fan2_speed":"0","heatbreak_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":75}]}}}}"#,
+                )
+                .await;
+            })
+        .await;
 
     client
         .poll_telemetry()
@@ -1071,26 +930,22 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
 
 #[tokio::test]
 async fn test_auxiliary_left2_fan_negative_state_is_none() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5707,
-            br#"{"print":{"cooling_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":-1}]}}}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
+    let mut reports = ReportPublisher::new(SERIAL);
 
     // A negative `state` is a firmware sentinel for "off/unknown"; it must report
     // None, not be masked into 100% by `& 0xFF`.
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X2D).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"cooling_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":-1}]}}}}"#,
+                )
+                .await;
+            })
+        .await;
 
     client
         .poll_telemetry()
@@ -1107,30 +962,26 @@ async fn test_auxiliary_left2_fan_negative_state_is_none() {
 
 #[tokio::test]
 async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // 306 == 0x132: percentage 50 in the low byte, a flag bit set above it.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5708,
-            br#"{"print":{"cooling_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":306}]}}}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
+    let mut reports = ReportPublisher::new(SERIAL);
 
     // The low-8-bit mask must still apply to a non-negative state (BambuStudio's
     // DevFan::ParseV3_0 get_flag_bits(state, 0, 8); bambuddy's identical `& 0xFF`).
     // Without it a packed value clamps to 100 instead of decoding to its real percentage.
     // The negative-sentinel guard above and this mask are both required and must stay in
     // that order — fixing either alone reintroduced the other's bug once already.
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X2D).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // 306 == 0x132: percentage 50 in the low byte, a flag bit set above it.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"cooling_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":306}]}}}}"#,
+                )
+                .await;
+            })
+        .await;
 
     client
         .poll_telemetry()
@@ -1147,24 +998,20 @@ async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
 
 #[tokio::test]
 async fn test_print_speed_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5706,
-            br#"{"print":{"spd_lvl":3,"spd_mag":124}}"#,
-        )
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"spd_lvl":3,"spd_mag":124}}"#,
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.print_speed(), None);
     assert_eq!(client.print_speed_magnitude(), None);
@@ -1181,33 +1028,21 @@ async fn test_print_speed_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_wifi_signal_cache_from_telemetry() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{SERIAL}/report");
+    let mut reports = ReportPublisher::new(SERIAL);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5707,
-            br#"{"print":{"wifi_signal":"-52dBm"}}"#,
-        )
+            reports
+                .publish(&mut server_stream, br#"{"print":{"wifi_signal":"-52dBm"}}"#)
+                .await;
+
+            reports
+                .publish(&mut server_stream, br#"{"print":{"wifi_signal":"-90dBm"}}"#)
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            5708,
-            br#"{"print":{"wifi_signal":"-90dBm"}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.wifi_signal(), None);
     assert!(!client.is_ethernet_active_via_wifi_signal());
@@ -1234,35 +1069,28 @@ async fn test_wifi_signal_cache_from_telemetry() {
 /// `Unknown` *and* leave the cache alone. Nothing asserted the second half.
 #[tokio::test]
 async fn test_command_echo_is_unknown_and_leaves_the_cache_untouched() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", SERIAL);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+                let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","home_flag":7,"gcode_state":"RUNNING"}}"#,
+                )
+                .await;
 
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4500,
-            br#"{"print":{"command":"push_status","home_flag":7,"gcode_state":"RUNNING"}}"#,
-        )
+            // An `extrusion_cali_get` reply carrying fields that overlap genuine telemetry. If the
+            // gate let this through, it would clobber both cached values with the echo's contents.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"extrusion_cali_get","sequence_id":"10001","home_flag":0,"gcode_state":"FAILED"}}"#,
+                )
+                .await;
+            })
         .await;
-        read_puback(&mut server_stream).await;
-
-        // An `extrusion_cali_get` reply carrying fields that overlap genuine telemetry. If the
-        // gate let this through, it would clobber both cached values with the echo's contents.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4501,
-            br#"{"print":{"command":"extrusion_cali_get","sequence_id":"10001","home_flag":0,"gcode_state":"FAILED"}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let first = client.poll_telemetry().await.expect("first poll failed");
     assert!(matches!(first, TelemetryEvent::Report(..)));
@@ -1295,24 +1123,17 @@ const HOME_FLAG_XYZ_HOMED_220V: u32 = 0x0F;
 
 #[tokio::test]
 async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
-    let topic = format!("device/{}/report", SERIAL);
-
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let first_topic = topic.clone();
-    let first_broker = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        send_publish_payload(
-            &mut server_stream,
-            &first_topic,
-            4400,
-            format!(r#"{{"print":{{"home_flag":{HOME_FLAG_XYZ_HOMED_220V}}}}}"#).as_bytes(),
-        )
+    let (mut client, first_broker) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            ReportPublisher::new(SERIAL)
+                .publish(
+                    &mut server_stream,
+                    format!(r#"{{"print":{{"home_flag":{HOME_FLAG_XYZ_HOMED_220V}}}}}"#).as_bytes(),
+                )
+                .await;
+        })
         .await;
-        read_puback(&mut server_stream).await;
-    });
-
-    let mut client =
-        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
@@ -1343,23 +1164,20 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
         "mains wiring cannot change across a reconnect to the same unit"
     );
 
-    let (client_stream_2, mut server_stream_2) = tokio::io::duplex(8192);
-    let second_broker = tokio::spawn(async move {
+    let (stream_2, second_broker) = spawn_broker(|mut server_stream_2| async move {
         handle_mqtt_handshake(&mut server_stream_2).await;
         // attach_mqtt runs the same connect-time pushall a dialled session gets (#346).
         let pushall = read_publish_payload(&mut server_stream_2).await;
         assert_eq!(pushall["pushing"]["command"], "pushall");
-        send_publish_payload(
-            &mut server_stream_2,
-            &topic,
-            4401,
-            format!(r#"{{"print":{{"home_flag":{HOME_FLAG_XYZ_HOMED_220V}}}}}"#).as_bytes(),
-        )
-        .await;
-        read_puback(&mut server_stream_2).await;
+        ReportPublisher::new(SERIAL)
+            .publish(
+                &mut server_stream_2,
+                format!(r#"{{"print":{{"home_flag":{HOME_FLAG_XYZ_HOMED_220V}}}}}"#).as_bytes(),
+            )
+            .await;
     });
 
-    let reconnected = connect_test_mqtt(TokioIo::new(client_stream_2), SERIAL).await;
+    let reconnected = connect_test_mqtt(stream_2, SERIAL).await;
     client.attach_mqtt(reconnected).await;
     assert_eq!(
         client.is_all_axes_homed(),
@@ -1381,9 +1199,7 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
 
 #[tokio::test]
 async fn test_lazy_connect_publishes_pushall_before_the_callers_own_command() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
+    let (stream, broker_task) = spawn_broker(|mut server_stream| async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
         // Firmware broadcasts carry only changed fields, so a connection that never asks for a
@@ -1399,18 +1215,9 @@ async fn test_lazy_connect_publishes_pushall_before_the_callers_own_command() {
         assert_eq!(caller_frame["print"]["command"], "gcode_line");
     });
 
-    let factory =
-        MockDataStreamFactory::new(Arc::new(Mutex::new(Some(TokioIo::new(client_stream)))));
-    let mut client = PrinterClient::new(
-        DummyTlsConnector,
-        factory,
-        PrinterIdentity {
-            ip: "127.0.0.1".to_string(),
-            serial: SERIAL.to_string(),
-            access_code: "12345678".to_string(),
-            model: PrinterModel::P1S,
-        },
-    );
+    let (factory, _) = MockDataStreamFactory::with_stream(stream);
+    let mut client =
+        PrinterClient::new(DummyTlsConnector, factory, test_identity(PrinterModel::P1S));
 
     // Lazy connect: `home_axes` dials through `ensure_mqtt()`, which is where the pushall
     // belongs — the reconnect path in the bug report goes through it, not through an explicit

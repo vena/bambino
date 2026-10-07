@@ -33,6 +33,16 @@ fn frame_header(payload_len: u32) -> [u8; 16] {
     header
 }
 
+/// Returns the `i`th frame [`run_mock_camera_server`] emits.
+///
+/// It is a JPEG start marker, `MOCK_JPEG_PAYLOAD_{i}`, then an end marker.
+pub fn mock_frame(i: u32) -> Vec<u8> {
+    let mut frame = vec![0xFF, 0xD8];
+    frame.extend_from_slice(format!("MOCK_JPEG_PAYLOAD_{i}").as_bytes());
+    frame.extend_from_slice(&[0xFF, 0xD9]);
+    frame
+}
+
 /// Simulates the proprietary binary camera protocol emitted on Port 6000.
 ///
 /// * `stream`: The server-side end of the duplex TCP control stream.
@@ -46,9 +56,7 @@ pub async fn run_mock_camera_server(
     expect_handshake(&mut stream, expected_access_code).await;
 
     for i in 0..frame_count {
-        let mut mock_image = vec![0xFF, 0xD8];
-        mock_image.extend_from_slice(format!("MOCK_JPEG_PAYLOAD_{}", i).as_bytes());
-        mock_image.extend_from_slice(&[0xFF, 0xD9]);
+        let mock_image = mock_frame(i);
 
         stream
             .write_all(&frame_header(mock_image.len() as u32))

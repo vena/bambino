@@ -5,12 +5,11 @@
 
 use bambino::client::{BuzzerMode, FanTarget};
 use bambino::error::Error;
-use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use crate::common::client::connect_test_client;
+use crate::common::client::{SERIAL, X1_SERIAL, connect_idle_client, with_broker};
 use crate::common::mock_mqtt::{
-    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
+    ReportPublisher, handle_mqtt_handshake, read_gcode_param, read_publish_payload,
 };
 
 // ============================================================================
@@ -19,27 +18,21 @@ use crate::common::mock_mqtt::{
 
 #[tokio::test]
 async fn test_homing_safety_interlocks() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Verify Bed-on-Z Safe Homing Command (Bare G28)
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "gcode_line");
-        assert_eq!(json["print"]["param"], "G28\n");
-    });
-
     // CoreXY Bed-on-Z initialization
-    let mut client_x1c = connect_test_client(
-        TokioIo::new(client_stream),
-        "00M000000000000",
+    let (mut client_x1c, broker_task) = with_broker(
+        X1_SERIAL,
         PrinterModel::X1C,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // Verify Bed-on-Z Safe Homing Command (Bare G28)
+            assert_eq!(read_gcode_param(&mut server_stream).await, "G28\n");
+        },
     )
     .await;
 
     // Assert public serial and model getters expose the correct fields
-    assert_eq!(client_x1c.serial(), "00M000000000000");
+    assert_eq!(client_x1c.serial(), X1_SERIAL);
     assert_eq!(client_x1c.model(), PrinterModel::X1C);
 
     // Bed-on-Z Safety Guard Verification: home_z_only_danger must return ModelMismatch
@@ -50,19 +43,15 @@ async fn test_homing_safety_interlocks() {
     client_x1c.home_all().await.expect("G28 homing failed");
 
     // Bed-Slinger initialization
-    let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
-    let broker_task_a1 = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_a1).await;
-        // Verify Bed-Slinger homing parameters write G28 Z to the stream
-        let json = read_publish_payload(&mut server_stream_a1).await;
-        assert_eq!(json["print"]["command"], "gcode_line");
-        assert_eq!(json["print"]["param"], "G28 Z\n");
-    });
 
-    let mut client_a1 = connect_test_client(
-        TokioIo::new(client_stream_a1),
+    let (mut client_a1, broker_task_a1) = with_broker(
         "039000000000000",
         PrinterModel::A1,
+        |mut server_stream_a1| async move {
+            handle_mqtt_handshake(&mut server_stream_a1).await;
+            // Verify Bed-Slinger homing parameters write G28 Z to the stream
+            assert_eq!(read_gcode_param(&mut server_stream_a1).await, "G28 Z\n");
+        },
     )
     .await;
 
@@ -78,33 +67,23 @@ async fn test_homing_safety_interlocks() {
 
 #[tokio::test]
 async fn test_kinematic_and_extrusion_moves() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            // Read Z move packet: BambuStudio's M211 save/enable/restore and reference coordinate wraps
+            assert_eq!(
+                read_gcode_param(&mut server_stream).await,
+                "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode\nM211 R\n"
+            );
 
-        // Read Z move packet: BambuStudio's M211 save/enable/restore and reference coordinate wraps
-        let json_z = read_publish_payload(&mut server_stream).await;
-        assert_eq!(
-            json_z["print"]["param"],
-            "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode\nM211 R\n"
-        );
+            // Read X move packet: plain relative move G91 -> G0 -> G90
+            assert_eq!(read_gcode_param(&mut server_stream).await, "G91\nG0 X-15.50 F6000\nG90\n");
 
-        // Read X move packet: plain relative move G91 -> G0 -> G90
-        let json_x = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_x["print"]["param"], "G91\nG0 X-15.50 F6000\nG90\n");
-
-        // Read relative manual extrusion packet
-        let json_e = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_e["print"]["param"], "M83\nG0 E10.00 F900\n");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            // Read relative manual extrusion packet
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M83\nG0 E10.00 F900\n");
+            })
+        .await;
 
     client
         .move_relative(bambino::client::Axis::Z, 10.0, 3000)
@@ -121,26 +100,19 @@ async fn test_kinematic_and_extrusion_moves() {
 
 #[tokio::test]
 async fn test_move_relative_zero_distance_is_noop() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // Only the non-zero X move below should reach the wire — the zero-distance Z and X
-        // calls must short-circuit before publishing anything. If either zero-distance call
-        // incorrectly published, this would be the first packet read instead, and the
-        // assertion below would fail on mismatched params.
-        let json_x = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_x["print"]["param"], "G91\nG0 X5.00 F1000\nG90\n");
-        json_x
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            // Only the non-zero X move below should reach the wire — the zero-distance Z and X
+            // calls must short-circuit before publishing anything. If either zero-distance call
+            // incorrectly published, this would be the first packet read instead, and the
+            // assertion below would fail on mismatched params.
+            let json_x = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_x["print"]["param"], "G91\nG0 X5.00 F1000\nG90\n");
+            json_x
+        })
+        .await;
 
     // Zero-distance Z move: must be a no-op (Ok(None), no travel-limit error, no wire traffic) —
     // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
@@ -184,18 +156,7 @@ async fn test_move_relative_zero_distance_is_noop() {
 
 #[tokio::test]
 async fn test_move_relative_z_still_rejects_out_of_range_distance() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
     // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
@@ -213,18 +174,8 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
     // X/Y moves previously had no distance cap at all, unlike Z. P1S x_max is
     // 256.0mm — a distance exceeding that must be rejected the same way Z's out-of-range
     // case already is.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let result = client
         .move_relative(bambino::client::Axis::X, 300.0, 3000)
@@ -237,26 +188,19 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
 
 #[tokio::test]
 async fn test_thermal_guards_and_temperatures() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        let json_bed = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_bed["print"]["param"], "M140 S60\n");
-
-        let json_nozzle = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_nozzle["print"]["param"], "M104 T0 S220\n");
-
-        // Active chamber temperature verification (X1E has active PTC heater)
-        let json_chamber = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_chamber["print"]["param"], "M141 S45\n");
-    });
-
-    let mut client_x1e = connect_test_client(
-        TokioIo::new(client_stream),
-        "00M000000000000",
+    let (mut client_x1e, broker_task) = with_broker(
+        X1_SERIAL,
         PrinterModel::X1E,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M140 S60\n");
+
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M104 T0 S220\n");
+
+            // Active chamber temperature verification (X1E has active PTC heater)
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M141 S45\n");
+        },
     )
     .await;
 
@@ -276,15 +220,13 @@ async fn test_thermal_guards_and_temperatures() {
         .expect("Chamber temp set failed");
 
     // X1C has a chamber sensor but no active heater — M141 must be rejected
-    let (client_stream_x1c, mut server_stream_x1c) = tokio::io::duplex(8192);
-    let broker_task_x1c = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_x1c).await;
-    });
 
-    let mut client_x1c = connect_test_client(
-        TokioIo::new(client_stream_x1c),
-        "00M000000000000",
+    let (mut client_x1c, broker_task_x1c) = with_broker(
+        X1_SERIAL,
         PrinterModel::X1C,
+        |mut server_stream_x1c| async move {
+            handle_mqtt_handshake(&mut server_stream_x1c).await;
+        },
     )
     .await;
 
@@ -292,15 +234,13 @@ async fn test_thermal_guards_and_temperatures() {
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     // Open-frame model check (A1 — no sensor, no heater)
-    let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
-    let broker_task_a1 = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_a1).await;
-    });
 
-    let mut client_a1 = connect_test_client(
-        TokioIo::new(client_stream_a1),
+    let (mut client_a1, broker_task_a1) = with_broker(
         "039000000000000",
         PrinterModel::A1,
+        |mut server_stream_a1| async move {
+            handle_mqtt_handshake(&mut server_stream_a1).await;
+        },
     )
     .await;
 
@@ -319,47 +259,30 @@ async fn test_thermal_guards_and_temperatures() {
 // fallback direction would pass every existing test untouched.
 #[tokio::test]
 async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = format!("device/{}/report", "00M000000000000");
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-
-        // No home_flag observed yet — must clamp to the conservative 220V-region default.
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["param"], "M140 S110\n");
-
-        // home_flag bit 3 set -> confirmed 220V region.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            2000,
-            br#"{"print":{"home_flag":8}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["param"], "M140 S110\n");
-
-        // home_flag bit 3 clear -> confirmed 110V region, higher ceiling.
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            2001,
-            br#"{"print":{"home_flag":0}}"#,
-        )
-        .await;
-        read_puback(&mut server_stream).await;
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["param"], "M140 S120\n");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "00M000000000000",
+    let (mut client, broker_task) = with_broker(
+        X1_SERIAL,
         PrinterModel::X1C,
+        |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(X1_SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            // No home_flag observed yet — must clamp to the conservative 220V-region default.
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M140 S110\n");
+
+            // home_flag bit 3 set -> confirmed 220V region.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":8}}"#)
+                .await;
+
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M140 S110\n");
+
+            // home_flag bit 3 clear -> confirmed 110V region, higher ceiling.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":0}}"#)
+                .await;
+
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M140 S120\n");
+        },
     )
     .await;
 
@@ -394,24 +317,15 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
 
 #[tokio::test]
 async fn test_cooling_fans_and_peripheral_switches() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client_p1s, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M106 P1 S127\n"); // 50% PWM
 
-        let json_cf = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_cf["print"]["param"], "M106 P1 S127\n"); // 50% PWM
-
-        let json_aux = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_aux["print"]["param"], "M106 P2 S255\n"); // 100% PWM
-    });
-
-    let mut client_p1s = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M106 P2 S255\n"); // 100% PWM
+        })
+        .await;
 
     client_p1s
         .set_fan_speed(FanTarget::PartCooling, 50)
@@ -429,17 +343,17 @@ async fn test_cooling_fans_and_peripheral_switches() {
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     // Verify the second left-side auxiliary fan is supported on X2D (port 10)
-    let (client_stream_x2, mut server_stream_x2) = tokio::io::duplex(8192);
-    let broker_task_x2 = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_x2).await;
-        let json_aux_r = read_publish_payload(&mut server_stream_x2).await;
-        assert_eq!(json_aux_r["print"]["param"], "M106 P10 S204\n"); // 80% PWM
-    });
 
-    let mut client_x2 = connect_test_client(
-        TokioIo::new(client_stream_x2),
+    let (mut client_x2, broker_task_x2) = with_broker(
         "20P000000000000",
         PrinterModel::X2D,
+        |mut server_stream_x2| async move {
+            handle_mqtt_handshake(&mut server_stream_x2).await;
+            assert_eq!(
+                read_gcode_param(&mut server_stream_x2).await,
+                "M106 P10 S204\n"
+            ); // 80% PWM
+        },
     )
     .await;
 
@@ -457,20 +371,13 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
     // set_fan_speed's speed_percent > 100 clamp path was never exercised — every
     // existing call in this file used values <= 100. 150% must clamp to the same 255 PWM
     // value 100% produces, not overflow or wrap.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["param"], "M106 P1 S255\n"); // clamped to 100% PWM
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M106 P1 S255\n"); // clamped to 100% PWM
+        })
+        .await;
 
     client
         .set_fan_speed(FanTarget::PartCooling, 150)
@@ -487,18 +394,14 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     // AuxiliaryLeft2 success (X2D)/mismatch (P1S) pair in
     // test_cooling_fans_and_peripheral_switches, using H2D for the success case since chamber
     // exhaust is an H2-series/X2D feature.
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["param"], "M106 P3 S204\n"); // 80% PWM
-    });
-
-    let mut client_h2d = connect_test_client(
-        TokioIo::new(client_stream),
+    let (mut client_h2d, broker_task) = with_broker(
         "09P000000000000",
         PrinterModel::H2D,
+        |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            assert_eq!(read_gcode_param(&mut server_stream).await, "M106 P3 S204\n"); // 80% PWM
+        },
     )
     .await;
 
@@ -510,16 +413,7 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     broker_task.await.expect("H2D broker task panicked");
 
     // Verify chamber exhaust fan is restricted on a model without one (P1S).
-    let (client_stream_p1s, mut server_stream_p1s) = tokio::io::duplex(8192);
-    let broker_task_p1s = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_p1s).await;
-    });
-    let mut client_p1s = connect_test_client(
-        TokioIo::new(client_stream_p1s),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client_p1s, broker_task_p1s) = connect_idle_client(PrinterModel::P1S).await;
 
     let err_res = client_p1s
         .set_fan_speed(FanTarget::ChamberExhaust, 80)
@@ -531,27 +425,20 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
 
 #[tokio::test]
 async fn test_queue_lifecycle_control_blocks() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+            let json_pause = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_pause["print"]["command"], "pause");
 
-        let json_pause = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_pause["print"]["command"], "pause");
+            let json_resume = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_resume["print"]["command"], "resume");
 
-        let json_resume = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_resume["print"]["command"], "resume");
-
-        let json_stop = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_stop["print"]["command"], "stop");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+            let json_stop = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_stop["print"]["command"], "stop");
+        })
+        .await;
 
     client.pause_print().await.expect("Pause failed");
     client.resume_print().await.expect("Resume failed");
@@ -563,26 +450,20 @@ async fn test_queue_lifecycle_control_blocks() {
 #[tokio::test]
 async fn test_peripheral_signals_and_climate_controls() {
     // H2D supports airduct + buzzer
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
+    let (mut client_h2d, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
 
-        let json_airduct = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_airduct["print"]["command"], "set_airduct");
-        assert_eq!(json_airduct["print"]["modeId"], 0);
+            let json_airduct = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_airduct["print"]["command"], "set_airduct");
+            assert_eq!(json_airduct["print"]["modeId"], 0);
 
-        let json_buzzer = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_buzzer["print"]["command"], "buzzer_ctrl");
-        assert_eq!(json_buzzer["print"]["mode"], 2);
-    });
-
-    let mut client_h2d = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::H2D,
-    )
-    .await;
+            let json_buzzer = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json_buzzer["print"]["command"], "buzzer_ctrl");
+            assert_eq!(json_buzzer["print"]["mode"], 2);
+        })
+        .await;
 
     client_h2d
         .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
@@ -596,20 +477,17 @@ async fn test_peripheral_signals_and_climate_controls() {
     broker_task.await.expect("H2D broker task panicked");
 
     // A1 supports prompt sound
-    let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
 
-    let broker_task_a1 = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_a1).await;
-
-        let json_sound = read_publish_payload(&mut server_stream_a1).await;
-        assert_eq!(json_sound["print"]["command"], "print_option");
-        assert_eq!(json_sound["print"]["sound_enable"], true);
-    });
-
-    let mut client_a1 = connect_test_client(
-        TokioIo::new(client_stream_a1),
+    let (mut client_a1, broker_task_a1) = with_broker(
         "039000000000000",
         PrinterModel::A1,
+        |mut server_stream_a1| async move {
+            handle_mqtt_handshake(&mut server_stream_a1).await;
+
+            let json_sound = read_publish_payload(&mut server_stream_a1).await;
+            assert_eq!(json_sound["print"]["command"], "print_option");
+            assert_eq!(json_sound["print"]["sound_enable"], true);
+        },
     )
     .await;
 
@@ -621,17 +499,8 @@ async fn test_peripheral_signals_and_climate_controls() {
     broker_task_a1.await.expect("A1 broker task panicked");
 
     // P1S supports none of these
-    let (client_stream_p1s, mut server_stream_p1s) = tokio::io::duplex(8192);
-    let broker_task_p1s = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream_p1s).await;
-    });
 
-    let mut client_p1s = connect_test_client(
-        TokioIo::new(client_stream_p1s),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
+    let (mut client_p1s, broker_task_p1s) = connect_idle_client(PrinterModel::P1S).await;
 
     assert!(matches!(
         client_p1s
@@ -656,44 +525,34 @@ async fn test_peripheral_signals_and_climate_controls() {
 /// except `uiop`, which is 8-digit hex.
 #[tokio::test]
 async fn test_error_dialog_commands_reach_the_wire() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let topic = "device/01P000000000000/report".to_string();
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            ReportPublisher::new(SERIAL)
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"job_id":4242,"print_error":83935248}}"#,
+                )
+                .await;
 
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-        send_publish_payload(
-            &mut server_stream,
-            &topic,
-            4601,
-            br#"{"print":{"job_id":4242,"print_error":83935248}}"#,
-        )
+            let ignore = read_publish_payload(&mut server_stream).await;
+            assert_eq!(ignore["print"]["command"], "ignore");
+            assert_eq!(ignore["print"]["err"], "83935248");
+            assert_eq!(ignore["print"]["param"], "reserve");
+            assert_eq!(ignore["print"]["job_id"], "4242");
+
+            let dismiss = read_publish_payload(&mut server_stream).await;
+            assert_eq!(dismiss["print"]["command"], "idle_ignore");
+            assert_eq!(dismiss["print"]["type"], 1);
+
+            let close = read_publish_payload(&mut server_stream).await;
+            assert_eq!(close["system"]["command"], "uiop");
+            assert_eq!(close["system"]["err"], "0500C010");
+
+            let refresh = read_publish_payload(&mut server_stream).await;
+            assert_eq!(refresh["print"]["command"], "refresh_nozzle");
+        })
         .await;
-        read_puback(&mut server_stream).await;
-
-        let ignore = read_publish_payload(&mut server_stream).await;
-        assert_eq!(ignore["print"]["command"], "ignore");
-        assert_eq!(ignore["print"]["err"], "83935248");
-        assert_eq!(ignore["print"]["param"], "reserve");
-        assert_eq!(ignore["print"]["job_id"], "4242");
-
-        let dismiss = read_publish_payload(&mut server_stream).await;
-        assert_eq!(dismiss["print"]["command"], "idle_ignore");
-        assert_eq!(dismiss["print"]["type"], 1);
-
-        let close = read_publish_payload(&mut server_stream).await;
-        assert_eq!(close["system"]["command"], "uiop");
-        assert_eq!(close["system"]["err"], "0500C010");
-
-        let refresh = read_publish_payload(&mut server_stream).await;
-        assert_eq!(refresh["print"]["command"], "refresh_nozzle");
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
     client
         .poll_telemetry()
         .await
