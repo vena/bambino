@@ -197,8 +197,8 @@ pub fn echo_key(payload: &[u8]) -> Option<EchoKey> {
 /// so a renamed command can't silently fall off this list. Deliberately an allowlist, not "every
 /// command except pushall": most command families here have never been checked against real
 /// hardware, and defaulting an unverified command to "assumed correlatable" is exactly the bug
-/// that shipped and broke bambino-cli's monitor against a real P1S (pushall has no ack at all,
-/// see `extract_command_and_sequence_id`'s doc comment) — an allowlist instead degrades an
+/// that shipped and broke bambino-cli's monitor against a real P1S (pushall has no ack at all;
+/// see "Not on this list" below) — an allowlist instead degrades an
 /// unverified command to the old permissive "any PUBLISH clears it" behavior, never to a hang.
 ///
 /// Evidence per entry:
@@ -1053,6 +1053,21 @@ mod tests {
         use crate::io::TokioIo;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        /// Plays the broker's side of the handshake: CONNACK accepted, then a SUBACK granting `suback_code`.
+        async fn serve_handshake(server: &mut tokio::io::DuplexStream, suback_code: u8) {
+            let mut discard = [0u8; 256];
+            let _ = server.read(&mut discard).await;
+            server.write_all(&[0x20, 0x02, 0x00, 0x00]).await.unwrap();
+            server.flush().await.unwrap();
+            let _ = server.read(&mut discard).await;
+            let [id_hi, id_lo] = SUBSCRIBE_PACKET_ID.to_be_bytes();
+            server
+                .write_all(&[0x90, 0x03, id_hi, id_lo, suback_code])
+                .await
+                .unwrap();
+            server.flush().await.unwrap();
+        }
+
         #[tokio::test]
         async fn test_connack_rejection_returns_access_denied() {
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
@@ -1119,24 +1134,8 @@ mod tests {
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
             let server_task = tokio::spawn(async move {
-                let mut discard = vec![0u8; 256];
-                // Read CONNECT
-                let _ = server_stream.read(&mut discard).await;
-                // Reply CONNACK accepted
-                server_stream
-                    .write_all(&[0x20, 0x02, 0x00, 0x00])
-                    .await
-                    .unwrap();
-                server_stream.flush().await.unwrap();
-
-                // Read SUBSCRIBE
-                let _ = server_stream.read(&mut discard).await;
-                // Reply SUBACK with return code 0x80 (rejected)
-                server_stream
-                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x80])
-                    .await
-                    .unwrap();
-                server_stream.flush().await.unwrap();
+                // SUBACK return code 0x80: subscription rejected.
+                serve_handshake(&mut server_stream, 0x80).await;
             });
 
             let result =
@@ -1165,21 +1164,7 @@ mod tests {
             let (resume_tx, resume_rx) = tokio::sync::oneshot::channel::<()>();
 
             let server_task = tokio::spawn(async move {
-                let mut discard = vec![0u8; 256];
-                // Read CONNECT, reply CONNACK accepted.
-                let _ = server_stream.read(&mut discard).await;
-                server_stream
-                    .write_all(&[0x20, 0x02, 0x00, 0x00])
-                    .await
-                    .unwrap();
-                server_stream.flush().await.unwrap();
-                // Read SUBSCRIBE, reply SUBACK accepted (QoS 1 granted).
-                let _ = server_stream.read(&mut discard).await;
-                server_stream
-                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x01])
-                    .await
-                    .unwrap();
-                server_stream.flush().await.unwrap();
+                serve_handshake(&mut server_stream, 0x01).await;
 
                 // Split a real PUBLISH QoS 1 frame across two writes, releasing the second half
                 // only after the client's first poll has read the first half and been dropped.
@@ -1193,7 +1178,7 @@ mod tests {
                 server_stream.flush().await.unwrap();
 
                 // Drain the automatic PUBACK the client sends back for the QoS 1 PUBLISH.
-                let _ = server_stream.read(&mut discard).await;
+                let _ = server_stream.read(&mut [0u8; 256]).await;
             });
 
             let mut client =
@@ -1243,19 +1228,7 @@ mod tests {
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
             let server_task = tokio::spawn(async move {
-                let mut discard = vec![0u8; 256];
-                let _ = server_stream.read(&mut discard).await;
-                server_stream
-                    .write_all(&[0x20, 0x02, 0x00, 0x00])
-                    .await
-                    .unwrap();
-                server_stream.flush().await.unwrap();
-                let _ = server_stream.read(&mut discard).await;
-                server_stream
-                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x01])
-                    .await
-                    .unwrap();
-                server_stream.flush().await.unwrap();
+                serve_handshake(&mut server_stream, 0x01).await;
 
                 let frame =
                     encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
@@ -1299,17 +1272,7 @@ mod tests {
             let (client_stream, mut server_stream) = tokio::io::duplex(CAPACITY);
 
             let server_task = tokio::spawn(async move {
-                let mut discard = vec![0u8; 256];
-                let _ = server_stream.read(&mut discard).await;
-                server_stream
-                    .write_all(&[0x20, 0x02, 0x00, 0x00])
-                    .await
-                    .unwrap();
-                let _ = server_stream.read(&mut discard).await;
-                server_stream
-                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x01])
-                    .await
-                    .unwrap();
+                serve_handshake(&mut server_stream, 0x01).await;
                 let frame =
                     encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
                 server_stream.write_all(&frame).await.unwrap();
