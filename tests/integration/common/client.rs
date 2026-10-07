@@ -5,7 +5,8 @@
 //! blocks until the server end of the stream is driven, so the broker task must be spawned
 //! before the connect is awaited. A helper that connected first and spawned second would
 //! deadlock; this one spawns first by construction. [`spawn_broker`] is the lower half, for a
-//! test that connects through something other than [`connect_test_client`].
+//! test that connects through something other than a `PrinterClient` built here — a lazy dial
+//! through `MockDataStreamFactory`, or [`connect_test_mqtt`] for `attach_mqtt()`.
 
 use std::future::Future;
 
@@ -64,10 +65,7 @@ where
 }
 
 /// [`spawn_broker`] over a duplex that buffers `bytes` in each direction.
-pub fn spawn_broker_sized<F, Fut, T>(
-    bytes: usize,
-    broker: F,
-) -> (TokioIo<DuplexStream>, JoinHandle<T>)
+fn spawn_broker_sized<F, Fut, T>(bytes: usize, broker: F) -> (TokioIo<DuplexStream>, JoinHandle<T>)
 where
     F: FnOnce(DuplexStream) -> Fut,
     Fut: Future<Output = T> + Send + 'static,
@@ -123,9 +121,9 @@ pub async fn connect_idle_client(
 }
 
 /// Completes the MQTT connect handshake over `stream` and wraps the result in a
-/// `PrinterClient`. Caller must have already spawned whatever's driving the other end of
-/// `stream` (see the module doc comment) before awaiting this.
-pub async fn connect_test_client<IO: AsyncIo>(
+/// `PrinterClient`. Private so that [`with_broker`], which spawns the broker first, is the only
+/// way in (see the module doc comment).
+async fn connect_test_client<IO: AsyncIo>(
     stream: IO,
     serial: &str,
     model: PrinterModel,

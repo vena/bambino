@@ -4,8 +4,9 @@
 //! the `FtpsClient` over in-memory `tokio::io::duplex` streams.
 //!
 //! Supports multiple test scenarios via separate server functions, each exercising
-//! different FTPS protocol paths (happy path, A1 plaintext, STAT fallback,
-//! download, directory ops, upload error recovery).
+//! different FTPS protocol paths (happy path, A1 plaintext, AVBL and MDTM replies,
+//! download, directory ops, upload/download/LIST error recovery, poisoning). Each drives the
+//! control channel through one [`Control`].
 
 use super::client::ACCESS_CODE;
 use super::io::DataContainer;
@@ -48,8 +49,8 @@ impl Control {
     /// tokio's cooperative scheduling, two sequential small writes on a `tokio::io::duplex`
     /// normally coalesce into one `.read()` before this task is ever polled, so every test built
     /// on this harness would very likely keep passing even if `write_command` regressed. The
-    /// dedicated `WriteRecorder`-based unit test in `src/ftps/protocol.rs` is the only thing
-    /// actually guarding that invariant end-to-end; don't rely on this helper for it.
+    /// unit test `test_write_command_sends_single_write_call` in `src/ftps/protocol/tests.rs`
+    /// is the only thing actually guarding that invariant; don't rely on this helper for it.
     async fn read_cmd(&mut self) -> String {
         let n = self
             .stream

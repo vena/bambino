@@ -80,7 +80,7 @@ pub fn parse_publish(header: u8, body: &[u8]) -> (&str, Option<u16>, &[u8]) {
 }
 
 /// The topic a printer reports on.
-pub fn report_topic(serial: &str) -> String {
+fn report_topic(serial: &str) -> String {
     bambino::mqtt::report_topic(serial)
 }
 
@@ -205,8 +205,9 @@ pub async fn read_gcode_param(stream: &mut DuplexStream) -> String {
 
 /// Publishes server-side reports on one serial's report topic, numbering packet ids and consuming each PUBACK.
 ///
-/// Reading the PUBACK here keeps the stream in sync: a forgotten `read_puback` after a raw
-/// [`send_publish_payload`] desyncs the next [`read_publish_payload`] far from the cause.
+/// The only way a test publishes a report: pairing each PUBLISH with its PUBACK here keeps the
+/// stream in sync. A PUBACK left unread desyncs the next [`read_publish_payload`] far from the
+/// cause, so the raw [`send_publish_payload`]/[`read_puback`] pair is private to this module.
 pub struct ReportPublisher {
     topic: String,
     next_packet_id: u16,
@@ -231,8 +232,7 @@ impl ReportPublisher {
 }
 
 /// Reads and discards the client's PUBACK for a server-sent PUBLISH.
-/// Call after `send_publish_payload` to keep the broker stream in sync.
-pub async fn read_puback(stream: &mut DuplexStream) {
+async fn read_puback(stream: &mut DuplexStream) {
     let (header, _) = read_packet(stream).await.expect("Failed to read PUBACK");
     assert_eq!(
         header >> 4,
@@ -242,7 +242,7 @@ pub async fn read_puback(stream: &mut DuplexStream) {
 }
 
 /// Sends a QoS 1 PUBLISH frame containing `payload` on the given `topic` from the server side.
-pub async fn send_publish_payload(
+async fn send_publish_payload(
     stream: &mut DuplexStream,
     topic: &str,
     packet_id: u16,
