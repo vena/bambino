@@ -859,8 +859,9 @@ where
     /// no text both for a missing target and for one it refuses to remove, such as a non-empty
     /// directory, so the code alone can't say which. On a `550` this lists the parent directory:
     /// no entry named like the target means it is gone (`Ok`), an entry means the removal was
-    /// refused, and a failed listing keeps the `550` as the error rather than guessing. Only the
-    /// `550` path pays for the extra `LIST`.
+    /// refused, and a failed listing keeps the `550` as the error rather than guessing — unless
+    /// the listing broke the connection, whose error is returned instead. Only the `550` path
+    /// pays for the extra `LIST`.
     async fn finish_removal(
         &mut self,
         verb: &'static str,
@@ -884,6 +885,9 @@ where
                 Ok(())
             }
             Ok(_) => Err(refused),
+            // A transport failure poisoned the client: surface it, not a 550 that reads as a
+            // still-usable session (`.claude/rules/ftps-poisoning.md`).
+            Err(e) if self.poisoned => Err(e),
             Err(e) => {
                 log::debug!("FTPS {verb} got 550 and listing {parent:?} failed: {e:?}");
                 Err(refused)

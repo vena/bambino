@@ -2,8 +2,9 @@
 //!
 //! Replays a real P1S wire capture through the actual
 //! stateful `PrinterClient` telemetry pipeline (MQTT framing -> `poll_telemetry()` ->
-//! `update_telemetry_cache()`), one message at a time, exercising every public telemetry
-//! accessor after each poll. Every other telemetry test drives a single hand-written or
+//! `update_telemetry_cache()`), one message at a time: the numeric accessors are bounds-checked
+//! after each poll, and the status sequence and final cached state are asserted against what the
+//! capture contains. Every other telemetry test drives a single hand-written or
 //! single-real-message fixture; this is the only one that replays a full sequence through
 //! the real cache the way a live `PrinterClient` session does, so a bug that only manifests
 //! after N messages of accumulated state has coverage.

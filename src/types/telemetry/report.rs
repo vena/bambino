@@ -301,7 +301,7 @@ pub struct PrinterTelemetry {
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub bed_temper: Option<f64>,
 
-    /// Explicit bed target temperature. Separate from composite-packed `bed_temper`.
+    /// Bed target temperature, sent alongside `bed_temper` (old-gen models; never composite-packed).
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_f64")]
     pub bed_target_temper: Option<f64>,
 

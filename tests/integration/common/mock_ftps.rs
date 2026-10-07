@@ -642,6 +642,27 @@ pub async fn run_mock_server_dele_connection_drop(
     // Drop the stream instead of responding.
 }
 
+/// Mock server for a `DELE` answered `550` whose parent re-check listing loses the connection.
+///
+/// Drops the control stream on the `PASV` that opens the listing, so the client is poisoned
+/// mid-`delete_file` (#392).
+pub async fn run_mock_server_dele_550_listing_drop(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: DataContainer,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "DELE /model/job.3mf\r\n");
+    respond(&mut server_control, b"550 \r\n").await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "PASV\r\n");
+    // Drop the stream instead of responding.
+}
+
 /// Mock server for the `PASV`-step coverage gap (issue #261): reads `PASV` and then drops the
 /// control stream without replying. A transport failure *during* the PASV exchange must poison
 /// the client, the way every other control-channel transport failure does — every existing

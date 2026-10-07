@@ -111,7 +111,7 @@ When multiple standard AMS units or virtual slots are connected, the printer's s
 *   **Single-Nozzle Printers (P2S series)**: Multi-AMS configurations on single-nozzle printers may also report local slot indices in `tray_now`. State trackers must evaluate the MQTT `mapping` array field (refer to Section 5.3) to match the local slot position to the active physical AMS unit.
 
 #### AMS Unit Info Bitmask (`info` Field)
-Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` field — a hex-encoded bitmask string (e.g. `"11002103"`). Parse via `u64::from_str_radix(s, 16)`. The bit layout encodes unit metadata and IDEX routing:
+Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` field — a hex-encoded bitmask string (e.g. `"11002103"`). Parse via `AmsUnit::parse_info()` (bambino's shared fixed-width hex reader, which also tolerates surrounding whitespace and a `0x`/`0X` prefix). The bit layout encodes unit metadata and IDEX routing:
 
 | Bit Range | Mask | Field | Values |
 | :--- | :--- | :--- | :--- |

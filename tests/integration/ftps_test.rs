@@ -589,6 +589,29 @@ async fn test_ftps_single_reply_command_failure_poisons_client() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// A connection lost during `delete_file`'s `550` re-check listing surfaces as that transport
+/// error, not as the `550` — which would read as a refusal on a still-usable session (#392).
+#[tokio::test]
+async fn test_ftps_delete_550_recheck_failure_poisons_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_dele_550_listing_drop(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client.delete_file("/model/job.3mf").await;
+    assert!(
+        matches!(result, Err(Error::Network(_))),
+        "Expected the dropped re-check listing to surface as Network, got {result:?}"
+    );
+    assert!(client.is_poisoned());
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 /// Regression: a transport failure between `rename_file`'s `RNFR` and `RNTO` steps must
 /// poison the client the same way the single-reply commands' poisoning test already covers —
 /// previously only `delete_file` (a one-shot command) had a dedicated poisoning test; the

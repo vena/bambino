@@ -359,8 +359,8 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
         // — that used to collapse any run of multiple consecutive spaces in the real filename
         // down to one, confirmed on real hardware (a P1S) to desync the reported name from the
         // printer's actual on-disk name and make `delete_file`/`download_file` silently no-op
-        // (masked by `delete_file`'s intentional idempotent "already gone" 550 handling) when
-        // called with the reported name. Exactly one separator character is stripped, not the
+        // (masked because `delete_file` reads a 550 for a name the listing doesn't show as
+        // "already gone") when called with the reported name. Exactly one separator character is stripped, not the
         // whole whitespace run: vsftpd pads *inside* the fixed-width date column and emits a
         // single space before the name (`reference/02_ftps.md`), so any further leading space
         // — FAT keeps them — is part of the name (#319).
