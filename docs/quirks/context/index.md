@@ -88,11 +88,12 @@ site.
 
 - **`home_flag`**: `Option<u32>`
 
-  The `home_flag` bitfield of a full status report, if one was observed on the current connection.
+  The `home_flag` bitfield, if one trusted for capability bits was observed on the current connection.
   
   The capability field every family sends, so it is the only reported support signal on P1
-  and A1. Taken from a full report only, since H2D heartbeat frames carry a partial
-  `home_flag`, and from the current connection only, since what the printer supports can
+  and A1. On a printer that sends `cfg` it comes from a full status report only, since
+  those families' heartbeat frames carry a partial `home_flag`; on P1 and A1, from any
+  status frame. From the current connection only, since what the printer supports can
   change across a reboot.
 
 - **`xcam_cfg`**: `Option<u32>`

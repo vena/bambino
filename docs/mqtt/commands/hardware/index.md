@@ -58,7 +58,7 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
 | [`IdleHeatingProtectionPayload`](#idleheatingprotectionpayload) | struct | Turns idle heating protection on or off. |
 | [`LedCtrlPayload`](#ledctrlpayload) | struct | Chamber illumination and toolhead LED control configurations. |
 | [`NozzleBlobDetectPayload`](#nozzleblobdetectpayload) | struct | Turns nozzle blob detection (the original, on/off form) on or off. |
-| [`PromptSoundPayload`](#promptsoundpayload) | struct | Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`](#buzzerpayload)). |
+| [`PromptSoundPayload`](#promptsoundpayload) | struct | Turns prompt notification sounds on or off; BambuStudio's model profiles enable it on A1, A1 Mini and A2L, and a printer can report support itself. |
 | [`SmartNozzleBlobDetectPayload`](#smartnozzleblobdetectpayload) | struct | Sets the smart nozzle blob detection mode (off, on, or auto). |
 | [`StoreSentFilesPayload`](#storesentfilespayload) | struct | Sets whether files sent from Bambu Studio, Bambu Handy and MakerWorld are kept on external storage. |
 | [`XcamControlPayload`](#xcamcontrolpayload) | struct | Turns one camera detector on or off, optionally with its halt sensitivity. |
@@ -634,7 +634,10 @@ struct PromptSoundPayload {
 }
 ```
 
-Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`](#buzzerpayload)).
+Turns prompt notification sounds on or off; BambuStudio's model profiles enable it on A1, A1 Mini and A2L, and a printer can report support itself.
+
+See [`ModelQuirks::prompt_sound_support`](../../../quirks/index.md#modelquirks).
+H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`](#buzzerpayload).
 
 #### Fields
 

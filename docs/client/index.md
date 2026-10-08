@@ -2422,7 +2422,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Builds a [`QuirkContext`](../quirks/index.md) from this client's cached state.
 
   A snapshot of whatever has been observed so far: `fun` and `fun2` from the last telemetry
-  carrying them, `home_flag` (from full status reports) and firmware (from
+  carrying them, `home_flag` (see `settings_home_flag_this_connection`) and firmware (from
   [`get_version()`](#printerclient)) only as observed on the current connection. Fields
   never observed stay `None`, which quirks read as "the printer didn't say" rather than as
   a denial.
