@@ -29,10 +29,13 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use bambino::Error;
-use bambino::client::BuzzerMode;
+use bambino::client::{BuzzerMode, DoorOpenCheck, XcamHaltSensitivity, XcamModule};
 use bambino::io::tokio::TokioTimer;
 use bambino::models::PrinterModel;
-use bambino::mqtt::commands::{AmsControlOp, ChangeTemps};
+use bambino::mqtt::commands::{
+    AmsControlOp, ChangeTemps, DoorOpenCheckRequest, IdleHeatingProtectionRequest,
+    StoreSentFilesRequest, XcamControlRequest,
+};
 use bambino::mqtt::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsGetRfidRequest,
     BuzzerRequest, GetAccessCodeRequest, PrintJobConfig, ProjectFileRequest, PromptSoundRequest,
@@ -87,10 +90,10 @@ mod verdict {
 
 /// One command under test.
 ///
-/// All nine were confirmed ack-correlated on a P1S (the first eight under issue #26,
-/// `GetAccessCode` under issue #140) and are now on `ACK_CORRELATED_COMMANDS`. They stay here
-/// rather than being deleted: that evidence is
-/// model-specific, so the same sweep is what confirms (or refutes) the allowlist on any other
+/// The first nine were confirmed ack-correlated on a P1S (the first eight under issue #26,
+/// `GetAccessCode` under issue #140) and are now on `ACK_CORRELATED_COMMANDS`. The last four
+/// (#616-#619) are awaiting a run. Confirmed entries stay here rather than being deleted: that
+/// evidence is model-specific, so the same sweep is what confirms (or refutes) the allowlist on any other
 /// model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
 /// for any future command before putting it on the allowlist, never after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +107,10 @@ pub(crate) enum AckTest {
     PrintOption,
     BuzzerCtrl,
     GetAccessCode,
+    XcamControlSet,
+    SetDoorStat,
+    SetAgainstContinuedHeatingMode,
+    PrintCacheSet,
 }
 
 impl AckTest {
@@ -121,6 +128,10 @@ impl AckTest {
             Self::PrintOption => PromptSoundRequest::COMMAND,
             Self::BuzzerCtrl => BuzzerRequest::COMMAND,
             Self::GetAccessCode => GetAccessCodeRequest::COMMAND,
+            Self::XcamControlSet => XcamControlRequest::COMMAND,
+            Self::SetDoorStat => DoorOpenCheckRequest::COMMAND,
+            Self::SetAgainstContinuedHeatingMode => IdleHeatingProtectionRequest::COMMAND,
+            Self::PrintCacheSet => StoreSentFilesRequest::COMMAND,
         }
     }
 
@@ -152,7 +163,39 @@ impl AckTest {
                  queries a value the caller already had to know to connect, and changes nothing. \
                  A `system`-wrapped reply echoing our sequence_id is the evidence sought"
             }
+            Self::XcamControlSet => {
+                "Spaghetti detection on at medium (issue #616). SETTING: on a printer with the \
+                 detector, this enables it at the firmware default; `xcam`-wrapped request, so \
+                 the reply's wrapper is part of what is sought"
+            }
+            Self::SetDoorStat => {
+                "Door-open check to pause the print (issue #617). SETTING: overwrites the \
+                 door-open check on a printer with a door sensor"
+            }
+            Self::SetAgainstContinuedHeatingMode => {
+                "Idle heating protection on (issue #618). SETTING: overwrites it on a printer \
+                 that supports it"
+            }
+            Self::PrintCacheSet => {
+                "Keep sent print files on external storage (issue #619). SETTING: overwrites it \
+                 on a printer that supports it"
+            }
         }
+    }
+
+    /// True for commands that overwrite a persistent user setting on a printer that has the feature.
+    ///
+    /// Excluded from the default sweep, like the physically actuating ones, but needs no
+    /// confirmation: each sets the protective value (detector on, pause on door open, idle
+    /// heating protection on, keep files), and on a printer without the feature it does nothing.
+    fn changes_setting(&self) -> bool {
+        matches!(
+            self,
+            Self::XcamControlSet
+                | Self::SetDoorStat
+                | Self::SetAgainstContinuedHeatingMode
+                | Self::PrintCacheSet
+        )
     }
 
     /// True for commands that can actuate hardware or start a job even with the inert-most
@@ -177,16 +220,20 @@ impl AckTest {
             Self::PrintOption,
             Self::BuzzerCtrl,
             Self::GetAccessCode,
+            Self::XcamControlSet,
+            Self::SetDoorStat,
+            Self::SetAgainstContinuedHeatingMode,
+            Self::PrintCacheSet,
         ]
     }
 
     /// Tests run when `-t`/`--tests` is omitted — everything except the physically actuating
-    /// commands, which must be named explicitly.
+    /// and setting-changing commands, which must be named explicitly.
     fn default_set() -> Vec<AckTest> {
         Self::all_known()
             .iter()
             .copied()
-            .filter(|t| !t.is_physically_actuating())
+            .filter(|t| !t.is_physically_actuating() && !t.changes_setting())
             .collect()
     }
 
@@ -224,6 +271,19 @@ impl AckTest {
             Self::PrintOption => serde_json::to_value(PromptSoundRequest::new(true, seq)),
             Self::BuzzerCtrl => serde_json::to_value(BuzzerRequest::new(BuzzerMode::Silent, seq)),
             Self::GetAccessCode => serde_json::to_value(GetAccessCodeRequest::new(seq)),
+            Self::XcamControlSet => serde_json::to_value(XcamControlRequest::new(
+                XcamModule::SpaghettiDetector,
+                true,
+                Some(XcamHaltSensitivity::Medium),
+                seq,
+            )),
+            Self::SetDoorStat => {
+                serde_json::to_value(DoorOpenCheckRequest::new(DoorOpenCheck::PausePrint, seq))
+            }
+            Self::SetAgainstContinuedHeatingMode => {
+                serde_json::to_value(IdleHeatingProtectionRequest::new(true, seq))
+            }
+            Self::PrintCacheSet => serde_json::to_value(StoreSentFilesRequest::new(true, seq)),
         };
 
         value.map_err(|e| {
@@ -245,6 +305,11 @@ impl clap::ValueEnum for AckTest {
         let help = if self.is_physically_actuating() {
             format!(
                 "{} (actuates hardware — not run by default)",
+                self.description()
+            )
+        } else if self.changes_setting() {
+            format!(
+                "{} (changes a persistent setting — not run by default)",
                 self.description()
             )
         } else {

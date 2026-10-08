@@ -135,7 +135,7 @@ enum Commands {
         /// Output file path
         #[arg(short = 'o', long, default_value = "ack_probe_report.json")]
         output: String,
-        /// Comma-separated wire command names to test (default: all non-actuating ones)
+        /// Comma-separated wire command names to test (default: all that neither actuate hardware nor change a setting)
         #[arg(short = 't', long, value_delimiter = ',')]
         tests: Option<Vec<ack_probe::AckTest>>,
         /// Seconds to listen for a correlated ack after each command (1-3600)
