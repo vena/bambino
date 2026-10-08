@@ -266,8 +266,9 @@ pub fn is_developer_mode(fun_hex: &str) -> Option<bool> {
 /// A `print` object with more keys than this is a full status report.
 ///
 /// bambuddy's test (`bambu_mqtt.py`, the Filament Backup block, `len(print_data) > 30`): H2D
-/// firmware also sends small heartbeat frames whose `home_flag` is partial, so a `home_flag`
-/// read as settings or capability bits is taken only from a full report.
+/// firmware also sends small heartbeat frames whose `home_flag` is partial, so on a printer that
+/// sends `cfg`, a `home_flag` read as settings or capability bits is taken only from a full
+/// report. P1 and A1 send no `cfg`, and their small diff frames carry a complete `home_flag`.
 pub(crate) const FULL_REPORT_MIN_KEYS: usize = 30;
 
 /// Counts the keys of a payload's `print` object without decoding their values.

@@ -666,7 +666,7 @@ where
     /// Builds a [`QuirkContext`](crate::quirks::QuirkContext) from this client's cached state.
     ///
     /// A snapshot of whatever has been observed so far: `fun` and `fun2` from the last telemetry
-    /// carrying them, `home_flag` (from full status reports) and firmware (from
+    /// carrying them, `home_flag` (see `settings_home_flag_this_connection`) and firmware (from
     /// [`get_version()`](Self::get_version)) only as observed on the current connection. Fields
     /// never observed stay `None`, which quirks read as "the printer didn't say" rather than as
     /// a denial.
@@ -680,21 +680,21 @@ where
             .with_fun2(self.core.cache.last_fun2.as_deref())
             .with_firmware(self.firmware_this_connection())
             .with_fun(self.core.cache.last_fun.as_deref())
-            .with_home_flag(self.full_home_flag_this_connection())
+            .with_home_flag(self.settings_home_flag_this_connection())
             .with_xcam_cfg(self.core.cache.last_xcam.as_ref().and_then(|xcam| xcam.cfg))
     }
 
-    /// Returns the `home_flag` cached from a full status report on the current MQTT connection.
+    /// Returns the `home_flag` trusted for capability bits, if observed on the current MQTT connection.
     ///
-    /// Capability bits come only from full reports, since H2D heartbeat frames carry a partial
-    /// `home_flag`; and only from this connection, like
-    /// [`firmware_this_connection`](Self::firmware_this_connection), since support can change
-    /// across a reboot.
-    fn full_home_flag_this_connection(&self) -> Option<u32> {
-        if self.core.cache.last_full_home_flag_generation? != self.core.connection_generation {
+    /// On a printer that sends `cfg` that means a full status report, since those families'
+    /// heartbeat frames carry a partial `home_flag`; on P1 and A1, any status frame. Only from
+    /// this connection, like [`firmware_this_connection`](Self::firmware_this_connection), since
+    /// support can change across a reboot.
+    fn settings_home_flag_this_connection(&self) -> Option<u32> {
+        if self.core.cache.last_settings_home_flag_generation? != self.core.connection_generation {
             return None;
         }
-        self.core.cache.last_full_home_flag
+        self.core.cache.last_settings_home_flag
     }
 
     /// Returns the cached firmware version only if it was fetched on the current MQTT connection.

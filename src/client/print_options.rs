@@ -6,8 +6,8 @@
 //!
 //! Every `print_option` ack reports success, even on a model without the feature
 //! [REF-MQTT-TELEMETRY], so the ack proves nothing. Each setter therefore refuses up front
-//! when [`Capabilities`](super::Capabilities) says the setting is unsupported, and telemetry,
-//! through the matching getter, is the only confirmation that a change took.
+//! when [`Capabilities`](super::Capabilities) says the setting is unsupported. Only telemetry
+//! confirms that a change took; a getter also reflects an accepted reply in the meantime.
 //!
 //! **Settle window.** The `print_option` getters take an accepted reply's value at once (see
 //! `ReplySettings`), but the printer can keep reporting the old value for about 3 s (one or two
@@ -517,15 +517,16 @@ where
         self.core.cache.reply_settings.merge(reply);
     }
 
-    /// Reads one boolean setting from the cached `cfg`, else the `home_flag` of the last full status report.
+    /// Reads one boolean setting from the cached `cfg`, else the cached settings `home_flag`.
     ///
-    /// Heartbeat frames carry a partial `home_flag`, so only a full report's counts. It is read
+    /// That `home_flag` skips heartbeat frames on printers that send `cfg` (see
+    /// `TelemetryCache::last_settings_home_flag`). It is read
     /// from any connection, not just the current one: a setting persists across a reconnect, and
     /// the connect-time pushall refreshes it.
     fn setting(&self, setting: SettingBits) -> Option<bool> {
         setting.read(
             self.core.cache.last_cfg.as_deref(),
-            self.core.cache.last_full_home_flag,
+            self.core.cache.last_settings_home_flag,
         )
     }
 
@@ -540,7 +541,7 @@ where
 /// The printer's reply echoes the setting field it was sent (a P1S `ack-probe` capture shows
 /// `sound_enable` coming back; BambuStudio and OrcaSlicer read `option`/`auto_recovery` the same
 /// way), and arrives well before a status frame reflects the change. Each value here is held
-/// until the next status frame that carries settings (`print.cfg` or a full report's
+/// until the next status frame that carries settings (`print.cfg` or a trusted
 /// `home_flag`) clears them all. That frame may still carry the old value for about 3 s, so a
 /// getter can flip back briefly; BambuStudio's 3 s hold is deliberately not reproduced.
 #[derive(Debug, Clone, Copy, Default)]

@@ -442,6 +442,11 @@ pub struct PrinterTelemetry {
     /// P1P, P1S, A1 and A1 Mini omit `cfg` entirely, so absent is not "off" — hence `Option`.
     /// Those families carry Filament Backup in [`home_flag`](Self::home_flag) bit 10 instead
     /// (BambuStudio's `parse_home_flag`; bambuddy #3259).
+    ///
+    /// For decoded settings, use the getters on `PrinterClient` (`prompt_sound_enabled`,
+    /// `filament_backup_enabled`, `door_open_check`, ...): they prefer `cfg`, fall back to
+    /// `home_flag`, and cache across frames, since one frame can't tell `cfg` absent from
+    /// unsent.
     #[serde(default)]
     pub cfg: Option<String>,
 

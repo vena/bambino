@@ -88,14 +88,17 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_fun2: Option<String>,
     // `fun`, cached like `fun2`: its `print_option` support bits feed `quirk_context()`.
     pub(crate) last_fun: Option<String>,
-    // `home_flag` from full status reports only (`FULL_REPORT_MIN_KEYS`). H2D also sends
-    // heartbeat frames with a partial `home_flag`, so the `print_option` getters and support bits
-    // read this one, never `last_home_flag`. The getters ignore the generation, since a setting
-    // persists across a reconnect; `quirk_context()` honors it, as for firmware.
-    pub(crate) last_full_home_flag: Option<u32>,
-    pub(crate) last_full_home_flag_generation: Option<u32>,
+    // `home_flag` as trusted for settings and capability bits. Once a printer has sent `cfg`,
+    // only from full status reports (`FULL_REPORT_MIN_KEYS`): those families (H2D among them)
+    // also send heartbeat frames with a partial `home_flag`. P1 and A1 send no `cfg`, and their
+    // diff frames carry a complete one (`tests/mocks/P1S_print_sequence.ndjson`), so every
+    // status frame counts there. The `print_option` getters and support bits read this, never
+    // `last_home_flag`. The getters ignore the generation, since a setting persists across a
+    // reconnect; `quirk_context()` honors it, as for firmware.
+    pub(crate) last_settings_home_flag: Option<u32>,
+    pub(crate) last_settings_home_flag_generation: Option<u32>,
     // Setting values from accepted `print_option` replies, cleared by the next status frame
-    // carrying `cfg` or a full `home_flag` — see `ReplySettings`.
+    // carrying `cfg` or a trusted `home_flag` — see `ReplySettings`.
     pub(crate) reply_settings: ReplySettings,
     // The top-level `print.cfg` settings bitmask. Kept across reconnects: whether a printer sends
     // `cfg` at all is a fixed property of the printer, and once it has, the `print_option`
@@ -317,15 +320,18 @@ where
         }
         match report {
             Some(report) => {
-                let full_home_flag = report
+                // See `last_settings_home_flag`: a printer that sends `cfg` needs a full
+                // report, one that doesn't (P1, A1) doesn't.
+                let settings_home_flag = report
                     .print
                     .as_ref()
                     .and_then(|print| print.home_flag)
                     .filter(|_| {
-                        print_key_count(&msg.payload)
-                            .is_some_and(|keys| keys > FULL_REPORT_MIN_KEYS)
+                        self.core.cache.last_cfg.is_none()
+                            || print_key_count(&msg.payload)
+                                .is_some_and(|keys| keys > FULL_REPORT_MIN_KEYS)
                     });
-                let carries_settings = full_home_flag.is_some()
+                let carries_settings = settings_home_flag.is_some()
                     || report
                         .print
                         .as_ref()
@@ -333,9 +339,9 @@ where
                 if carries_settings {
                     self.core.cache.reply_settings = ReplySettings::default();
                 }
-                if let Some(flag) = full_home_flag {
-                    self.core.cache.last_full_home_flag = Some(flag);
-                    self.core.cache.last_full_home_flag_generation =
+                if let Some(flag) = settings_home_flag {
+                    self.core.cache.last_settings_home_flag = Some(flag);
+                    self.core.cache.last_settings_home_flag_generation =
                         Some(self.core.connection_generation);
                 }
                 self.update_telemetry_cache(&report);

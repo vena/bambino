@@ -139,7 +139,10 @@ impl AirductRequest {
     }
 }
 
-/// Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
+/// Turns prompt notification sounds on or off; BambuStudio's model profiles enable it on A1, A1 Mini and A2L, and a printer can report support itself.
+///
+/// See [`ModelQuirks::prompt_sound_support`](crate::quirks::ModelQuirks::prompt_sound_support).
+/// H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`].
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptSoundPayload {
     /// Wire command name, always `"print_option"`.

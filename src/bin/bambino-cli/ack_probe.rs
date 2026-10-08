@@ -95,13 +95,15 @@ mod verdict {
 
 /// One command under test.
 ///
-/// The first nine were confirmed ack-correlated on a P1S (the first eight under issue #26,
-/// `GetAccessCode` under issue #140) and are on `ACK_CORRELATED_COMMANDS`. Of the last four
-/// (#616-#619), only `set_against_continued_heating_mode` acked on a P1S; the other three drew
-/// no reply on that model, which lacks all three features. Entries stay here rather than being
-/// deleted: that evidence is model-specific, so the same sweep is what confirms (or refutes) the
-/// allowlist on any other model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
-/// for any future command before putting it on the allowlist, never after.
+/// Results on a P1S, which back `ACK_CORRELATED_COMMANDS`: the first eight acked under issue
+/// #26, `GetAccessCode` under #140, and every `print_option` test plus
+/// `set_against_continued_heating_mode` on 2026-10-07. `xcam_control_set`, `set_door_stat` and
+/// `print_cache_set` drew no reply on that model, which lacks all three features.
+///
+/// Entries stay here rather than being deleted: that evidence is model-specific, so the same
+/// sweep is what confirms (or refutes) the allowlist on any other model, and re-running it is
+/// the cheap way to re-verify after a firmware update. Add a variant for any future command
+/// before putting it on the allowlist, never after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AckTest {
     AmsControl,
@@ -193,7 +195,10 @@ impl AckTest {
                 "Airduct damper to cooling — may be unsupported on P1/A1 (no chamber damper); a \
                  rejection response is a valid ack, silence means not-applicable"
             }
-            Self::PrintOption => "Enable notification sounds (A1/A1 Mini/A2L feature)",
+            Self::PrintOption => {
+                "Prompt sound on (A1/A1 Mini/A2L feature). SETTING: enables notification sounds \
+                 on a printer that has them"
+            }
             Self::BuzzerCtrl => "Buzzer to silent/disarmed (H2-series feature)",
             Self::GetAccessCode => {
                 "Ask the printer to report its own LAN access code (issue #140). Read-only: it \
@@ -241,12 +246,13 @@ impl AckTest {
     /// True for commands that overwrite a persistent user setting on a printer that has the feature.
     ///
     /// Excluded from the default sweep, like the physically actuating ones, but needs no
-    /// confirmation: each sets the protective value (detector on, pause on door open, idle
-    /// heating protection on, keep files), and on a printer without the feature it does nothing.
+    /// confirmation: each turns its feature on (prompt sound being the one that isn't
+    /// protective), and on a printer without the feature it does nothing.
     fn changes_setting(&self) -> bool {
         matches!(
             self,
-            Self::XcamControlSet
+            Self::PrintOption
+                | Self::XcamControlSet
                 | Self::SetDoorStat
                 | Self::SetAgainstContinuedHeatingMode
                 | Self::PrintCacheSet

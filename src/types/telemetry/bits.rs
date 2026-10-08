@@ -140,7 +140,8 @@ impl SettingBits {
     ///
     /// Once a printer has sent `cfg` it is read alone, never mixed with `home_flag`: P1 and A1
     /// omit `cfg` entirely, and H2D sends heartbeat frames with a partial `home_flag`
-    /// [REF-MQTT-TELEMETRY]. A setting `cfg` doesn't carry still reads `home_flag`.
+    /// [REF-MQTT-TELEMETRY]. A setting `cfg` doesn't carry still reads `home_flag`, which the
+    /// caller takes only from full reports on a printer that sends `cfg`.
     pub(crate) fn read(self, cfg: Option<&str>, home_flag: Option<u32>) -> Option<bool> {
         match (self.cfg, cfg) {
             (Some(bit), Some(cfg)) => hex_bit(cfg, bit),

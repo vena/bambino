@@ -1129,9 +1129,9 @@ fn full_report(home_flag: u32) -> String {
     format!(r#"{{"print":{{"home_flag":{home_flag}{filler}}}}}"#)
 }
 
-/// `print_option` settings read a full report's `home_flag` until a `cfg` arrives, then `cfg`
-/// alone; a heartbeat's partial `home_flag` changes nothing; a reported support bit lifts the
-/// setter gate past the model rule.
+/// `print_option` settings read `home_flag` until a `cfg` arrives, then `cfg` alone; once `cfg`
+/// has been seen, a heartbeat's partial `home_flag` changes nothing; a reported support bit lifts
+/// the setter gate past the model rule.
 #[tokio::test]
 async fn test_print_option_settings_read_cfg_over_home_flag() {
     // home_flag: Filament Backup on (10), prompt sound on (17) and supported (18), tangle
@@ -1144,14 +1144,15 @@ async fn test_print_option_settings_read_cfg_over_home_flag() {
             reports
                 .publish(&mut server_stream, full_report(HOME_FLAG).as_bytes())
                 .await;
-            // A heartbeat: too few keys to be a full report, and its home_flag is partial.
-            reports
-                .publish(&mut server_stream, br#"{"print":{"home_flag":0}}"#)
-                .await;
             // cfg: auto-recovery on (16), smart blob detection auto (43-44 = 2), air
             // purification outside (36-37 = 2); prompt sound, backup and tangle off.
             reports
                 .publish(&mut server_stream, br#"{"print":{"cfg":"0x102000010000"}}"#)
+                .await;
+            // A heartbeat from a printer that sends cfg: too few keys to be a full report, and
+            // its home_flag is partial.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":0}}"#)
                 .await;
             let sound = read_publish_payload(&mut server_stream).await;
             assert_eq!(sound["print"]["command"], "print_option");
@@ -1165,7 +1166,6 @@ async fn test_print_option_settings_read_cfg_over_home_flag() {
     );
 
     client.poll_telemetry().await.expect("home_flag report");
-    client.poll_telemetry().await.expect("heartbeat");
     assert_eq!(client.prompt_sound_enabled(), Some(true));
     assert_eq!(client.filament_backup_enabled(), Some(true));
     assert_eq!(client.filament_tangle_detect_enabled(), Some(true));
@@ -1204,11 +1204,50 @@ async fn test_print_option_settings_read_cfg_over_home_flag() {
         Some(AirPurificationMode::Outside)
     );
 
+    client.poll_telemetry().await.expect("heartbeat");
+    assert_eq!(
+        client.air_print_detect_enabled(),
+        Some(true),
+        "once cfg has been seen, a heartbeat's partial home_flag must not answer"
+    );
+    assert_eq!(
+        client.capabilities().prompt_sound_support(),
+        Support::Reported(true)
+    );
+
     // The P1S model rule says no prompt sound, but this printer reported support.
     client
         .set_prompt_sound(false)
         .await
         .expect("reported support must lift the model rule");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// On a printer that sends no `cfg` (P1, A1), a small diff frame carries a complete `home_flag`,
+/// so it updates the settings getters without waiting for a full report. The frame shape follows
+/// `tests/mocks/P1S_print_sequence.ndjson`.
+#[tokio::test]
+async fn test_p1s_diff_frame_home_flag_updates_settings() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, full_report(0).as_bytes())
+                .await;
+            // Auto-recovery (bit 4) switched on at the printer's screen.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","msg":1,"sequence_id":"2","home_flag":16,"nozzle_temper":25.0}}"#,
+                )
+                .await;
+        })
+        .await;
+    client.poll_telemetry().await.expect("full report");
+    assert_eq!(client.auto_recovery_enabled(), Some(false));
+    client.poll_telemetry().await.expect("diff frame");
+    assert_eq!(client.auto_recovery_enabled(), Some(true));
     broker_task.await.expect("Broker task panicked");
 }
 

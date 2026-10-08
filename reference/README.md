@@ -81,6 +81,8 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Enclosure LED Lighting Control (ledctrl)
     *   Airduct AC Mode Selection (set_airduct)
     *   Printer Settings (print_option: prompt sound, auto-recovery, Filament Backup, tangle/nozzle-blob/air-printing detection, air purification) & Buzzer (buzzer_ctrl)
+    *   Other Persistent Settings (set_door_stat, set_against_continued_heating_mode, print_cache_set)
+    *   Camera Detectors (xcam_control_set)
     *   Physical Calibration Controls (calibration option bitmask calculation)
     *   AMS Controls (ams_control and ams_get_rfid commands)
     *   Feed Speed Level Configurations (print_speed command parameters)
