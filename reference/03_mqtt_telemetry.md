@@ -689,7 +689,7 @@ One command sets eight persistent printer settings. Each request carries `comman
 **Support.** BambuStudio's support bits (`DevPrintOptions.cpp` `ParseDetectionV1_0`; a non-empty `fun` overrides `home_flag`): prompt sound `fun` 8 / `home_flag` 18; tangle detection `fun` 9 / `home_flag` 19; nozzle blob v1 `fun` 13 / `home_flag` 25; nozzle blob v2 `fun2` 15; air purification `fun2` 4; air-printing detection `home_flag` 29. Auto-recovery and Filament Backup have no telemetry bit: `support_auto_recovery_step_loss` and `support_filament_backup` in `resources/printers/*.json` are true on every model, on X1/X1C (`BL-P001`/`BL-P002`) only from firmware `01.01.01.00`. Prompt sound's per-model `support_prompt_sound` is true only on `N1`, `N2S` and `N9` (A1 Mini, A1, A2L).
 
 ##### Other Persistent Settings (`set_door_stat`, `set_against_continued_heating_mode`, `print_cache_set`)
-Three more settings read back from `cfg` like the `print_option` ones, each with its own command. All three are single-source (BambuStudio), and none has ack evidence.
+Three more settings read back from `cfg` like the `print_option` ones, each with its own command. All three are single-source (BambuStudio). On a P1S, `set_against_continued_heating_mode` acks; `set_door_stat` and `print_cache_set` don't reply (see the ack-correlation section).
 
 | Setting | Request | Value in `cfg` | Support |
 | --- | --- | --- | --- |
@@ -729,7 +729,7 @@ Switches one camera detector. The wrapper is `xcam`, not `print` (BambuStudio `D
 | `fod_check` | Foreign object | no | `fun2` bit 13 |
 | `model_movement_check` | Displacement | no | `fun2` bit 14 |
 
-Values read back from `print.xcam` (see the `xcam.cfg` decoding in `src/types/telemetry/xcam.rs`), and first-layer inspection from `print.cfg` bit 12. BambuStudio reads the reply's `module_name` and `control`/`enable` under `print`. Neither the reply's wrapper nor whether a P1S answers at all is confirmed; a `bambino-cli ack-probe` run would settle both. bambuddy says the firmware links spaghetti and pile-up sensitivity; that is unconfirmed.
+Values read back from `print.xcam` (see the `xcam.cfg` decoding in `src/types/telemetry/xcam.rs`), and first-layer inspection from `print.cfg` bit 12. BambuStudio reads the reply's `module_name` and `control`/`enable` under `print`. A P1S doesn't reply at all (`ack-probe`, 2026-10-07), so the reply's wrapper on a supporting model is still unknown. bambuddy says the firmware links spaghetti and pile-up sensitivity; that is unconfirmed.
 
 ##### Configure Enclosure Buzzer Mode (`buzzer_ctrl`)
 Controls the operating behavior of the physical fire alarm buzzer module. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`.
@@ -1017,6 +1017,17 @@ This extends the "success regardless of effect" observation above in an importan
 `project_file`'s ack echoes the entire submitted payload back verbatim (every flag, `task_id`/`subtask_id`/`project_id`, and the derived `url`), unlike the other commands' compact `command`+`reason`+`result`+`sequence_id` envelope.
 
 Not confirmed by this run: whether any of these behave the same on other models. The capture is P1S-only.
+
+A second P1S run (2026-10-07, 5s windows) tested the settings commands from #616-#619:
+
+| Command | Wrapper sent | Result |
+| :--- | :--- | :--- |
+| `set_against_continued_heating_mode` | `print` | acked in 18ms, `print`-wrapped, `result: success` (the P1S lacks the feature) |
+| `xcam_control_set` | `xcam` | no reply; `push_status` arrived in the window |
+| `set_door_stat` | `system` | no reply; `push_status` arrived in the window |
+| `print_cache_set` | `system` | no reply; `push_status` arrived in the window |
+
+The three silent commands address features the P1S doesn't have. So did `set_airduct` and `buzzer_ctrl`, which ack anyway, so a missing feature alone doesn't explain the silence. A likely explanation (inferred, not verified) is that P1S firmware has no handler for these commands at all. Whether a model that supports them replies is unknown. The same run re-confirmed `ams_control`, `skip_objects`, `set_airduct`, `print_option`, `buzzer_ctrl` and `get_access_code`. Its `print_option` reply also echoed the setting field sent (`sound_enable: true`), which matters for #615.
 
 ###### Ack Verdict Vocabulary
 

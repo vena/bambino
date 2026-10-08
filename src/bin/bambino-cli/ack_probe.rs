@@ -91,10 +91,11 @@ mod verdict {
 /// One command under test.
 ///
 /// The first nine were confirmed ack-correlated on a P1S (the first eight under issue #26,
-/// `GetAccessCode` under issue #140) and are now on `ACK_CORRELATED_COMMANDS`. The last four
-/// (#616-#619) are awaiting a run. Confirmed entries stay here rather than being deleted: that
-/// evidence is model-specific, so the same sweep is what confirms (or refutes) the allowlist on any other
-/// model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
+/// `GetAccessCode` under issue #140) and are on `ACK_CORRELATED_COMMANDS`. Of the last four
+/// (#616-#619), only `set_against_continued_heating_mode` acked on a P1S; the other three drew
+/// no reply on that model, which lacks all three features. Entries stay here rather than being
+/// deleted: that evidence is model-specific, so the same sweep is what confirms (or refutes) the
+/// allowlist on any other model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
 /// for any future command before putting it on the allowlist, never after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AckTest {

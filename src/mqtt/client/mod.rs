@@ -222,6 +222,10 @@ pub fn echo_key(payload: &[u8]) -> Option<EchoKey> {
 ///   name, with background `push_status` traffic flowing alongside in six of the eight windows
 ///   — so the correlation is genuinely by ID, not "a message happened to arrive".
 ///
+/// - `set_against_continued_heating_mode`: confirmed on the same P1S by an `ack-probe` run on
+///   2026-10-07 (#618), a `print`-wrapped reply echoing the `sequence_id` in 18ms. The P1S has
+///   no idle heating protection, so this too is receipt only.
+///
 /// Every entry above returned `result: "success"`, including `set_airduct` and `buzzer_ctrl`,
 /// which address hardware a P1S does not have (no chamber damper, no fire-alarm buzzer), and
 /// `project_file` aimed at a file that does not exist. That is the documented P1S behavior
@@ -233,7 +237,10 @@ pub fn echo_key(payload: &[u8]) -> Option<EchoKey> {
 /// state dump instead [REF-MQTT-LIFECYCLE]. Also absent, with no ack evidence recorded for them:
 /// the error-dialog commands `ignore`, `idle_ignore`, `uiop`, `refresh_nozzle`,
 /// `close_air_filt` and `auto_stop_ams_dry` (#383). They degrade to "any PUBLISH clears the
-/// zombie", never to a hang.
+/// zombie", never to a hang. Also absent, with *negative* P1S evidence from the 2026-10-07
+/// `ack-probe` run: `xcam_control_set`, `set_door_stat` and `print_cache_set` drew no reply
+/// in a 5s window while `push_status` kept arriving (#616, #617, #619). The P1S has none of
+/// those features, so a supporting model may still answer; re-run there before adding them.
 ///
 /// To add a further command, run `bambino-cli ack-probe` against real hardware and cite its
 /// report: it publishes the command with a known `sequence_id` and records whether a response
@@ -272,6 +279,7 @@ const ACK_CORRELATED_COMMANDS: &[&str] = {
         PromptSoundRequest::COMMAND,
         BuzzerRequest::COMMAND,
         GetAccessCodeRequest::COMMAND,
+        IdleHeatingProtectionRequest::COMMAND,
     ]
 };
 
