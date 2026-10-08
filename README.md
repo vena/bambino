@@ -137,11 +137,11 @@ use bambino::client::TelemetryEvent;
 loop {
     match printer.poll_telemetry().await? {
         TelemetryEvent::Report(report, _raw) => {
-            let bed = report.bed_temperatures(); // Option<HeaterTemps>
-            if let Some(print) = &report.print {
+            // bed_temperatures() -> Option<HeaterTemps>
+            if let (Some(print), Some(bed)) = (&report.print, report.bed_temperatures()) {
                 println!(
                     "{:?} — bed {}°C/{}°C — {:?}%",
-                    print.gcode_state, bed_actual, bed_target, print.mc_percent
+                    print.gcode_state, bed.actual, bed.target, print.mc_percent
                 );
             }
         }
@@ -293,7 +293,7 @@ printer.stop_drying(0).await?;                  // ams_id only—every other fie
 
 `DryingCycle::send()` returns `Error::ModelMismatch` in two cases:
 
-- **The printer can't dry remotely:** A1/A1 Mini, P1P/P1S and X1/X1C, and H2D/H2D Pro/H2S/H2C/P2S/X2D
+- **The printer can't dry remotely:** A1/A1 Mini, P1P/P1S and X1/X1C, and H2D/H2D Pro/H2S/H2C/P2S
   below their minimum firmware. That firmware acks the command and then silently discards it instead of
   driving the AMS heater. `printer.supports_ams_remote_drying()` gives the same answer up front.
 - **The unit has no heater:** an external spool, an AMS Lite on an A2L (id `6`/`16`), or a unit
@@ -340,7 +340,7 @@ Telemetry is pushed as it happens, so for anything you watch occur (a state chan
 That only covers events you were connected for. Two fields report things that may have happened well before then, and arrival time says nothing about either:
 
 - [`PrinterTelemetry::gcode_start_time`](src/types/telemetry/report.rs): unix epoch string for when the current job started, which for a long print can be many hours before you connect. Never observed in a full local-print capture — may be cloud-print-only or otherwise unsent on LAN-dispatched jobs; don't rely on it being present.
-- [`HmsEntry::ts_unix`](src/types/telemetry/diagnostics.rs): `YYYYMMDDHHMMSS` UTC string for when an HMS alert was raised, including alerts still active from earlier.
+- [`HmsEntry::ts_local`](src/types/telemetry/diagnostics.rs) (wire key `ts_unix`): `YYYYMMDDHHmmss` calendar string, not Unix seconds and not guaranteed UTC, for when an HMS alert was raised, including alerts still active from earlier.
 
 Both come from the printer's clock and may be incorrect. The only way to place them in real time is to measure the offset once with the FTPS probe described below and compare it.
 
@@ -451,7 +451,7 @@ buffer budget as the 10MB default can exceed an embedded target's entire SRAM.
 ```rust
 use bambino::camera::rtsps::build_rtsps_url;
 
-let url = build_rtsps_url(printer.ip, access_code)?; // ip: IpAddr
+let url = build_rtsps_url(printer_ip, access_code)?; // printer_ip: IpAddr
 // → rtsps://bblp:<code>@<ip>:322/streaming/live/1
 ```
 
@@ -513,7 +513,7 @@ Both take a `TlsVersions`. Two models (P2S and X2D) need FTPS capped to TLS 1.2,
 
 This is platform-general: all three connectors implement `negotiated_version` for real, so the check passes on any platform where the printer negotiates TLS 1.2 of its own accord. What differs is the ability to *cap* the peer at 1.2: only `tokio` has that knob. `esp-idf` exposes no min/max version field upstream, and `EmbassyTlsConnector` sets only a minimum, so against a peer that insisted on TLS 1.3 both fail closed rather than downgrade; see the Embassy TLS section below for the opt-out.
 
-`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` opts out of the check entirely instead: `require_tls_1_2_if_enforced` logs a warning and returns `Ok(())` unconditionally, regardless of what (if anything) `negotiated_version` reports. This is a reliability tradeoff, not a safety hole: `upload_file`'s `SIZE` recheck and `download_file`'s unconditional `SIZE` recheck (run on both the `226` and `426` completion replies) already catch a truncated/corrupted transfer independently of this flag, so bypassing the version check risks more failed transfers/retries against P2S/X2D, never silently-corrupt data. Default is `false` (fail closed, unchanged). Rarely needed now that every backend reports the negotiated version: reach for it only against a printer that insists on TLS 1.3, on `esp-idf` or `embassy`, neither of which can cap the maximum version. On `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead and satisfy the check for real. A direct `FtpsClient::connect` caller passes `TlsVersionCheck::Bypass` for the same effect.
+`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` opts out of the check entirely instead: the check logs a warning and passes unconditionally, regardless of what (if anything) `negotiated_version` reports. This is a reliability tradeoff, not a safety hole: `upload_file`'s `SIZE` recheck and `download_file`'s unconditional `SIZE` recheck (run on both the `226` and `426` completion replies) already catch a truncated/corrupted transfer independently of this flag, so bypassing the version check risks more failed transfers/retries against P2S/X2D, never silently-corrupt data. Default is `false` (fail closed). Every backend reports the negotiated version, so reach for it only against a printer that insists on TLS 1.3, on `esp-idf` or `embassy`, neither of which can cap the maximum version. On `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead and satisfy the check for real. A direct `FtpsClient::connect` caller passes `TlsVersionCheck::Bypass` for the same effect.
 
 ## Platform targets
 
