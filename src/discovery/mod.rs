@@ -82,6 +82,26 @@ const SSDP_INTER_BURST_DELAY_MS: u64 = 50;
 #[cfg(feature = "std")]
 const SSDP_RECV_BUF_LEN: usize = 1500;
 
+/// Start line of an SSDP NOTIFY advertisement.
+const SSDP_NOTIFY_PREFIX: &[u8] = b"NOTIFY ";
+
+/// Start line of a reply to an M-SEARCH query.
+const SSDP_REPLY_PREFIX: &[u8] = b"HTTP/";
+
+/// Names a datagram's SSDP message type from its start line, for the discovery logs.
+///
+/// A NOTIFY advertisement and an M-SEARCH reply carry the same record, so a log that omits
+/// this can't show whether a printer answered a query or was only heard advertising.
+fn ssdp_message_kind(datagram: &[u8]) -> &'static str {
+    if datagram.starts_with(SSDP_NOTIFY_PREFIX) {
+        "NOTIFY"
+    } else if datagram.starts_with(SSDP_REPLY_PREFIX) {
+        "M-SEARCH reply"
+    } else {
+        "unrecognized"
+    }
+}
+
 /// Asynchronous Discovery Engine providing search orchestration and passive monitoring.
 pub struct DiscoveryEngine<U: AsyncUdpSocket> {
     socket: U,
@@ -183,7 +203,9 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                         // get a populated field instead of `None`.
                         device.discovery_port = Some(self.port);
                         log::debug!(
-                            "Parsed Bambu Lab printer record: serial='{}', model={:?}, ip={}, name='{}', version='{}'",
+                            "Parsed Bambu Lab printer record from {} on port {}: serial='{}', model={:?}, ip={}, name='{}', version='{}'",
+                            ssdp_message_kind(datagram),
+                            self.port,
                             device.serial,
                             device.model,
                             device.ip,
@@ -453,6 +475,17 @@ mod tests {
     use crate::test_support::MockTimer;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn test_ssdp_message_kind_names_the_start_line() {
+        assert_eq!(ssdp_message_kind(b"NOTIFY * HTTP/1.1\r\n"), "NOTIFY");
+        assert_eq!(ssdp_message_kind(b"HTTP/1.1 200 OK\r\n"), "M-SEARCH reply");
+        assert_eq!(
+            ssdp_message_kind(b"M-SEARCH * HTTP/1.1\r\n"),
+            "unrecognized"
+        );
+        assert_eq!(ssdp_message_kind(b""), "unrecognized");
+    }
 
     /// Mock socket to test DiscoveryEngine search broadcasts and response parsing.
     struct MockDiscoverySocket {

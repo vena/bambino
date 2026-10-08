@@ -104,7 +104,11 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 - **`discovery_port`**: `Option<u16>`
 
-  SSDP port on which the device was discovered (2021 or 1990), or `None` if unknown.
+  SSDP port the device was first heard on (2021 or 1990), or `None` if unknown.
+  
+  Not a property of the printer: one that advertises on both ports (the P1S does) reports
+  whichever packet arrived first, so the value can differ between sweeps. The discovery
+  debug log records the port and message type of every packet.
   
   The port is not carried in the payload, so [`parse_ssdp_payload`](parser/index.md#parse-ssdp-payload) — which sees only the
   datagram bytes — always leaves this `None`. It is filled in by
@@ -234,9 +238,9 @@ Runs [`discover_devices()`](#discover-devices) on the tokio backend.
 # Example
 
 ```rust,ignore
-// Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
-// are found only through their ~10.1s NOTIFY advertisements, so a shorter window
-// intermittently returns nothing at all — see `reference/01_network_discovery.md`.
+// Allow at least 20s. Models that never answer M-SEARCH (notably the P1S) are found
+// only through their NOTIFY advertisements, ~10.1s apart on port 2021, so a shorter
+// window intermittently returns nothing at all — see `reference/01_network_discovery.md`.
 let printers = bambino::discovery::discover(std::time::Duration::from_secs(20)).await?;
 
 for printer in &printers {

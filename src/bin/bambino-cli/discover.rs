@@ -51,7 +51,9 @@ pub async fn run() -> Result<(), CliError> {
     println!("\nDetected {} printer(s):\n", devices.len());
     let mut headers = vec!["Model", "Serial", "IP Address", "Name", "Firmware"];
     if is_verbose {
-        headers.push("SSDP Port");
+        // The port this printer was first heard on, not the printer's own port: one that
+        // advertises on both reports whichever arrived first. The -v log lists every packet.
+        headers.push("Heard On");
     }
     let mut table = crate::table::Table::new(headers);
     for device in &devices {

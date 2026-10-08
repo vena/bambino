@@ -69,7 +69,11 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 - **`discovery_port`**: `Option<u16>`
 
-  SSDP port on which the device was discovered (2021 or 1990), or `None` if unknown.
+  SSDP port the device was first heard on (2021 or 1990), or `None` if unknown.
+  
+  Not a property of the printer: one that advertises on both ports (the P1S does) reports
+  whichever packet arrived first, so the value can differ between sweeps. The discovery
+  debug log records the port and message type of every packet.
   
   The port is not carried in the payload, so [`parse_ssdp_payload`](#parse-ssdp-payload) — which sees only the
   datagram bytes — always leaves this `None`. It is filled in by
