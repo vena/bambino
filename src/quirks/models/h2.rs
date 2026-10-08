@@ -81,6 +81,7 @@ const fn h2(
         nozzles,
         airduct_mode: true,
         store_sent_files: true,
+        ai_monitoring: true,
         buzzer: true,
         chamber_exhaust_fan: true,
         ..ModelQuirks::new(

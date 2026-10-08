@@ -274,6 +274,82 @@ impl IdleHeatingProtection {
     }
 }
 
+/// A camera detector `xcam_control_set` addresses by `module_name` (BambuStudio `DevPrintOptions.cpp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum XcamModule {
+    /// AI monitoring, the older global switch.
+    PrintingMonitor,
+    /// Spaghetti detection.
+    SpaghettiDetector,
+    /// Purge chute pile-up detection.
+    PileupDetector,
+    /// Nozzle clumping detection.
+    ClumpDetector,
+    /// Camera air-printing detection (not `print_option`'s non-visual one).
+    AirprintDetector,
+    /// First-layer inspection.
+    FirstLayerInspector,
+    /// Build plate marker (plate type) detection.
+    BuildplateMarkerDetector,
+    /// Build plate alignment detection.
+    PlateOffsetSwitch,
+    /// Foreign object detection.
+    FodCheck,
+    /// Displacement detection.
+    ModelMovementCheck,
+}
+
+wire_enum!(XcamModule {
+    PrintingMonitor => "printing_monitor",
+    SpaghettiDetector => "spaghetti_detector",
+    PileupDetector => "pileup_detector",
+    ClumpDetector => "clump_detector",
+    AirprintDetector => "airprint_detector",
+    FirstLayerInspector => "first_layer_inspector",
+    BuildplateMarkerDetector => "buildplate_marker_detector",
+    PlateOffsetSwitch => "plate_offset_switch",
+    FodCheck => "fod_check",
+    ModelMovementCheck => "model_movement_check",
+});
+
+impl XcamModule {
+    /// Whether BambuStudio sends a `halt_print_sensitivity` with this module.
+    #[must_use]
+    pub const fn takes_sensitivity(self) -> bool {
+        matches!(
+            self,
+            XcamModule::PrintingMonitor
+                | XcamModule::SpaghettiDetector
+                | XcamModule::PileupDetector
+                | XcamModule::ClumpDetector
+                | XcamModule::AirprintDetector
+        )
+    }
+}
+
+/// How eagerly a camera detector halts the print, as `xcam_control_set`'s `halt_print_sensitivity`.
+///
+/// `NeverHalt` only notifies. It is the AI-monitoring level BambuStudio offers alongside the three
+/// [`XcamSensitivity`](crate::types::XcamSensitivity) levels the per-detector telemetry reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum XcamHaltSensitivity {
+    /// Notify only.
+    NeverHalt,
+    /// Least eager to halt.
+    Low,
+    /// Medium.
+    Medium,
+    /// Most eager to halt.
+    High,
+}
+
+wire_enum!(XcamHaltSensitivity {
+    NeverHalt => "never_halt",
+    Low => "low",
+    Medium => "medium",
+    High => "high",
+});
+
 /// Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]

@@ -24,7 +24,7 @@ use alloc::string::String;
 use crate::camera::CameraProtocol;
 use crate::error::Error;
 use crate::models::PrinterModel;
-use crate::types::control::CalibrationOption;
+use crate::types::control::{CalibrationOption, XcamModule};
 use crate::types::telemetry::bits;
 
 /// Reads the printer's own remote-dry answer out of a [`QuirkContext`]'s `fun2` string.
@@ -364,6 +364,8 @@ pub struct ModelQuirks {
     prompt_sound: bool,
     print_options_min_firmware: Option<&'static str>,
     store_sent_files: bool,
+    ai_monitoring: bool,
+    first_layer_inspect: bool,
     buzzer: bool,
 }
 
@@ -402,6 +404,8 @@ impl ModelQuirks {
             prompt_sound: false,
             print_options_min_firmware: None,
             store_sent_files: false,
+            ai_monitoring: false,
+            first_layer_inspect: false,
             buzzer: false,
         }
     }
@@ -785,6 +789,53 @@ impl ModelQuirks {
     #[must_use]
     pub fn supports_store_sent_files(&self) -> bool {
         self.store_sent_files
+    }
+
+    /// Returns whether the printer runs one camera detector that `xcam_control_set` can switch, with its provenance.
+    ///
+    /// Per module, following BambuStudio (`DevPrintOptions.cpp` `ParseDetectionV1_0`, per-model
+    /// `resources/printers/*.json`):
+    ///
+    /// * **AI monitoring** — reported by `xcam.cfg` being present, else the model rule below.
+    /// * **Build plate marker detection** — the model rule below.
+    /// * **Spaghetti, pile-up, nozzle clumping, air printing** — `fun` bits 42-45, else
+    ///   `Assumed(false)`.
+    /// * **Build plate alignment, foreign object, displacement** — `fun2` bits 2, 13, 14, else
+    ///   `Assumed(false)`.
+    /// * **First-layer inspection** — per-model `support_first_layer_inspect`: X1, X1C, X1E only.
+    ///
+    /// The model rule for AI monitoring and plate markers is `support_ai_monitoring` /
+    /// `support_build_plate_marker_detect`, true on X1, X1C, X1E, X2D, P2S and the H2 family, and
+    /// on X1/X1C only from the release in [`auto_recovery_support`](Self::auto_recovery_support).
+    /// P1 and A1 profiles mark every camera detector unsupported.
+    #[must_use]
+    pub fn xcam_module_support(&self, module: XcamModule, ctx: &QuirkContext) -> Support {
+        let reported = |fun: Option<u32>, fun2: Option<u32>| {
+            SupportBits {
+                fun,
+                fun2,
+                home_flag: None,
+            }
+            .resolve(ctx, Support::Assumed(false))
+        };
+        match module {
+            XcamModule::PrintingMonitor if ctx.xcam_cfg.is_some() => Support::Reported(true),
+            XcamModule::PrintingMonitor | XcamModule::BuildplateMarkerDetector => {
+                if self.ai_monitoring {
+                    self.print_options_rule(ctx)
+                } else {
+                    Support::Inferred(false)
+                }
+            }
+            XcamModule::FirstLayerInspector => Support::Inferred(self.first_layer_inspect),
+            XcamModule::SpaghettiDetector => reported(Some(bits::FUN_SPAGHETTI_BIT), None),
+            XcamModule::PileupDetector => reported(Some(bits::FUN_PILEUP_BIT), None),
+            XcamModule::ClumpDetector => reported(Some(bits::FUN_NOZZLE_CLUMPING_BIT), None),
+            XcamModule::AirprintDetector => reported(Some(bits::FUN_AIR_PRINTING_BIT), None),
+            XcamModule::PlateOffsetSwitch => reported(None, Some(bits::FUN2_PLATE_ALIGN_BIT)),
+            XcamModule::FodCheck => reported(None, Some(bits::FUN2_FOD_CHECK_BIT)),
+            XcamModule::ModelMovementCheck => reported(None, Some(bits::FUN2_DISPLACEMENT_BIT)),
+        }
     }
 
     /// The shared auto-recovery and Filament Backup model rule.
@@ -1353,6 +1404,70 @@ mod tests {
         ] {
             assert!(!model.quirks().supports_store_sent_files(), "{model:?}");
         }
+    }
+
+    #[test]
+    fn test_xcam_module_support() {
+        let empty = QuirkContext::empty();
+        let h2d = PrinterModel::H2D.quirks();
+        let p1s = PrinterModel::P1S.quirks();
+        // AI monitoring: xcam.cfg presence is the printer's own answer, else the model rule.
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::PrintingMonitor, &empty),
+            Support::Inferred(true)
+        );
+        assert_eq!(
+            p1s.xcam_module_support(XcamModule::PrintingMonitor, &empty),
+            Support::Inferred(false)
+        );
+        let with_cfg = QuirkContext::empty().with_xcam_cfg(Some(0));
+        assert_eq!(
+            p1s.xcam_module_support(XcamModule::PrintingMonitor, &with_cfg),
+            Support::Reported(true)
+        );
+        // Per-detector bits: fun 42-45, fun2 2/13/14.
+        let fun = QuirkContext::empty()
+            .with_fun(Some("40000000000"))
+            .with_fun2(Some("4004"));
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::SpaghettiDetector, &fun),
+            Support::Reported(true)
+        );
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::PileupDetector, &fun),
+            Support::Reported(false)
+        );
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::PlateOffsetSwitch, &fun),
+            Support::Reported(true)
+        );
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::ModelMovementCheck, &fun),
+            Support::Reported(true)
+        );
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::FodCheck, &empty),
+            Support::Assumed(false)
+        );
+        // First-layer inspection: X1 family only.
+        assert_eq!(
+            PrinterModel::X1E
+                .quirks()
+                .xcam_module_support(XcamModule::FirstLayerInspector, &empty),
+            Support::Inferred(true)
+        );
+        assert_eq!(
+            h2d.xcam_module_support(XcamModule::FirstLayerInspector, &empty),
+            Support::Inferred(false)
+        );
+        // X1C's plate marker detection shares the 01.01.01.00 gate.
+        let old = QuirkContext::empty().with_firmware(Some("01.00.00.00"));
+        assert_eq!(
+            PrinterModel::X1C
+                .quirks()
+                .xcam_module_support(XcamModule::BuildplateMarkerDetector, &old),
+            Support::Inferred(false)
+        );
     }
 
     #[test]

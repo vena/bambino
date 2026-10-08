@@ -37,6 +37,7 @@ pub use crate::quirks::Axis;
 pub use crate::types::control::{
     AirPurificationMode, BuzzerMode, CalibrationOption, DoorOpenCheck, FanTarget,
     IdleHeatingProtection, LedNode, LightMode, NozzleBlobDetectMode, PrintSpeed, PrintStatus,
+    XcamHaltSensitivity, XcamModule,
 };
 #[doc(inline)]
 pub use crate::types::telemetry::{HeaterTemps, NozzleTemps};
@@ -680,6 +681,7 @@ where
             .with_firmware(self.firmware_this_connection())
             .with_fun(self.core.cache.last_fun.as_deref())
             .with_home_flag(self.full_home_flag_this_connection())
+            .with_xcam_cfg(self.core.cache.last_xcam.as_ref().and_then(|xcam| xcam.cfg))
     }
 
     /// Returns the `home_flag` cached from a full status report on the current MQTT connection.

@@ -6,6 +6,7 @@
 use bambino::client::HeaterTemps;
 use bambino::client::{
     AirPurificationMode, DoorOpenCheck, IdleHeatingProtection, NozzleBlobDetectMode,
+    XcamHaltSensitivity, XcamModule,
 };
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
@@ -1285,6 +1286,52 @@ async fn test_safety_and_storage_setters_refuse_on_p1s() {
         client.set_store_sent_files(true).await,
         Err(Error::ModelMismatch(_))
     ));
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// `xcam_control_set` is gated per detector, rejects a sensitivity a module takes none of, and
+/// reaches the wire under the `xcam` wrapper; first-layer inspection reads `cfg` bit 12.
+#[tokio::test]
+async fn test_xcam_detector_setter_and_first_layer_getter() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            // fun bit 42 (spaghetti) set; cfg bit 12 (first-layer inspection) set.
+            ReportPublisher::new(SERIAL)
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","cfg":"1000","fun":"40000000000"}}"#,
+                )
+                .await;
+            let set = read_publish_payload(&mut server_stream).await;
+            assert_eq!(set["xcam"]["command"], "xcam_control_set");
+            assert_eq!(set["xcam"]["module_name"], "spaghetti_detector");
+            assert_eq!(set["xcam"]["control"], true);
+            assert_eq!(set["xcam"]["halt_print_sensitivity"], "low");
+        })
+        .await;
+    assert!(matches!(
+        client
+            .set_xcam_detector(XcamModule::SpaghettiDetector, true, None)
+            .await,
+        Err(Error::ModelMismatch(_))
+    ));
+    client.poll_telemetry().await.expect("report");
+    assert_eq!(client.first_layer_inspection_enabled(), Some(true));
+    assert!(matches!(
+        client
+            .set_xcam_detector(XcamModule::FodCheck, true, Some(XcamHaltSensitivity::High))
+            .await,
+        Err(Error::InvalidArgument(_))
+    ));
+    client
+        .set_xcam_detector(
+            XcamModule::SpaghettiDetector,
+            true,
+            Some(XcamHaltSensitivity::Low),
+        )
+        .await
+        .expect("spaghetti detector send");
     broker_task.await.expect("Broker task panicked");
 }
 

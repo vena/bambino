@@ -57,11 +57,12 @@ const X1_AMS_POOL: AmsPoolComposition = AmsPoolComposition::Shared {
     ams_lite: AmsLiteSlot::NotSupported,
 };
 
-/// First X1/X1C release with step-loss auto-recovery and Filament Backup.
+/// First X1/X1C release with step-loss auto-recovery, Filament Backup, AI monitoring and build plate marker detection.
 ///
-/// BambuStudio's `BL-P001.json`/`BL-P002.json` set `support_auto_recovery_step_loss` and
-/// `support_filament_backup` false at `00.00.00.00` and true from `01.01.01.00`; every other
-/// model's profile has both from its first release.
+/// BambuStudio's `BL-P001.json`/`BL-P002.json` set `support_auto_recovery_step_loss`,
+/// `support_filament_backup`, `support_ai_monitoring` and `support_build_plate_marker_detect`
+/// false at `00.00.00.00` and true from `01.01.01.00`; every other model's profile states them
+/// from its first release.
 const X1C_PRINT_OPTIONS_MIN_FIRMWARE: &str = "01.01.01.00";
 
 /// X1 Carbon: no active chamber heater, voltage-dependent bed ceiling.
@@ -70,6 +71,8 @@ pub(crate) const X1C: ModelQuirks = ModelQuirks {
     chamber_temperature_sensor: true,
     print_options_min_firmware: Some(X1C_PRINT_OPTIONS_MIN_FIRMWARE),
     store_sent_files: true,
+    ai_monitoring: true,
+    first_layer_inspect: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(X1_Z_MAX),
@@ -107,6 +110,8 @@ pub(crate) const X1: ModelQuirks = ModelQuirks {
 pub(crate) const X1E: ModelQuirks = ModelQuirks {
     door: DoorSensor::HomeFlag,
     chamber_temperature_sensor: true,
+    ai_monitoring: true,
+    first_layer_inspect: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(X1_Z_MAX),

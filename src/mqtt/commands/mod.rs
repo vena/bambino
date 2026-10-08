@@ -35,7 +35,7 @@ pub use hardware::{
     AutoRecoveryRequest, BuzzerRequest, DoorOpenCheckRequest, FilamentBackupRequest,
     FilamentTangleDetectRequest, FlashTiming, IdleHeatingProtectionRequest, LedCtrlRequest,
     NozzleBlobDetectRequest, PromptSoundRequest, SmartNozzleBlobDetectRequest,
-    StoreSentFilesRequest,
+    StoreSentFilesRequest, XcamControlRequest,
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, NozzleRack, PrintJobConfig, ProjectFileRequest,
@@ -106,6 +106,7 @@ envelope!(Print, print, "print");
 envelope!(System, system, "system");
 envelope!(Pushing, pushing, "pushing");
 envelope!(Info, info, "info");
+envelope!(Xcam, xcam, "xcam");
 
 #[cfg(test)]
 mod tests {
@@ -817,6 +818,35 @@ mod tests {
             serde_json::to_value(StoreSentFilesRequest::new(false, 1)).unwrap(),
             serde_json::json!({"system": {"command": "print_cache_set", "sequence_id": "1", "config": false}})
         );
+    }
+
+    /// `xcam_control_set` as BambuStudio's `command_xcam_control` builds it.
+    #[test]
+    fn test_xcam_control_request_json() {
+        use crate::types::control::{XcamHaltSensitivity, XcamModule};
+        assert_eq!(
+            serde_json::to_value(XcamControlRequest::new(
+                XcamModule::SpaghettiDetector,
+                true,
+                Some(XcamHaltSensitivity::High),
+                1
+            ))
+            .unwrap(),
+            serde_json::json!({"xcam": {
+                "command": "xcam_control_set", "sequence_id": "1",
+                "module_name": "spaghetti_detector", "control": true, "enable": true,
+                "print_halt": true, "halt_print_sensitivity": "high"
+            }})
+        );
+        let value = serde_json::to_value(XcamControlRequest::new(
+            XcamModule::FodCheck,
+            false,
+            None,
+            1,
+        ))
+        .unwrap();
+        assert_eq!(value["xcam"]["module_name"], "fod_check");
+        assert!(value["xcam"].get("halt_print_sensitivity").is_none());
     }
 
     #[test]

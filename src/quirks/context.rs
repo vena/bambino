@@ -62,6 +62,12 @@ pub struct QuirkContext<'a> {
     /// `home_flag`, and from the current connection only, since what the printer supports can
     /// change across a reboot.
     pub home_flag: Option<u32>,
+
+    /// The `print.xcam.cfg` detector bitmask, if one has been seen.
+    ///
+    /// Its presence is BambuStudio's AI-monitoring support signal (`ParseDetectionV1_0`). Absence
+    /// means "not seen yet" as often as "unsupported", since `xcam` arrives only in full reports.
+    pub xcam_cfg: Option<u32>,
 }
 
 impl<'a> QuirkContext<'a> {
@@ -99,6 +105,13 @@ impl<'a> QuirkContext<'a> {
     #[must_use]
     pub fn with_home_flag(mut self, home_flag: Option<u32>) -> Self {
         self.home_flag = home_flag;
+        self
+    }
+
+    /// Sets the `print.xcam.cfg` bitmask.
+    #[must_use]
+    pub fn with_xcam_cfg(mut self, xcam_cfg: Option<u32>) -> Self {
+        self.xcam_cfg = xcam_cfg;
         self
     }
 }

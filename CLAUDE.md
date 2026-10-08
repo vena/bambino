@@ -51,7 +51,7 @@ This section was kept separate from the raw command list above so the CI-live tr
 
 3. **MQTT commands follow the Payload+Request pattern** (`src/mqtt/commands/` — split into `mod.rs` plus per-category files (`ams.rs`, `control.rs`, `gcode.rs`, `hardware.rs`, `print_job.rs`, `status.rs`) — and `src/diagnostics/kprofile.rs`):
    - A `#[derive(Serialize)]` payload struct with typed fields
-   - A type alias over the generic envelope (`pub type XRequest = Print<XPayload>;`, or `System`/`Pushing`/`Info`)
+   - A type alias over the generic envelope (`pub type XRequest = Print<XPayload>;`, or `System`/`Pushing`/`Info`/`Xcam`)
    - An `impl XRequest` block with a `pub const COMMAND` (the wire name, which `ACK_CORRELATED_COMMANDS` references) and its constructor(s) — usually `new`, sometimes named (`load`/`unload`, `pause`/`resume`/`stop`)
 
 ### Where Other Invariants Live

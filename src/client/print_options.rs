@@ -24,11 +24,12 @@ use crate::mqtt::commands::{
     SmartNozzleBlobDetectRequest,
 };
 use crate::mqtt::commands::{
-    DoorOpenCheckRequest, IdleHeatingProtectionRequest, StoreSentFilesRequest,
+    DoorOpenCheckRequest, IdleHeatingProtectionRequest, StoreSentFilesRequest, XcamControlRequest,
 };
 use crate::quirks::Support;
 use crate::types::control::{
     AirPurificationMode, DoorOpenCheck, IdleHeatingProtection, NozzleBlobDetectMode,
+    XcamHaltSensitivity, XcamModule,
 };
 use crate::types::telemetry::bits::{self, SettingBits};
 
@@ -307,6 +308,41 @@ where
             .await
     }
 
+    /// Turns one camera detector on or off, optionally setting how eagerly it halts the print.
+    ///
+    /// Read the result back through [`xcam()`](Self::xcam) (the detector accessors on
+    /// [`XcamTelemetry`](crate::types::XcamTelemetry)) or, for first-layer inspection,
+    /// [`first_layer_inspection_enabled()`](Self::first_layer_inspection_enabled), after the
+    /// settle window described in the module docs. `xcam` arrives only in full status reports.
+    /// bambuddy notes the firmware links spaghetti and pile-up sensitivity, so setting one may
+    /// change both; that is unconfirmed.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidArgument`] for a `sensitivity` on a module that takes none
+    ///   ([`XcamModule::takes_sensitivity`]).
+    /// - [`Error::ModelMismatch`] when
+    ///   [`Capabilities::xcam_module_support`](super::Capabilities::xcam_module_support) is
+    ///   `false`.
+    pub async fn set_xcam_detector(
+        &mut self,
+        module: XcamModule,
+        enable: bool,
+        sensitivity: Option<XcamHaltSensitivity>,
+    ) -> Result<CommandHandle, Error> {
+        if sensitivity.is_some() && !module.takes_sensitivity() {
+            return Err(Error::InvalidArgument(
+                format!("{module} takes no halt sensitivity").into(),
+            ));
+        }
+        refuse_unless(
+            self.capabilities().xcam_module_support(module),
+            module.as_wire(),
+        )?;
+        self.dispatch(|seq| XcamControlRequest::new(module, enable, sensitivity, seq))
+            .await
+    }
+
     /// Whether prompt sounds are on, as last reported (`print.cfg` bit 22, else `home_flag` bit 17).
     ///
     /// `None` before any telemetry carrying the setting. See the module docs for the settle
@@ -380,6 +416,13 @@ where
     #[must_use]
     pub fn idle_heating_protection(&self) -> Option<IdleHeatingProtection> {
         IdleHeatingProtection::from_code(self.cfg_field(bits::CFG_IDLE_HEATING_PROTECTION)?)
+    }
+
+    /// Whether first-layer inspection is on, as last reported (`print.cfg` bit 12, else `xcam.first_layer_inspector`).
+    #[must_use]
+    pub fn first_layer_inspection_enabled(&self) -> Option<bool> {
+        self.setting(bits::FIRST_LAYER_INSPECT)
+            .or_else(|| self.core.cache.last_xcam.as_ref()?.first_layer_inspector)
     }
 
     /// Whether sent files are kept on external storage, as last reported (`print.cfg` bit 19).

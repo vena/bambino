@@ -24,6 +24,7 @@
 //! question rather than storing it.
 
 use crate::quirks::{ModelQuirks, QuirkContext, Support};
+use crate::types::control::XcamModule;
 
 /// Capability answers for one printer, with its cached telemetry already supplied.
 ///
@@ -175,6 +176,12 @@ impl<'a> Capabilities<'a> {
     #[must_use]
     pub fn idle_heating_protection_support(&self) -> Support {
         self.quirks.idle_heating_protection_support(&self.context)
+    }
+
+    /// Camera detector support — see [`ModelQuirks::xcam_module_support`].
+    #[must_use]
+    pub fn xcam_module_support(&self, module: XcamModule) -> Support {
+        self.quirks.xcam_module_support(module, &self.context)
     }
 }
 

@@ -5,6 +5,7 @@ use serde::Serialize;
 use super::ClampedTaskId;
 use crate::types::control::{
     AirPurificationMode, BuzzerMode, DoorOpenCheck, LedNode, LightMode, NozzleBlobDetectMode,
+    XcamHaltSensitivity, XcamModule,
 };
 
 /// Chamber illumination and toolhead LED control configurations.
@@ -475,6 +476,57 @@ impl StoreSentFilesRequest {
                 command: Self::COMMAND,
                 sequence_id: sequence_id.into(),
                 config: store,
+            },
+        }
+    }
+}
+
+/// Turns one camera detector on or off, optionally with its halt sensitivity.
+///
+/// `enable` and `print_halt` are the old protocol's fields; BambuStudio still sends both, with
+/// `print_halt` always `true` (`DevPrintOptions::command_xcam_control`).
+#[derive(Debug, Clone, Serialize)]
+pub struct XcamControlPayload {
+    /// Wire command name, always `"xcam_control_set"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// The detector addressed — see [`XcamModule`].
+    pub module_name: &'static str,
+    /// Whether the detector runs.
+    pub control: bool,
+    /// Old-protocol copy of `control`.
+    pub enable: bool,
+    /// Old-protocol flag, always `true`.
+    pub print_halt: bool,
+    /// The halt sensitivity — see [`XcamHaltSensitivity`]; omitted when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub halt_print_sensitivity: Option<&'static str>,
+}
+
+/// Turns a camera detector on or off (BambuStudio `DevPrintOptions::command_xcam_control`).
+pub type XcamControlRequest = super::Xcam<XcamControlPayload>;
+
+impl XcamControlRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "xcam_control_set";
+
+    /// Builds an `xcam_control_set` request.
+    pub fn new(
+        module: XcamModule,
+        enable: bool,
+        sensitivity: Option<XcamHaltSensitivity>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
+        Self {
+            xcam: XcamControlPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                module_name: module.as_wire(),
+                control: enable,
+                enable,
+                print_halt: true,
+                halt_print_sensitivity: sensitivity.map(XcamHaltSensitivity::as_wire),
             },
         }
     }

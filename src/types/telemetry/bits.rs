@@ -211,6 +211,25 @@ pub(crate) const FUN_NOZZLE_BLOB_DETECT_BIT: u32 = 13;
 pub(crate) const FUN_DOOR_OPEN_CHECK_BIT: u32 = 12;
 /// `fun` bit 62: idle heating protection supported (`DevPrintOptions.cpp:243`).
 pub(crate) const FUN_IDLE_HEATING_PROTECTION_BIT: u32 = 62;
+/// `fun` bit 42: camera spaghetti detection supported.
+pub(crate) const FUN_SPAGHETTI_BIT: u32 = 42;
+/// `fun` bit 43: camera purge chute pile-up detection supported.
+pub(crate) const FUN_PILEUP_BIT: u32 = 43;
+/// `fun` bit 44: camera nozzle clumping detection supported.
+pub(crate) const FUN_NOZZLE_CLUMPING_BIT: u32 = 44;
+/// `fun` bit 45: camera air-printing detection supported.
+pub(crate) const FUN_AIR_PRINTING_BIT: u32 = 45;
+/// `fun2` bit 2: build plate alignment detection supported.
+pub(crate) const FUN2_PLATE_ALIGN_BIT: u32 = 2;
+/// `fun2` bit 13: foreign object detection supported.
+pub(crate) const FUN2_FOD_CHECK_BIT: u32 = 13;
+/// `fun2` bit 14: displacement detection supported.
+pub(crate) const FUN2_DISPLACEMENT_BIT: u32 = 14;
+/// `print.cfg` bit 12: first-layer inspection enabled.
+pub(crate) const FIRST_LAYER_INSPECT: SettingBits = SettingBits {
+    cfg: Some(12),
+    home_flag: None,
+};
 /// `fun2` bit 4: air purification at print end supported.
 pub(crate) const FUN2_AIR_PURIFICATION_BIT: u32 = 4;
 /// `fun2` bit 15: smart nozzle blob detection (v2) supported.

@@ -699,6 +699,38 @@ Three more settings read back from `cfg` like the `print_option` ones, each with
 
 BambuStudio shows the door-open check in its Safety Options dialog on models with `support_safety_options: true` (X2D, P2S) and in Print Options elsewhere. Both send the same command.
 
+##### Camera Detectors (`xcam_control_set`)
+Switches one camera detector. The wrapper is `xcam`, not `print` (BambuStudio `DevPrintOptions::command_xcam_control`; bambuddy's `set_xcam_option` builds the same payload):
+```json
+{
+  "xcam": {
+    "command": "xcam_control_set",
+    "sequence_id": "30020",
+    "module_name": "spaghetti_detector",
+    "control": true,
+    "enable": true,
+    "print_halt": true,
+    "halt_print_sensitivity": "medium"
+  }
+}
+```
+`enable` and `print_halt` are old-protocol fields; BambuStudio still sends both, with `print_halt` always `true`. `halt_print_sensitivity` (`never_halt`, `low`, `medium`, `high`) goes with the five modules that take one. bambuddy omits it for `never_halt`, while BambuStudio sends it.
+
+| `module_name` | Detector | Sensitivity | Support |
+| --- | --- | --- | --- |
+| `printing_monitor` | AI monitoring (older global switch) | yes | `xcam.cfg` present, else per-model `support_ai_monitoring` |
+| `spaghetti_detector` | Spaghetti | yes | `fun` bit 42 |
+| `pileup_detector` | Purge chute pile-up | yes | `fun` bit 43 |
+| `clump_detector` | Nozzle clumping | yes | `fun` bit 44 |
+| `airprint_detector` | Air printing (camera) | yes | `fun` bit 45 |
+| `first_layer_inspector` | First-layer inspection | no | per-model `support_first_layer_inspect` (X1, X1C, X1E) |
+| `buildplate_marker_detector` | Build plate marker / type | no | per-model `support_build_plate_marker_detect` |
+| `plate_offset_switch` | Build plate alignment | no | `fun2` bit 2 |
+| `fod_check` | Foreign object | no | `fun2` bit 13 |
+| `model_movement_check` | Displacement | no | `fun2` bit 14 |
+
+Values read back from `print.xcam` (see the `xcam.cfg` decoding in `src/types/telemetry/xcam.rs`), and first-layer inspection from `print.cfg` bit 12. BambuStudio reads the reply's `module_name` and `control`/`enable` under `print`. Neither the reply's wrapper nor whether a P1S answers at all is confirmed; a `bambino-cli ack-probe` run would settle both. bambuddy says the firmware links spaghetti and pile-up sensitivity; that is unconfirmed.
+
 ##### Configure Enclosure Buzzer Mode (`buzzer_ctrl`)
 Controls the operating behavior of the physical fire alarm buzzer module. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`.
 ```json

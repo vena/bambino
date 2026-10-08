@@ -199,6 +199,10 @@ struct EchoEnvelope {
     print: Option<EchoFields>,
     system: Option<EchoFields>,
     info: Option<EchoFields>,
+    // `xcam_control_set` is published under `xcam`. BambuStudio reads its reply's `module_name`
+    // under `print` (`ParseDetectionV1_0`), so an `xcam` reply is unconfirmed; checking the
+    // wrapper costs nothing and keeps one from reading as an empty telemetry report.
+    xcam: Option<EchoFields>,
 }
 
 /// A command echo read off the report topic — a frame whose wrapper names a command other than a telemetry push.
@@ -212,29 +216,34 @@ pub(crate) struct CommandEcho {
 
 /// Reads `payload` as a command echo, or returns `None` for anything else (telemetry, non-JSON).
 ///
-/// Checks every wrapper a command echo arrives under (`print`, `system`, `info`), not only
+/// Checks every wrapper a command echo arrives under (`print`, `system`, `info`, `xcam`), not only
 /// `print`: a `system`-wrapped `ledctrl` echo otherwise deserializes as an empty telemetry
 /// report.
 pub(crate) fn parse_command_echo(payload: &[u8]) -> Option<CommandEcho> {
     let envelope: EchoEnvelope = serde_json::from_slice(payload).ok()?;
-    [envelope.print, envelope.system, envelope.info]
-        .into_iter()
-        .flatten()
-        .find_map(|mut fields| {
-            let command = fields.command.take()?;
-            if is_telemetry_command(&command) {
-                return None;
-            }
-            let sequence_id = fields
-                .sequence_id
-                .as_ref()
-                .and_then(crate::mqtt::client::parse_sequence_id);
-            Some(CommandEcho {
-                command,
-                sequence_id,
-                fields,
-            })
+    [
+        envelope.print,
+        envelope.system,
+        envelope.info,
+        envelope.xcam,
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|mut fields| {
+        let command = fields.command.take()?;
+        if is_telemetry_command(&command) {
+            return None;
+        }
+        let sequence_id = fields
+            .sequence_id
+            .as_ref()
+            .and_then(crate::mqtt::client::parse_sequence_id);
+        Some(CommandEcho {
+            command,
+            sequence_id,
+            fields,
         })
+    })
 }
 
 /// Decodes the verdict an echo carries.
@@ -420,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_echo_found_under_every_command_wrapper() {
-        for wrapper in ["print", "system", "info"] {
+        for wrapper in ["print", "system", "info", "xcam"] {
             let payload =
                 format!(r#"{{"{wrapper}":{{"command":"ledctrl","sequence_id":"30001"}}}}"#);
             let parsed = echo(&payload);

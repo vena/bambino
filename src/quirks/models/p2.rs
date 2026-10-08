@@ -59,6 +59,7 @@ pub(crate) const P2S: ModelQuirks = ModelQuirks {
     auxiliary_left2_fan: true,
     airduct_mode: true,
     store_sent_files: true,
+    ai_monitoring: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(P2S_Z_MAX),
