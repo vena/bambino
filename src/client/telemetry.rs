@@ -28,7 +28,9 @@ use super::command::{
     AckExpectation, CommandHandle, CommandOutcome, CommandResolution, PUSH_STATUS_COMMAND,
     decode_verdict, is_telemetry_command, parse_command_echo,
 };
+use super::print_options::ReplySettings;
 use super::types::{PrintProgress, TelemetryEvent};
+use crate::mqtt::commands::PromptSoundRequest;
 use crate::types::control::{PrintSpeed, PrintStatus};
 
 /// Cached "last-observed" telemetry values, updated by `PrinterClient::poll_telemetry()`.
@@ -92,6 +94,9 @@ pub(crate) struct TelemetryCache {
     // persists across a reconnect; `quirk_context()` honors it, as for firmware.
     pub(crate) last_full_home_flag: Option<u32>,
     pub(crate) last_full_home_flag_generation: Option<u32>,
+    // Setting values from accepted `print_option` replies, cleared by the next status frame
+    // carrying `cfg` or a full `home_flag` — see `ReplySettings`.
+    pub(crate) reply_settings: ReplySettings,
     // The top-level `print.cfg` settings bitmask. Kept across reconnects: whether a printer sends
     // `cfg` at all is a fixed property of the printer, and once it has, the `print_option`
     // getters read `cfg` alone.
@@ -293,6 +298,11 @@ where
                 .is_some_and(is_telemetry_command)
         });
         if !is_push && let Some(echo) = parse_command_echo(&msg.payload) {
+            if echo.command() == PromptSoundRequest::COMMAND
+                && matches!(decode_verdict(&echo), CommandOutcome::Accepted)
+            {
+                self.apply_print_option_reply(&msg.payload);
+            }
             return match self.core.commands.take_answered(&echo) {
                 Some(handle) => {
                     let resolution = CommandResolution {
@@ -315,6 +325,14 @@ where
                         print_key_count(&msg.payload)
                             .is_some_and(|keys| keys > FULL_REPORT_MIN_KEYS)
                     });
+                let carries_settings = full_home_flag.is_some()
+                    || report
+                        .print
+                        .as_ref()
+                        .is_some_and(|print| print.cfg.is_some());
+                if carries_settings {
+                    self.core.cache.reply_settings = ReplySettings::default();
+                }
                 if let Some(flag) = full_home_flag {
                     self.core.cache.last_full_home_flag = Some(flag);
                     self.core.cache.last_full_home_flag_generation =

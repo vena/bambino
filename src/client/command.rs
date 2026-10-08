@@ -214,6 +214,13 @@ pub(crate) struct CommandEcho {
     fields: EchoFields,
 }
 
+impl CommandEcho {
+    /// The echoed wire command name.
+    pub(crate) fn command(&self) -> &str {
+        &self.command
+    }
+}
+
 /// Reads `payload` as a command echo, or returns `None` for anything else (telemetry, non-JSON).
 ///
 /// Checks every wrapper a command echo arrives under (`print`, `system`, `info`, `xcam`), not only

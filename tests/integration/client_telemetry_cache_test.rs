@@ -1212,6 +1212,82 @@ async fn test_print_option_settings_read_cfg_over_home_flag() {
     broker_task.await.expect("Broker task panicked");
 }
 
+/// An accepted `print_option` reply sets the getter at once for a supported setting, until the
+/// next status frame carrying settings replaces it (#615). Unsupported settings and refused
+/// replies are ignored, whichever client sent the command.
+#[tokio::test]
+async fn test_print_option_reply_feeds_getters_until_next_status_frame() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // Full report: auto-recovery (bit 4) off, prompt sound unsupported (bit 18 clear).
+            reports
+                .publish(&mut server_stream, full_report(0).as_bytes())
+                .await;
+            let sent = read_publish_payload(&mut server_stream).await;
+            let seq = sent["print"]["sequence_id"].as_str().unwrap().to_owned();
+            // Our own command's reply, echoing the setting as BambuStudio's command builds it.
+            reports
+                .publish(
+                    &mut server_stream,
+                    format!(
+                        r#"{{"print":{{"command":"print_option","sequence_id":"{seq}","option":1,"auto_recovery":true,"result":"success","reason":"success"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .await;
+            // Another client's replies: an unsupported setting, and a refused one.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"print_option","sequence_id":"7","sound_enable":true,"result":"success"}}"#,
+                )
+                .await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"print_option","sequence_id":"8","auto_switch_filament":true,"result":"fail"}}"#,
+                )
+                .await;
+            // A stale full report: the printer hasn't applied the change yet.
+            reports
+                .publish(&mut server_stream, full_report(0).as_bytes())
+                .await;
+        })
+        .await;
+
+    client.poll_telemetry().await.expect("full report");
+    assert_eq!(client.auto_recovery_enabled(), Some(false));
+    client
+        .set_auto_recovery(true)
+        .await
+        .expect("auto-recovery send");
+
+    for _ in 0..3 {
+        client.poll_telemetry().await.expect("reply");
+    }
+    assert_eq!(client.auto_recovery_enabled(), Some(true));
+    assert_eq!(
+        client.prompt_sound_enabled(),
+        Some(false),
+        "a reply for a setting the P1S doesn't support must not change the getter"
+    );
+    assert_eq!(
+        client.filament_backup_enabled(),
+        Some(false),
+        "a refused reply must not change the getter"
+    );
+
+    client.poll_telemetry().await.expect("stale full report");
+    assert_eq!(
+        client.auto_recovery_enabled(),
+        Some(false),
+        "the next status frame replaces the reply's value, stale or not"
+    );
+    broker_task.await.expect("Broker task panicked");
+}
+
 /// Door-open check, idle heating protection and stored sent files read back from `cfg`, and
 /// their setters reach the wire under their own wrappers.
 #[tokio::test]
