@@ -29,11 +29,16 @@ use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use bambino::Error;
-use bambino::client::{BuzzerMode, DoorOpenCheck, XcamHaltSensitivity, XcamModule};
+use bambino::client::{
+    AirPurificationMode, BuzzerMode, DoorOpenCheck, NozzleBlobDetectMode, XcamHaltSensitivity,
+    XcamModule,
+};
 use bambino::io::tokio::TokioTimer;
 use bambino::models::PrinterModel;
 use bambino::mqtt::commands::{
-    AmsControlOp, ChangeTemps, DoorOpenCheckRequest, IdleHeatingProtectionRequest,
+    AirPrintDetectRequest, AirPurificationRequest, AmsControlOp, AutoRecoveryRequest, ChangeTemps,
+    DoorOpenCheckRequest, FilamentBackupRequest, FilamentTangleDetectRequest,
+    IdleHeatingProtectionRequest, NozzleBlobDetectRequest, SmartNozzleBlobDetectRequest,
     StoreSentFilesRequest, XcamControlRequest,
 };
 use bambino::mqtt::{
@@ -112,12 +117,19 @@ pub(crate) enum AckTest {
     SetDoorStat,
     SetAgainstContinuedHeatingMode,
     PrintCacheSet,
+    PrintOptionAutoRecovery,
+    PrintOptionFilamentBackup,
+    PrintOptionTangleDetect,
+    PrintOptionNozzleBlobDetect,
+    PrintOptionSmartNozzleBlobDetect,
+    PrintOptionAirPrintDetect,
+    PrintOptionAirPurification,
 }
 
 impl AckTest {
     /// The `command` string the printer sees, and the exact literal that would be added to
-    /// `ACK_CORRELATED_COMMANDS` on a positive result. Also the `-t`/`--tests` selector, so a
-    /// summary line can be pasted straight into `ACK_CORRELATED_COMMANDS`.
+    /// `ACK_CORRELATED_COMMANDS` on a positive result. Also the `-t`/`--tests` selector for every
+    /// test whose wire name is unique — see [`selector`](Self::selector).
     fn wire_command(&self) -> &'static str {
         match self {
             Self::AmsControl => AmsControlRequest::COMMAND,
@@ -133,6 +145,30 @@ impl AckTest {
             Self::SetDoorStat => DoorOpenCheckRequest::COMMAND,
             Self::SetAgainstContinuedHeatingMode => IdleHeatingProtectionRequest::COMMAND,
             Self::PrintCacheSet => StoreSentFilesRequest::COMMAND,
+            Self::PrintOptionAutoRecovery
+            | Self::PrintOptionFilamentBackup
+            | Self::PrintOptionTangleDetect
+            | Self::PrintOptionNozzleBlobDetect
+            | Self::PrintOptionSmartNozzleBlobDetect
+            | Self::PrintOptionAirPrintDetect
+            | Self::PrintOptionAirPurification => AutoRecoveryRequest::COMMAND,
+        }
+    }
+
+    /// The `-t`/`--tests` name, unique per test.
+    ///
+    /// The wire command for most; the `print_option` tests after prompt sound share that wire
+    /// name, so each is `print_option.<setting field>`.
+    fn selector(&self) -> &'static str {
+        match self {
+            Self::PrintOptionAutoRecovery => "print_option.auto_recovery",
+            Self::PrintOptionFilamentBackup => "print_option.auto_switch_filament",
+            Self::PrintOptionTangleDetect => "print_option.filament_tangle_detect",
+            Self::PrintOptionNozzleBlobDetect => "print_option.nozzle_blob_detect",
+            Self::PrintOptionSmartNozzleBlobDetect => "print_option.nozzle_blob_detect_v2",
+            Self::PrintOptionAirPrintDetect => "print_option.air_print_detect",
+            Self::PrintOptionAirPurification => "print_option.air_purification",
+            _ => self.wire_command(),
         }
     }
 
@@ -181,6 +217,24 @@ impl AckTest {
                 "Keep sent print files on external storage (issue #619). SETTING: overwrites it \
                  on a printer that supports it"
             }
+            Self::PrintOptionAutoRecovery => {
+                "Step-loss auto-recovery on, sending `option` and `auto_recovery` (#615). \
+                 SETTING; supported on the P1S"
+            }
+            Self::PrintOptionFilamentBackup => {
+                "AMS Filament Backup on (#615). SETTING; supported on the P1S"
+            }
+            Self::PrintOptionTangleDetect => "Filament tangle detection on (#615). SETTING",
+            Self::PrintOptionNozzleBlobDetect => "Nozzle blob detection on (#615). SETTING",
+            Self::PrintOptionSmartNozzleBlobDetect => {
+                "Smart nozzle blob detection to on (#615). SETTING"
+            }
+            Self::PrintOptionAirPrintDetect => {
+                "Non-visual air-printing detection on (#615). SETTING"
+            }
+            Self::PrintOptionAirPurification => {
+                "End-of-print air purification to inside (#615). SETTING"
+            }
         }
     }
 
@@ -196,6 +250,13 @@ impl AckTest {
                 | Self::SetDoorStat
                 | Self::SetAgainstContinuedHeatingMode
                 | Self::PrintCacheSet
+                | Self::PrintOptionAutoRecovery
+                | Self::PrintOptionFilamentBackup
+                | Self::PrintOptionTangleDetect
+                | Self::PrintOptionNozzleBlobDetect
+                | Self::PrintOptionSmartNozzleBlobDetect
+                | Self::PrintOptionAirPrintDetect
+                | Self::PrintOptionAirPurification
         )
     }
 
@@ -225,6 +286,13 @@ impl AckTest {
             Self::SetDoorStat,
             Self::SetAgainstContinuedHeatingMode,
             Self::PrintCacheSet,
+            Self::PrintOptionAutoRecovery,
+            Self::PrintOptionFilamentBackup,
+            Self::PrintOptionTangleDetect,
+            Self::PrintOptionNozzleBlobDetect,
+            Self::PrintOptionSmartNozzleBlobDetect,
+            Self::PrintOptionAirPrintDetect,
+            Self::PrintOptionAirPurification,
         ]
     }
 
@@ -285,6 +353,28 @@ impl AckTest {
                 serde_json::to_value(IdleHeatingProtectionRequest::new(true, seq))
             }
             Self::PrintCacheSet => serde_json::to_value(StoreSentFilesRequest::new(true, seq)),
+            Self::PrintOptionAutoRecovery => {
+                serde_json::to_value(AutoRecoveryRequest::new(true, seq))
+            }
+            Self::PrintOptionFilamentBackup => {
+                serde_json::to_value(FilamentBackupRequest::new(true, seq))
+            }
+            Self::PrintOptionTangleDetect => {
+                serde_json::to_value(FilamentTangleDetectRequest::new(true, seq))
+            }
+            Self::PrintOptionNozzleBlobDetect => {
+                serde_json::to_value(NozzleBlobDetectRequest::new(true, seq))
+            }
+            Self::PrintOptionSmartNozzleBlobDetect => serde_json::to_value(
+                SmartNozzleBlobDetectRequest::new(NozzleBlobDetectMode::On, seq),
+            ),
+            Self::PrintOptionAirPrintDetect => {
+                serde_json::to_value(AirPrintDetectRequest::new(true, seq))
+            }
+            Self::PrintOptionAirPurification => serde_json::to_value(AirPurificationRequest::new(
+                AirPurificationMode::Inside,
+                seq,
+            )),
         };
 
         value.map_err(|e| {
@@ -316,7 +406,7 @@ impl clap::ValueEnum for AckTest {
         } else {
             self.description().to_owned()
         };
-        Some(clap::builder::PossibleValue::new(self.wire_command()).help(help))
+        Some(clap::builder::PossibleValue::new(self.selector()).help(help))
     }
 }
 
@@ -328,6 +418,8 @@ struct ObservedMessage {
 
 #[derive(Serialize)]
 struct AckEntry {
+    /// The `-t` name, which tells apart tests sharing a `wire_command`.
+    test: String,
     wire_command: String,
     description: String,
     /// The `sequence_id` actually put on the wire, as a string (matching the wire encoding).
@@ -497,7 +589,7 @@ async fn run_one(
         "[{}/{}] {} (seq {}, {}s window)... ",
         idx + 1,
         total,
-        test.wire_command(),
+        test.selector(),
         sequence_id,
         window.as_secs()
     );
@@ -512,6 +604,7 @@ async fn run_one(
     };
 
     let mut entry = AckEntry {
+        test: test.selector().to_string(),
         wire_command: test.wire_command().to_string(),
         description: test.description().to_string(),
         sequence_id: sequence_id.to_string(),
@@ -656,7 +749,7 @@ fn confirm_actuating_tests(tests: &[AckTest]) -> Result<bool, CliError> {
     let actuating: Vec<&str> = tests
         .iter()
         .filter(|t| t.is_physically_actuating())
-        .map(|t| t.wire_command())
+        .map(|t| t.selector())
         .collect();
     if actuating.is_empty() {
         return Ok(true);
@@ -687,8 +780,8 @@ fn print_summary(report: &AckReport) {
     eprintln!("\nack-probe summary ({}):", report.model);
     for entry in &report.tests {
         eprintln!(
-            "  {:<20} {:<32} {}",
-            entry.wire_command,
+            "  {:<36} {:<32} {}",
+            entry.test,
             entry.verdict,
             entry
                 .ack_result
@@ -698,12 +791,13 @@ fn print_summary(report: &AckReport) {
         );
     }
 
-    let confirmed: Vec<&str> = report
-        .tests
-        .iter()
-        .filter(|e| e.verdict == verdict::ACK)
-        .map(|e| e.wire_command.as_str())
-        .collect();
+    let mut confirmed: Vec<&str> = Vec::new();
+    for entry in report.tests.iter().filter(|e| e.verdict == verdict::ACK) {
+        // The print_option tests share a wire name; list it once.
+        if !confirmed.contains(&entry.wire_command.as_str()) {
+            confirmed.push(&entry.wire_command);
+        }
+    }
     if confirmed.is_empty() {
         eprintln!("\nNothing confirmed this run — ACK_CORRELATED_COMMANDS unchanged.");
     } else {
