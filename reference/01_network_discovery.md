@@ -8,7 +8,7 @@ Physical Bambu Lab printers utilize a modified, local-network implementation of 
 
 #### Multicast Configuration
 *   **Multicast IPv4 Address**: `239.255.255.250`
-*   **SSDP Ports**: `2021` and `1990` (Note: Both deviate from the UPnP standard SSDP Port `1900`. The official Bambu Lab network port documentation lists both ports for device discovery. Port behavior varies by model: the P1S (firmware 01.10.00.00) responds to M-SEARCH on port 1990 but only sends passive NOTIFY on port 2021. Newer models likely use port 2021 for active M-SEARCH responses. Discovery clients should bind both ports.)
+*   **SSDP Ports**: `2021` and `1990` (Note: Both deviate from the UPnP standard SSDP Port `1900`. The official Bambu Lab network port documentation lists both ports for device discovery. Port behavior varies by model: the P1S (firmware 01.10.00.00) answers M-SEARCH on neither port and sends NOTIFY on both (see NOTIFY Advertisement Interval). Whether other models answer M-SEARCH, and on which port, is unverified. Discovery clients should bind both ports.)
 *   **Search Target (ST)**: `urn:bambulab-com:device:3dprinter:1`
 
 #### Client Socket Bind Requirement
@@ -77,10 +77,21 @@ DevCap.bambu.com: 1
 ```
 
 #### NOTIFY Advertisement Interval
-The P1S (firmware 01.10.00.00) sends NOTIFY advertisements at a consistent interval of approximately **10.1 seconds** (measured over 7 consecutive packets). The `Cache-Control: max-age=1800` header indicates a 30-minute validity window. Discovery clients should allow at least 20 seconds of listening time to guarantee capturing one full NOTIFY cycle, accounting for multicast group join latency and clock jitter.
+The P1S (firmware 01.10.00.00) sends NOTIFY advertisements on both SSDP ports, from source port `1900`:
+
+- a broadcast to `255.255.255.255:2021` every **~10.1 seconds**;
+- a multicast to `239.255.255.250:1990` about 5 seconds after each 2021 advertisement. Some cycles skip it.
+
+A listener bound to both ports therefore usually hears an advertisement about every 5 seconds, and at worst about 10 seconds apart. Verified by packet capture on 2026-10-08 (about 90 seconds: 9 advertisements on 2021, 6 on 1990).
+
+The `Cache-Control: max-age=1800` header indicates a 30-minute validity window. Discovery clients should allow at least 20 seconds of listening time to guarantee capturing one full 2021 cycle, accounting for a skipped 1990 advertisement, a port that can't be bound, multicast group join latency and clock jitter.
 
 #### Unicast Search Response (M-SEARCH Reply)
-When a valid `M-SEARCH` query is received on the SSDP port, some printer models emit a unicast UDP response directly back to the sender's source port. **Port behavior varies by model and firmware generation.** The P1S (firmware 01.10.00.00) responds to M-SEARCH queries on port 1990 (within ~5 seconds) but ignores M-SEARCH on port 2021, where it relies entirely on periodic NOTIFY advertisements at ~10.1-second intervals. Newer models likely respond on port 2021. Discovery engines should query both ports and also listen for NOTIFY traffic as a fallback.
+When a valid `M-SEARCH` query is received on the SSDP port, some printer models emit a unicast UDP response directly back to the sender's source port. **Port behavior varies by model and firmware generation.**
+
+The P1S (firmware 01.10.00.00) sends no reply on either port. A packet capture on 2026-10-08 covered three discovery sweeps, each sending M-SEARCH to both ports by multicast and broadcast; it showed only NOTIFY traffic from the printer. This section previously said the P1S answered on port 1990 within ~5 seconds. That was its 1990 NOTIFY, which lands about 5 seconds after each 2021 one.
+
+Which models do reply, and on which port, is unverified. The example below is not from a P1S. Discovery engines should query both ports and listen for NOTIFY traffic on both.
 
 ```http
 HTTP/1.1 200 OK
@@ -102,7 +113,7 @@ DevCap.bambu.com: 1
 1.  **Bare `USN` Format**: UPnP architecture specifies that the `USN` (Unique Service Name) header must be a URI prefixed with `uuid:`. The printer's firmware frequently violates this constraint, transmitting only the bare, uppercase hardware serial number (e.g., `USN: 09406A521703533`). Discovery parsers must process both the bare serial and `uuid:` prefixed variants to maintain cross-generation compatibility.
 2.  **Inactive `LOCATION` Port**: SSDP response payloads contain a `LOCATION` header pointing to Port `80` (e.g., `LOCATION: http://<ip_address>:80/`). The physical printer does not run an HTTP server on Port `80` on modern firmware tracks; incoming connections to Port `80` are refused.
 3.  **Bare `LOCATION` Format**: Some firmware tracks (confirmed on P1S 01.10.00.00) transmit the `Location` header as a bare IP address (e.g., `Location: 192.168.1.158`) without the `http://` scheme prefix or port suffix. Discovery parsers must handle both the full URI format (`http://<ip>:80/`) and bare IP formats.
-4.  **`HOST` Header Port Mismatch**: The P1S sends NOTIFY packets to the multicast group on Port `2021` (the actual UDP destination), but the `HOST` header within the payload body contains `239.255.255.250:1900` (referencing the standard UPnP port). Discovery engines should rely on the socket's bound port for reception, not the `HOST` header value.
+4.  **`HOST` Header Port Mismatch**: The P1S sends NOTIFY packets to UDP ports `2021` and `1990` (see NOTIFY Advertisement Interval), but the `HOST` header in the captured packet above contains `239.255.255.250:1900` (referencing the standard UPnP port). Discovery engines should rely on the socket's bound port for reception, not the `HOST` header value.
 5.  **Header Casing Inconsistency**: Header names may appear with varying capitalization across firmware tracks (e.g., `DevSeclink.bambu.com` vs `Devseclink.bambu.com`, `LOCATION` vs `Location`, `CACHE-CONTROL` vs `Cache-Control`). Discovery parsers must perform case-insensitive header matching.
 6.  **Optional Headers**: The `NTS`, `DevInf.bambu.com`, and `Server` headers are not present on all firmware tracks. The `DevSignal.bambu.com` header (WiFi RSSI in dBm) is present on some models but undocumented in older references. Parsers must treat all headers except `USN` and `LOCATION` as optional.
 7.  **Dynamic Notification Target (`NT` / `ST`)**: Depending on the active firmware track, the notification target (`NT`) and search target (`ST`) headers may dynamically include the actual printer model (e.g., `urn:bambulab-com:device:P1S:1`) instead of the generic `3dprinter:1`. Discovery engines must fall back to searching the target string for direct model extraction if `DevModel.bambu.com` is missing or malformed.
@@ -115,7 +126,7 @@ The physical printer exposes a dedicated set of network interfaces on the local 
 
 | Physical Port | Protocol | Layer Type | Functional Purpose | Model Availability |
 | :--- | :--- | :--- | :--- | :--- |
-| **2021 / 1990** | UDP | Multicast/Unicast | SSDP Discovery Broadcaster and Query Responder | All Models |
+| **2021 / 1990** | UDP | Broadcast/Multicast/Unicast | SSDP discovery: NOTIFY advertisements on all models; M-SEARCH replies on some (not the P1S) | All Models |
 | **8883** | TCP | TLS (MQTTS) | Local Broker Control & State Telemetry Stream | All Models |
 | **990** | TCP | Implicit TLS (FTPS) Only | MicroSD Storage Traversal, 3MF Print Transfer, Logs | All Models |
 | **322** | TCP | TLS (RTSPS) | H.264 video stream extraction via RTSPS over TLS (disabled by default on H2 series*) | X1, X1C, X1E, X2D, P2S, H2C, H2D, H2D Pro, H2S |

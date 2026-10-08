@@ -385,9 +385,9 @@ where
 /// # Example
 ///
 /// ```rust,ignore
-/// // Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
-/// // are found only through their ~10.1s NOTIFY advertisements, so a shorter window
-/// // intermittently returns nothing at all — see `reference/01_network_discovery.md`.
+/// // Allow at least 20s. Models that never answer M-SEARCH (notably the P1S) are found
+/// // only through their NOTIFY advertisements, ~10.1s apart on port 2021, so a shorter
+/// // window intermittently returns nothing at all — see `reference/01_network_discovery.md`.
 /// let printers = bambino::discovery::discover(std::time::Duration::from_secs(20)).await?;
 ///
 /// for printer in &printers {

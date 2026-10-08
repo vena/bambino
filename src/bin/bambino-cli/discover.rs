@@ -12,9 +12,9 @@ use bambino::discovery::discover;
 
 use crate::error::CliError;
 
-/// Discovery sweep length. Port behavior varies by model: the P1S (firmware 01.10.00.00)
-/// responds to M-SEARCH on port 1990 within ~5s but only sends passive NOTIFY on port 2021 at
-/// ~10.1s intervals. 20 seconds covers both discovery paths across model generations.
+/// Discovery sweep length. The P1S (firmware 01.10.00.00) answers M-SEARCH on neither port and
+/// is found only through NOTIFY advertisements, ~10.1s apart on port 2021 with some in between
+/// on 1990. 20 seconds covers a full 2021 cycle with margin.
 const DISCOVERY_WINDOW_SECS: u64 = 20;
 
 /// Initiates an active multicast SSDP search sweep and displays nearby printers.

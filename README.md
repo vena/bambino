@@ -41,8 +41,9 @@ bambino = { git = "https://github.com/vena/bambino" }
 use bambino::discovery::discover;
 use std::time::Duration;
 
-// Allow at least 20s: the P1S ignores M-SEARCH on port 2021 and is found only via its
-// ~10.1s NOTIFY advertisements, so a shorter window returns empty results intermittently.
+// Allow at least 20s. The P1S answers no M-SEARCH and is found only through its NOTIFY
+// advertisements (~10.1s apart on port 2021, with some in between on 1990), so a shorter
+// window can come back empty.
 let printers = discover(Duration::from_secs(20)).await?;
 
 for p in &printers {
@@ -77,8 +78,8 @@ use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, TokioTimer};
 // skip verification unless you can supply that CA (see "TLS configuration")
 let tls = TokioTlsConnector::unverified(TlsVersions::Default);
 
-// `new` derives the model from the serial prefix; construct the struct literal
-// directly if you need to override that.
+// `new` derives the model from the serial prefix; chain `.with_model(model)` to
+// override that.
 let identity = PrinterIdentity::new(ip, serial, access_code);
 let model = identity.model;
 let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity)
@@ -437,9 +438,11 @@ loop {
 
 `authenticate()` returning `Ok(())` only means the 80-byte handshake packet was written and
 flushed. The protocol has no ack byte, so it does not mean the printer accepted the access
-code. A bad code surfaces later, on the *next* `read_next_frame()` call, as the same
-`ConnectionReset` error a plain network blip would produce; there's no way to distinguish the
-two from this API alone.
+code. A bad code surfaces only on the *next* frame read, in one of three ways: a
+`ConnectionReset` if the printer closes the socket; a `TimedOut` after 30 s from
+`PrinterClient::read_camera_frame()` if it stays silent; or, from `read_next_frame()`, which
+has no timer, a read that blocks indefinitely. Each is also what a network fault produces, so
+this API alone can't tell a wrong code from a network problem.
 
 `read_next_frame` rejects frames above a configurable cap (default 10MB) to guard against
 unbounded allocation. Constrained (`no_std`/Embassy) targets should lower it with
@@ -455,8 +458,8 @@ let url = build_rtsps_url(printer_ip, access_code)?; // printer_ip: IpAddr
 // → rtsps://bblp:<code>@<ip>:322/streaming/live/1
 ```
 
-`build_rtsps_url` validates that `access_code` is a non-empty ASCII alphanumeric string
-(matching the documented 8-character LAN access code format) and returns
+`build_rtsps_url` validates that `access_code` is 1 to 32 ASCII letters or digits
+(printer-issued LAN access codes are 8) and returns
 `Result<String, Error>`. It takes the IP as an `IpAddr`, so a spoofed host string can't
 inject URL userinfo; parse a configured `&str` with `.parse()?` first.
 
@@ -509,7 +512,7 @@ To build a `ClientConfig` yourself, use `build_unsafe_client_config` / `build_ve
 
 `TokioTlsConnector::verified()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `TokioTlsConnector::unverified()` is unaffected, it never checks certificate identity.
 
-Both take a `TlsVersions`. Two models (P2S and X2D) need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). `model.quirks().ftps_tls_versions()` returns `TlsVersions::Tls12Only` for them. `FtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects; never a silent pass-through).
+Both take a `TlsVersions`. Two models (P2S and X2D) get FTPS capped to TLS 1.2, but not because the protocol demands it. Both caps are confirmed by symptom only: a reporter's FTPS failure cleared once the cap was applied, but neither root cause has been traced, and for the X2D a TLS version mismatch has been ruled out. A cap costs nothing on a printer that never offers TLS 1.3, so both are kept; see [REF-FTPS-CONN] in `reference/02_ftps.md`. `model.quirks().ftps_tls_versions()` returns `TlsVersions::Tls12Only` for them. `FtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects; never a silent pass-through).
 
 This is platform-general: all three connectors implement `negotiated_version` for real, so the check passes on any platform where the printer negotiates TLS 1.2 of its own accord. What differs is the ability to *cap* the peer at 1.2: only `tokio` has that knob. `esp-idf` exposes no min/max version field upstream, and `EmbassyTlsConnector` sets only a minimum, so against a peer that insisted on TLS 1.3 both fail closed rather than downgrade; see the Embassy TLS section below for the opt-out.
 
@@ -531,7 +534,7 @@ Note the `default-features = false`. The platform features are additive rather t
 
 All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerProvider`, etc.) so library code is platform-agnostic. Platform-specific implementations live in `io::tokio`, `io::esp_idf`, and `io::embassy`.
 
-Every teardown path (`disconnect_mqtt`, `disconnect_ftps`, `disconnect_camera`, `FtpsClient::disconnect`, and the end of each FTPS transfer) calls `TlsConnector::close`, which sends `close_notify` so the printer sees an orderly shutdown instead of a truncated connection. It defaults to a no-op, so a custom connector need not implement it; the tokio and Embassy backends do, and ESP-IDF keeps the default because `esp_idf_svc`'s `EspTls` exposes no shutdown seam. Closing is not the same as freeing: on Embassy, MbedTLS releases a session's memory when the stream is *dropped*, not when it is closed — ~48 KB per session on an ESP32-C6. Each of those teardown paths therefore drops the stream as well, so a disconnected client no longer holds a session's worth of heap.
+Every teardown path (`disconnect_mqtt`, `disconnect_ftps`, `disconnect_camera`, `FtpsClient::disconnect`, and the end of each FTPS transfer) calls `TlsConnector::close`, which sends `close_notify` so the printer sees an orderly shutdown instead of a truncated connection. It defaults to a no-op, so a custom connector need not implement it; the tokio and Embassy backends do, and ESP-IDF keeps the default because `esp_idf_svc`'s `EspTls` exposes no shutdown seam. Closing is not the same as freeing: on Embassy, MbedTLS releases a session's memory when the stream is *dropped*, not when it is closed — ~48 KB per session on an ESP32-C6. Each of those teardown paths therefore drops the stream as well, so a disconnected client doesn't keep a session's worth of heap.
 
 **Embassy note:** `discover_devices()` is not available on Embassy. The convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
