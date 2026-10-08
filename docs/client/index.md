@@ -315,6 +315,50 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   The same answer as
   [`supports_ams_drying_while_printing`](capabilities/index.md#capabilities).
 
+- <span id="capabilities-prompt-sound-support"></span>`fn prompt_sound_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Prompt sound support — see [`ModelQuirks::prompt_sound_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-auto-recovery-support"></span>`fn auto_recovery_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Step-loss auto-recovery support — see [`ModelQuirks::auto_recovery_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-filament-backup-support"></span>`fn filament_backup_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  AMS Filament Backup support — see [`ModelQuirks::filament_backup_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-filament-tangle-detect-support"></span>`fn filament_tangle_detect_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Filament tangle detection support — see [`ModelQuirks::filament_tangle_detect_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-nozzle-blob-detect-support"></span>`fn nozzle_blob_detect_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  On/off nozzle blob detection support — see [`ModelQuirks::nozzle_blob_detect_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-smart-nozzle-blob-detect-support"></span>`fn smart_nozzle_blob_detect_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Smart nozzle blob detection support — see [`ModelQuirks::smart_nozzle_blob_detect_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-air-print-detect-support"></span>`fn air_print_detect_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Non-visual air-printing detection support — see [`ModelQuirks::air_print_detect_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-air-purification-support"></span>`fn air_purification_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  End-of-print air purification support — see [`ModelQuirks::air_purification_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-door-open-check-support"></span>`fn door_open_check_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Door-open check support — see [`ModelQuirks::door_open_check_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-idle-heating-protection-support"></span>`fn idle_heating_protection_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-xcam-module-support"></span>`fn xcam_module_support(&self, module: XcamModule) -> Support` — [`XcamModule`](../types/control/index.md#xcammodule), [`Support`](../quirks/index.md#support)
+
+  Camera detector support — see [`ModelQuirks::xcam_module_support`](../quirks/index.md#modelquirks).
+
 #### Trait Implementations
 
 ##### `impl Clone for Capabilities<'a>`
@@ -1313,12 +1357,6 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
 
-- <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
-
-  Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
-
-  Supported on models with onboard speakers (A1, A1 Mini, A2L).
-
 - <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error>` — [`BuzzerMode`](../types/control/index.md#buzzermode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
@@ -1620,6 +1658,244 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The model's quirks engine gates `nozzle_offset_cali`: it resolves the default when the
   config left it `None`, and forces it off on a single-nozzle model even if the caller set
   it explicitly.
+
+- <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns prompt notification sounds on or off.
+
+  Confirm with [`prompt_sound_enabled()`](#printerclient) after the settle
+  window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::prompt_sound_support`](capabilities/index.md#capabilities) is
+  `false`.
+
+- <span id="superprinterclient-set-auto-recovery"></span>`async fn set_auto_recovery(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns step-loss auto-recovery on or off.
+
+  Confirm with [`auto_recovery_enabled()`](#printerclient) after the settle
+  window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::auto_recovery_support`](capabilities/index.md#capabilities) is
+  `false`.
+
+- <span id="superprinterclient-set-filament-backup"></span>`async fn set_filament_backup(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns AMS Filament Backup (auto-refill from a matching spool) on or off.
+
+  Confirm with [`filament_backup_enabled()`](#printerclient) after the
+  settle window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::filament_backup_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-filament-tangle-detect"></span>`async fn set_filament_tangle_detect(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns filament tangle detection on or off.
+
+  Refused until the printer has reported support, so poll telemetry after connecting
+  first. Confirm with
+  [`filament_tangle_detect_enabled()`](#printerclient) after the
+  settle window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::filament_tangle_detect_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-nozzle-blob-detect"></span>`async fn set_nozzle_blob_detect(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns nozzle blob detection (the original, on/off form) on or off.
+
+  Refused until the printer has reported support, so poll telemetry after connecting
+  first. Confirm with [`nozzle_blob_detect_enabled()`](#printerclient)
+  after the settle window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::nozzle_blob_detect_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-smart-nozzle-blob-detect"></span>`async fn set_smart_nozzle_blob_detect(&mut self, mode: NozzleBlobDetectMode) -> Result<CommandHandle, Error>` — [`NozzleBlobDetectMode`](../types/control/index.md#nozzleblobdetectmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets the smart nozzle blob detection mode (off, on, or auto).
+
+  Refused until the printer has reported support, so poll telemetry after connecting
+  first. Confirm with
+  [`smart_nozzle_blob_detect_mode()`](#printerclient) after the
+  settle window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::smart_nozzle_blob_detect_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-air-print-detect"></span>`async fn set_air_print_detect(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns non-visual air-printing detection on or off.
+
+  The detector BambuStudio shows in AMS settings on A1/A1 Mini and in print options
+  elsewhere; not the camera's AI air-printing detector. Refused until the printer has
+  reported support, so poll telemetry after connecting first. Confirm with
+  [`air_print_detect_enabled()`](#printerclient) after the settle window
+  described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::air_print_detect_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-air-purification"></span>`async fn set_air_purification(&mut self, mode: AirPurificationMode) -> Result<CommandHandle, Error>` — [`AirPurificationMode`](../types/control/index.md#airpurificationmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets where chamber air is purified at the end of every print.
+
+  A persistent setting, unrelated to
+  [`disable_air_purification()`](#printerclient), which answers an error
+  dialog by stopping purification once, now. Refused until the printer has reported
+  support, so poll telemetry after connecting first. Confirm with
+  [`air_purification_mode()`](#printerclient) after the settle window
+  described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::air_purification_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-door-open-check"></span>`async fn set_door_open_check(&mut self, mode: DoorOpenCheck) -> Result<CommandHandle, Error>` — [`DoorOpenCheck`](../types/control/index.md#dooropencheck), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets what the printer does when its door opens mid-print.
+
+  Confirm with [`door_open_check()`](#printerclient) after the settle window
+  described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::door_open_check_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-idle-heating-protection"></span>`async fn set_idle_heating_protection(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns idle heating protection on or off.
+
+  Probably has no effect while [`idle_heating_protection()`](#printerclient)
+  reads [`IdleHeatingProtection::Unavailable`](../types/control/index.md#idleheatingprotection). Refused until the printer has reported
+  support, so poll telemetry after connecting first.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::idle_heating_protection_support`](capabilities/index.md#capabilities)
+  is `false`.
+
+- <span id="superprinterclient-set-store-sent-files"></span>`async fn set_store_sent_files(&mut self, store: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets whether files sent from Bambu Studio, Bambu Handy and MakerWorld are kept on external storage.
+
+  Confirm with [`store_sent_files_enabled()`](#printerclient) after the
+  settle window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`ModelQuirks::supports_store_sent_files`](../quirks/index.md#modelquirks)
+  is `false`.
+
+- <span id="superprinterclient-set-xcam-detector"></span>`async fn set_xcam_detector(&mut self, module: XcamModule, enable: bool, sensitivity: Option<XcamHaltSensitivity>) -> Result<CommandHandle, Error>` — [`XcamModule`](../types/control/index.md#xcammodule), [`XcamHaltSensitivity`](../types/control/index.md#xcamhaltsensitivity), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns one camera detector on or off, optionally setting how eagerly it halts the print.
+
+  Read the result back through [`xcam()`](#printerclient) (the detector accessors on
+  `XcamTelemetry`) or, for first-layer inspection,
+  [`first_layer_inspection_enabled()`](#printerclient), after the
+  settle window described in the module docs. `xcam` arrives only in full status reports.
+  bambuddy notes the firmware links spaghetti and pile-up sensitivity, so setting one may
+  change both; that is unconfirmed.
+
+  # Errors
+
+  - [`Error::InvalidArgument`](../error/index.md#error) for a `sensitivity` on a module that takes none
+    ([`XcamModule::takes_sensitivity`](../types/control/index.md#xcammodule)).
+  - [`Error::ModelMismatch`](../error/index.md#error) when
+    [`Capabilities::xcam_module_support`](capabilities/index.md#capabilities) is
+    `false`.
+
+- <span id="superprinterclient-prompt-sound-enabled"></span>`fn prompt_sound_enabled(&self) -> Option<bool>`
+
+  Whether prompt sounds are on, as last reported (`print.cfg` bit 22, else `home_flag` bit 17).
+
+  `None` before any telemetry carrying the setting. See the module docs for the settle
+  window after a change.
+
+- <span id="superprinterclient-auto-recovery-enabled"></span>`fn auto_recovery_enabled(&self) -> Option<bool>`
+
+  Whether step-loss auto-recovery is on, as last reported (`print.cfg` bit 16, else `home_flag` bit 4).
+
+- <span id="superprinterclient-filament-backup-enabled"></span>`fn filament_backup_enabled(&self) -> Option<bool>`
+
+  Whether AMS Filament Backup is on, as last reported (`print.cfg` bit 18, else `home_flag` bit 10).
+
+- <span id="superprinterclient-filament-tangle-detect-enabled"></span>`fn filament_tangle_detect_enabled(&self) -> Option<bool>`
+
+  Whether filament tangle detection is on, as last reported (`print.cfg` bit 23, else `home_flag` bit 20).
+
+- <span id="superprinterclient-nozzle-blob-detect-enabled"></span>`fn nozzle_blob_detect_enabled(&self) -> Option<bool>`
+
+  Whether on/off nozzle blob detection is on, as last reported (`print.cfg` bit 24, else `home_flag` bit 24).
+
+- <span id="superprinterclient-air-print-detect-enabled"></span>`fn air_print_detect_enabled(&self) -> Option<bool>`
+
+  Whether non-visual air-printing detection is on, as last reported (`home_flag` bit 28).
+
+- <span id="superprinterclient-smart-nozzle-blob-detect-mode"></span>`fn smart_nozzle_blob_detect_mode(&self) -> Option<NozzleBlobDetectMode>` — [`NozzleBlobDetectMode`](../types/control/index.md#nozzleblobdetectmode)
+
+  The smart nozzle blob detection mode, as last reported (`print.cfg` bits 43-44).
+
+  `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+  code `3`.
+
+- <span id="superprinterclient-air-purification-mode"></span>`fn air_purification_mode(&self) -> Option<AirPurificationMode>` — [`AirPurificationMode`](../types/control/index.md#airpurificationmode)
+
+  The end-of-print air purification mode, as last reported (`print.cfg` bits 36-37).
+
+  `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+  code `3`.
+
+- <span id="superprinterclient-door-open-check"></span>`fn door_open_check(&self) -> Option<DoorOpenCheck>` — [`DoorOpenCheck`](../types/control/index.md#dooropencheck)
+
+  The door-open check mode, as last reported (`print.cfg` bits 20-21).
+
+  `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+  code `3`.
+
+- <span id="superprinterclient-idle-heating-protection"></span>`fn idle_heating_protection(&self) -> Option<IdleHeatingProtection>` — [`IdleHeatingProtection`](../types/control/index.md#idleheatingprotection)
+
+  Idle heating protection, as last reported (`print.cfg` bits 32-33).
+
+  `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+  code `3`.
+
+- <span id="superprinterclient-first-layer-inspection-enabled"></span>`fn first_layer_inspection_enabled(&self) -> Option<bool>`
+
+  Whether first-layer inspection is on, as last reported (`print.cfg` bit 12, else `xcam.first_layer_inspector`).
+
+- <span id="superprinterclient-store-sent-files-enabled"></span>`fn store_sent_files_enabled(&self) -> Option<bool>`
+
+  Whether sent files are kept on external storage, as last reported (`print.cfg` bit 19).
 
 - <span id="superprinterclient-attach-ftps"></span>`async fn attach_ftps(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
 
@@ -2145,10 +2421,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Builds a [`QuirkContext`](../quirks/index.md) from this client's cached state.
 
-  A snapshot of whatever has been observed so far: `fun2` from the last telemetry carrying
-  it, and firmware from the last [`get_version()`](#printerclient). Fields never
-  observed stay `None`, which quirks read as "the printer didn't say" rather than as a
-  denial.
+  A snapshot of whatever has been observed so far: `fun` and `fun2` from the last telemetry
+  carrying them, `home_flag` (from full status reports) and firmware (from
+  [`get_version()`](#printerclient)) only as observed on the current connection. Fields
+  never observed stay `None`, which quirks read as "the printer didn't say" rather than as
+  a denial.
 
   Prefer [`capabilities()`](#printerclient) unless you need to hand the context to a
   quirk directly — for instance to ask what a *different* model would answer given this
@@ -2347,6 +2624,64 @@ A motion axis.
 
 - <span id="axis-tostring-to-string"></span>`fn to_string(&self) -> String`
 
+### `AirPurificationMode`
+
+```rust
+enum AirPurificationMode {
+    Disabled,
+    Inside,
+    Outside,
+}
+```
+
+Where the chamber air is purified at the end of a print, `print_option`'s `air_purification` and `print.cfg` bits 36-37 [REF-MQTT-TELEMETRY].
+
+#### Variants
+
+- **`Disabled`**
+
+  No purification at print end.
+
+- **`Inside`**
+
+  Recirculate through the internal filter.
+
+- **`Outside`**
+
+  Exhaust to the outside.
+
+#### Implementations
+
+- <span id="airpurificationmode-code"></span>`const fn code(self) -> u8`
+
+  The wire code: `0` disabled, `1` inside, `2` outside.
+
+- <span id="airpurificationmode-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes a wire code; `None` for any value outside `0..=2`.
+
+#### Trait Implementations
+
+##### `impl Clone for AirPurificationMode`
+
+- <span id="airpurificationmode-clone"></span>`fn clone(&self) -> AirPurificationMode` — [`AirPurificationMode`](../types/control/index.md#airpurificationmode)
+
+##### `impl Copy for AirPurificationMode`
+
+##### `impl Debug for AirPurificationMode`
+
+- <span id="airpurificationmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AirPurificationMode`
+
+##### `impl Hash for AirPurificationMode`
+
+- <span id="airpurificationmode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for AirPurificationMode`
+
+- <span id="airpurificationmode-partialeq-eq"></span>`fn eq(&self, other: &AirPurificationMode) -> bool` — [`AirPurificationMode`](../types/control/index.md#airpurificationmode)
+
 ### `BuzzerMode`
 
 ```rust
@@ -2400,6 +2735,64 @@ Buzzer alarm/attention chime mode [REF-MQTT-LIFECYCLE]; supported on models with
 ##### `impl PartialEq for BuzzerMode`
 
 - <span id="buzzermode-partialeq-eq"></span>`fn eq(&self, other: &BuzzerMode) -> bool` — [`BuzzerMode`](../types/control/index.md#buzzermode)
+
+### `DoorOpenCheck`
+
+```rust
+enum DoorOpenCheck {
+    Disabled,
+    Warn,
+    PausePrint,
+}
+```
+
+What the printer does when its door opens mid-print, `set_door_stat`'s `config` and `print.cfg` bits 20-21 [REF-MQTT-TELEMETRY].
+
+#### Variants
+
+- **`Disabled`**
+
+  Nothing.
+
+- **`Warn`**
+
+  Show a notification.
+
+- **`PausePrint`**
+
+  Pause the print.
+
+#### Implementations
+
+- <span id="dooropencheck-code"></span>`const fn code(self) -> u8`
+
+  The wire code: `0` disabled, `1` warn, `2` pause print.
+
+- <span id="dooropencheck-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes a wire code; `None` for any value outside `0..=2`.
+
+#### Trait Implementations
+
+##### `impl Clone for DoorOpenCheck`
+
+- <span id="dooropencheck-clone"></span>`fn clone(&self) -> DoorOpenCheck` — [`DoorOpenCheck`](../types/control/index.md#dooropencheck)
+
+##### `impl Copy for DoorOpenCheck`
+
+##### `impl Debug for DoorOpenCheck`
+
+- <span id="dooropencheck-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for DoorOpenCheck`
+
+##### `impl Hash for DoorOpenCheck`
+
+- <span id="dooropencheck-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for DoorOpenCheck`
+
+- <span id="dooropencheck-partialeq-eq"></span>`fn eq(&self, other: &DoorOpenCheck) -> bool` — [`DoorOpenCheck`](../types/control/index.md#dooropencheck)
 
 ### `FanTarget`
 
@@ -2479,6 +2872,64 @@ Target onboard cooling fans [REF-CLIM-FANS].
 ##### `impl PartialEq for FanTarget`
 
 - <span id="fantarget-partialeq-eq"></span>`fn eq(&self, other: &FanTarget) -> bool` — [`FanTarget`](../types/control/index.md#fantarget)
+
+### `IdleHeatingProtection`
+
+```rust
+enum IdleHeatingProtection {
+    Off,
+    On,
+    Unavailable,
+}
+```
+
+Idle heating protection as reported in `print.cfg` bits 32-33 [REF-MQTT-TELEMETRY].
+
+Three states, though the setter takes a bool. BambuStudio's Safety Options dialog greys the
+toggle out on `2` with "Unavailable while heating maintenance function is on."
+(`SafetyOptionsDialog.cpp`, `updateIdelHeatingProtect`); that meaning comes from UI text only.
+
+#### Variants
+
+- **`Off`**
+
+  Off.
+
+- **`On`**
+
+  On.
+
+- **`Unavailable`**
+
+  Can't be changed while the heating maintenance function runs.
+
+#### Implementations
+
+- <span id="idleheatingprotection-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes the two-bit field; `None` for the unassigned code `3`.
+
+#### Trait Implementations
+
+##### `impl Clone for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-clone"></span>`fn clone(&self) -> IdleHeatingProtection` — [`IdleHeatingProtection`](../types/control/index.md#idleheatingprotection)
+
+##### `impl Copy for IdleHeatingProtection`
+
+##### `impl Debug for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for IdleHeatingProtection`
+
+##### `impl Hash for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-partialeq-eq"></span>`fn eq(&self, other: &IdleHeatingProtection) -> bool` — [`IdleHeatingProtection`](../types/control/index.md#idleheatingprotection)
 
 ### `LedNode`
 
@@ -2619,6 +3070,64 @@ An LED fixture's mode, as sent in `ledctrl` and reported in `lights_report`.
 ##### `impl ToString for LightMode`
 
 - <span id="lightmode-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `NozzleBlobDetectMode`
+
+```rust
+enum NozzleBlobDetectMode {
+    Off,
+    On,
+    Auto,
+}
+```
+
+Smart nozzle blob detection mode, `print_option`'s `nozzle_blob_detect_v2` and `print.cfg` bits 43-44 [REF-MQTT-TELEMETRY].
+
+#### Variants
+
+- **`Off`**
+
+  Detection off.
+
+- **`On`**
+
+  Detection on.
+
+- **`Auto`**
+
+  The printer decides per print.
+
+#### Implementations
+
+- <span id="nozzleblobdetectmode-code"></span>`const fn code(self) -> u8`
+
+  The wire code: `0` off, `1` on, `2` auto.
+
+- <span id="nozzleblobdetectmode-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes a wire code; `None` for any value outside `0..=2`.
+
+#### Trait Implementations
+
+##### `impl Clone for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-clone"></span>`fn clone(&self) -> NozzleBlobDetectMode` — [`NozzleBlobDetectMode`](../types/control/index.md#nozzleblobdetectmode)
+
+##### `impl Copy for NozzleBlobDetectMode`
+
+##### `impl Debug for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for NozzleBlobDetectMode`
+
+##### `impl Hash for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-partialeq-eq"></span>`fn eq(&self, other: &NozzleBlobDetectMode) -> bool` — [`NozzleBlobDetectMode`](../types/control/index.md#nozzleblobdetectmode)
 
 ### `PrintSpeed`
 
@@ -2783,6 +3292,193 @@ state should inspect the raw `gcode_state` string directly.
 ##### `impl PartialEq for PrintStatus`
 
 - <span id="printstatus-partialeq-eq"></span>`fn eq(&self, other: &PrintStatus) -> bool` — [`PrintStatus`](../types/control/index.md#printstatus)
+
+### `XcamHaltSensitivity`
+
+```rust
+enum XcamHaltSensitivity {
+    NeverHalt,
+    Low,
+    Medium,
+    High,
+}
+```
+
+How eagerly a camera detector halts the print, as `xcam_control_set`'s `halt_print_sensitivity`.
+
+`NeverHalt` only notifies. It is the AI-monitoring level BambuStudio offers alongside the three
+`XcamSensitivity` levels the per-detector telemetry reports.
+
+#### Variants
+
+- **`NeverHalt`**
+
+  Notify only.
+
+- **`Low`**
+
+  Least eager to halt.
+
+- **`Medium`**
+
+  Medium.
+
+- **`High`**
+
+  Most eager to halt.
+
+#### Implementations
+
+- <span id="xcamhaltsensitivity-const-all"></span>`const ALL: &'static [XcamHaltSensitivity]`
+
+- <span id="xcamhaltsensitivity-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The value's wire spelling.
+
+#### Trait Implementations
+
+##### `impl Clone for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-clone"></span>`fn clone(&self) -> XcamHaltSensitivity` — [`XcamHaltSensitivity`](../types/control/index.md#xcamhaltsensitivity)
+
+##### `impl Copy for XcamHaltSensitivity`
+
+##### `impl Debug for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for XcamHaltSensitivity`
+
+##### `impl FromStr for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="xcamhaltsensitivity-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+##### `impl Hash for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-partialeq-eq"></span>`fn eq(&self, other: &XcamHaltSensitivity) -> bool` — [`XcamHaltSensitivity`](../types/control/index.md#xcamhaltsensitivity)
+
+##### `impl ToString for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `XcamModule`
+
+```rust
+enum XcamModule {
+    PrintingMonitor,
+    SpaghettiDetector,
+    PileupDetector,
+    ClumpDetector,
+    AirprintDetector,
+    FirstLayerInspector,
+    BuildplateMarkerDetector,
+    PlateOffsetSwitch,
+    FodCheck,
+    ModelMovementCheck,
+}
+```
+
+A camera detector `xcam_control_set` addresses by `module_name` (BambuStudio `DevPrintOptions.cpp`).
+
+#### Variants
+
+- **`PrintingMonitor`**
+
+  AI monitoring, the older global switch.
+
+- **`SpaghettiDetector`**
+
+  Spaghetti detection.
+
+- **`PileupDetector`**
+
+  Purge chute pile-up detection.
+
+- **`ClumpDetector`**
+
+  Nozzle clumping detection.
+
+- **`AirprintDetector`**
+
+  Camera air-printing detection (not `print_option`'s non-visual one).
+
+- **`FirstLayerInspector`**
+
+  First-layer inspection.
+
+- **`BuildplateMarkerDetector`**
+
+  Build plate marker (plate type) detection.
+
+- **`PlateOffsetSwitch`**
+
+  Build plate alignment detection.
+
+- **`FodCheck`**
+
+  Foreign object detection.
+
+- **`ModelMovementCheck`**
+
+  Displacement detection.
+
+#### Implementations
+
+- <span id="xcammodule-const-all"></span>`const ALL: &'static [XcamModule]`
+
+- <span id="xcammodule-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The value's wire spelling.
+
+- <span id="xcammodule-takes-sensitivity"></span>`const fn takes_sensitivity(self) -> bool`
+
+  Whether BambuStudio sends a `halt_print_sensitivity` with this module.
+
+#### Trait Implementations
+
+##### `impl Clone for XcamModule`
+
+- <span id="xcammodule-clone"></span>`fn clone(&self) -> XcamModule` — [`XcamModule`](../types/control/index.md#xcammodule)
+
+##### `impl Copy for XcamModule`
+
+##### `impl Debug for XcamModule`
+
+- <span id="xcammodule-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for XcamModule`
+
+- <span id="xcammodule-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for XcamModule`
+
+##### `impl FromStr for XcamModule`
+
+- <span id="xcammodule-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="xcammodule-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+##### `impl Hash for XcamModule`
+
+- <span id="xcammodule-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for XcamModule`
+
+- <span id="xcammodule-partialeq-eq"></span>`fn eq(&self, other: &XcamModule) -> bool` — [`XcamModule`](../types/control/index.md#xcammodule)
+
+##### `impl ToString for XcamModule`
+
+- <span id="xcammodule-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `AckExpectation`
 

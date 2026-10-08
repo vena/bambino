@@ -68,6 +68,9 @@ models.
 struct QuirkContext<'a> {
     pub fun2: Option<&'a str>,
     pub firmware: Option<&'a str>,
+    pub fun: Option<&'a str>,
+    pub home_flag: Option<u32>,
+    pub xcam_cfg: Option<u32>,
 }
 ```
 
@@ -95,6 +98,30 @@ site.
   the model — remote AMS drying is version-gated on H2D, H2D Pro, H2S, H2C, P2S and X2D for
   exactly this reason.
 
+- **`fun`**: `Option<&'a str>`
+
+  The `fun` capability bitfield, if the printer reported one.
+  
+  Absent on the P1 and A1 families, like `fun2`. Where present it carries per-setting
+  support bits for several `print_option` settings, and BambuStudio lets it override the
+  matching `home_flag` bit.
+
+- **`home_flag`**: `Option<u32>`
+
+  The `home_flag` bitfield of a full status report, if one was observed on the current connection.
+  
+  The capability field every family sends, so it is the only reported support signal on P1
+  and A1. Taken from a full report only, since H2D heartbeat frames carry a partial
+  `home_flag`, and from the current connection only, since what the printer supports can
+  change across a reboot.
+
+- **`xcam_cfg`**: `Option<u32>`
+
+  The `print.xcam.cfg` detector bitmask, if one has been seen.
+  
+  Its presence is BambuStudio's AI-monitoring support signal (`ParseDetectionV1_0`). Absence
+  means "not seen yet" as often as "unsupported", since `xcam` arrives only in full reports.
+
 #### Implementations
 
 - <span id="quirkcontext-empty"></span>`fn empty() -> Self`
@@ -111,6 +138,18 @@ site.
 - <span id="quirkcontext-with-firmware"></span>`fn with_firmware(self, firmware: Option<&'a str>) -> Self`
 
   Sets the OTA firmware version.
+
+- <span id="quirkcontext-with-fun"></span>`fn with_fun(self, fun: Option<&'a str>) -> Self`
+
+  Sets the `fun` capability bitfield.
+
+- <span id="quirkcontext-with-home-flag"></span>`fn with_home_flag(self, home_flag: Option<u32>) -> Self`
+
+  Sets the `home_flag` bitfield.
+
+- <span id="quirkcontext-with-xcam-cfg"></span>`fn with_xcam_cfg(self, xcam_cfg: Option<u32>) -> Self`
+
+  Sets the `print.xcam.cfg` bitmask.
 
 #### Trait Implementations
 
@@ -398,9 +437,109 @@ must adapt to.
 
   Returns true if the model switches climate modes with airduct dampers: H2S, H2D, H2D Pro, H2C, P2S, X2D [REF-CLIM-FANS].
 
-- <span id="modelquirks-supports-prompt-sound"></span>`fn supports_prompt_sound(&self) -> bool`
+- <span id="modelquirks-prompt-sound-support"></span>`fn prompt_sound_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
 
-  Returns true if the model plays prompt sound notifications: A1, A1 Mini, A2L (per Bambu Studio profiles).
+  Returns whether the printer can play prompt sound notifications, with its provenance.
+
+  Reported by `fun` bit 8, else `home_flag` bit 18 (BambuStudio `ParseDetectionV1_0`).
+  Otherwise the model rule: A1, A1 Mini and A2L only, BambuStudio's per-model
+  `support_prompt_sound` (`N1.json`, `N2S.json`, `N9.json`).
+
+- <span id="modelquirks-auto-recovery-support"></span>`fn auto_recovery_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer can set step-loss auto-recovery, with its provenance.
+
+  No telemetry bit reports it. BambuStudio's per-model `support_auto_recovery_step_loss` is
+  true on every model, but on the X1 and X1C only from firmware `01.01.01.00`; with that
+  version unread, they are assumed supported.
+
+- <span id="modelquirks-filament-backup-support"></span>`fn filament_backup_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer can set AMS Filament Backup, with its provenance.
+
+  The same model rule as [`auto_recovery_support`](#modelquirks), from
+  BambuStudio's per-model `support_filament_backup`. BambuStudio additionally hides the
+  control without an AMS attached (`DevFilaSystem::CanShowFilamentBackup`); this does not
+  check for one.
+
+- <span id="modelquirks-filament-tangle-detect-support"></span>`fn filament_tangle_detect_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer can detect filament tangles, with its provenance.
+
+  Reported by `fun` bit 9, else `home_flag` bit 19. No model rule exists, so nothing
+  reported means `Assumed(false)`.
+
+- <span id="modelquirks-nozzle-blob-detect-support"></span>`fn nozzle_blob_detect_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has on/off nozzle blob detection, with its provenance.
+
+  Reported by `fun` bit 13, else `home_flag` bit 25. No model rule exists, so nothing
+  reported means `Assumed(false)`.
+
+- <span id="modelquirks-smart-nozzle-blob-detect-support"></span>`fn smart_nozzle_blob_detect_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has the off/on/auto smart nozzle blob detection, with its provenance.
+
+  Reported by `fun2` bit 15 only. No model rule exists, so nothing reported means
+  `Assumed(false)` — always the case on P1 and A1, which send no `fun2`.
+
+- <span id="modelquirks-air-print-detect-support"></span>`fn air_print_detect_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has non-visual air-printing detection, with its provenance.
+
+  Reported by `home_flag` bit 29 (`DeviceManager.cpp:1099`). No model rule exists, so
+  nothing reported means `Assumed(false)`. BambuStudio also forces it off while the AMS
+  runs its AMS2/AMS-HT firmware (`DeviceManager.cpp:1100-1103`); this crate doesn't decode
+  which AMS firmware runs, so that override isn't applied.
+
+- <span id="modelquirks-air-purification-support"></span>`fn air_purification_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer can purify chamber air at print end, with its provenance.
+
+  Reported by `fun2` bit 4 only. No model rule exists, so nothing reported means
+  `Assumed(false)`.
+
+- <span id="modelquirks-door-open-check-support"></span>`fn door_open_check_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer can warn or pause when its door opens mid-print, with its provenance.
+
+  Reported by `fun` bit 12 (`DeviceManager.cpp:4470`). Otherwise inferred from the model's
+  door sensor: a printer without one can't check its door.
+
+- <span id="modelquirks-idle-heating-protection-support"></span>`fn idle_heating_protection_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has idle heating protection, with its provenance.
+
+  Reported by `fun` bit 62 (`DevPrintOptions.cpp:243`). No model rule exists, so nothing
+  reported means `Assumed(false)` — always the case on P1 and A1, which send no `fun`.
+
+- <span id="modelquirks-supports-store-sent-files"></span>`fn supports_store_sent_files(&self) -> bool`
+
+  Returns true if the model can keep sent print files on external storage: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C.
+
+  No telemetry bit reports it. BambuStudio's per-model
+  `support_save_remote_print_file_to_storage` (`resources/printers/*.json`) is true from
+  each listed model's first firmware and absent elsewhere.
+
+- <span id="modelquirks-xcam-module-support"></span>`fn xcam_module_support(&self, module: XcamModule, ctx: &QuirkContext<'_>) -> Support` — [`XcamModule`](../types/control/index.md#xcammodule), [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer runs one camera detector that `xcam_control_set` can switch, with its provenance.
+
+  Per module, following BambuStudio (`DevPrintOptions.cpp` `ParseDetectionV1_0`, per-model
+  `resources/printers/*.json`):
+
+  * **AI monitoring** — reported by `xcam.cfg` being present, else the model rule below.
+  * **Build plate marker detection** — the model rule below.
+  * **Spaghetti, pile-up, nozzle clumping, air printing** — `fun` bits 42-45, else
+    `Assumed(false)`.
+  * **Build plate alignment, foreign object, displacement** — `fun2` bits 2, 13, 14, else
+    `Assumed(false)`.
+  * **First-layer inspection** — per-model `support_first_layer_inspect`: X1, X1C, X1E only.
+
+  The model rule for AI monitoring and plate markers is `support_ai_monitoring` /
+  `support_build_plate_marker_detect`, true on X1, X1C, X1E, X2D, P2S and the H2 family, and
+  on X1/X1C only from the release in [`auto_recovery_support`](#modelquirks).
+  P1 and A1 profiles mark every camera detector unsupported.
 
 - <span id="modelquirks-has-buzzer"></span>`fn has_buzzer(&self) -> bool`
 

@@ -112,6 +112,50 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   The same answer as
   [`supports_ams_drying_while_printing`](#capabilities).
 
+- <span id="capabilities-prompt-sound-support"></span>`fn prompt_sound_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Prompt sound support — see [`ModelQuirks::prompt_sound_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-auto-recovery-support"></span>`fn auto_recovery_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Step-loss auto-recovery support — see [`ModelQuirks::auto_recovery_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-filament-backup-support"></span>`fn filament_backup_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  AMS Filament Backup support — see [`ModelQuirks::filament_backup_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-filament-tangle-detect-support"></span>`fn filament_tangle_detect_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Filament tangle detection support — see [`ModelQuirks::filament_tangle_detect_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-nozzle-blob-detect-support"></span>`fn nozzle_blob_detect_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  On/off nozzle blob detection support — see [`ModelQuirks::nozzle_blob_detect_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-smart-nozzle-blob-detect-support"></span>`fn smart_nozzle_blob_detect_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Smart nozzle blob detection support — see [`ModelQuirks::smart_nozzle_blob_detect_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-air-print-detect-support"></span>`fn air_print_detect_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Non-visual air-printing detection support — see [`ModelQuirks::air_print_detect_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-air-purification-support"></span>`fn air_purification_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  End-of-print air purification support — see [`ModelQuirks::air_purification_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-door-open-check-support"></span>`fn door_open_check_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Door-open check support — see [`ModelQuirks::door_open_check_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-idle-heating-protection-support"></span>`fn idle_heating_protection_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-xcam-module-support"></span>`fn xcam_module_support(&self, module: XcamModule) -> Support` — [`XcamModule`](../../types/control/index.md#xcammodule), [`Support`](../../quirks/index.md#support)
+
+  Camera detector support — see [`ModelQuirks::xcam_module_support`](../../quirks/index.md#modelquirks).
+
 #### Trait Implementations
 
 ##### `impl Clone for Capabilities<'a>`

@@ -34,6 +34,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
   - [`Print`](#print)
   - [`Pushing`](#pushing)
   - [`System`](#system)
+  - [`Xcam`](#xcam)
 - [Functions](#functions)
 
 ## Quick Reference
@@ -43,7 +44,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 | [`ams`](ams/index.md) | mod | AMS-related MQTT command payloads (filament change, drying, RFID scan, settings). |
 | [`control`](control/index.md) | mod | Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration). |
 | [`gcode`](gcode/index.md) | mod | G-code dispatch command payload. |
-| [`hardware`](hardware/index.md) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound). |
+| [`hardware`](hardware/index.md) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` settings). |
 | [`print_job`](print_job/index.md) | mod | Print job dispatch (file selection, AMS material mapping, plate/timelapse config). |
 | [`status`](status/index.md) | mod | Status query commands (pushall, get_version, get_access_code). |
 | [`ClampedTaskId`](#clampedtaskid) | struct | A task or sequence id already reduced into the range firmware accepts (below `i32::MAX`). |
@@ -51,13 +52,14 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 | [`Print`](#print) | struct | The `print` namespace envelope a command payload is published in. |
 | [`Pushing`](#pushing) | struct | The `pushing` namespace envelope a command payload is published in. |
 | [`System`](#system) | struct | The `system` namespace envelope a command payload is published in. |
+| [`Xcam`](#xcam) | struct | The `xcam` namespace envelope a command payload is published in. |
 
 ## Modules
 
 - [`ams`](ams/index.md) — AMS-related MQTT command payloads (filament change, drying, RFID scan, settings).
 - [`control`](control/index.md) — Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration).
 - [`gcode`](gcode/index.md) — G-code dispatch command payload.
-- [`hardware`](hardware/index.md) — Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
+- [`hardware`](hardware/index.md) — Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` settings).
 - [`print_job`](print_job/index.md) — Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
 - [`status`](status/index.md) — Status query commands (pushall, get_version, get_access_code).
 
@@ -898,6 +900,54 @@ The `print` namespace envelope a command payload is published in.
 
 - <span id="print-const-command"></span>`const COMMAND: &'static str`
 
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request enabling or disabling step-loss auto-recovery.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request enabling or disabling Filament Backup.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request enabling or disabling filament tangle detection.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request enabling or disabling nozzle blob detection.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(mode: NozzleBlobDetectMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`NozzleBlobDetectMode`](../../types/control/index.md#nozzleblobdetectmode), [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request setting the smart nozzle blob detection mode.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request enabling or disabling air-printing detection.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(mode: AirPurificationMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`AirPurificationMode`](../../types/control/index.md#airpurificationmode), [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request setting the end-of-print air purification mode.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `set_against_continued_heating_mode` request.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
 - <span id="print-new"></span>`fn new(mode: BuzzerMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`BuzzerMode`](../../types/control/index.md#buzzermode), [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `buzzer_ctrl` request for the given alarm mode.
@@ -1008,6 +1058,18 @@ The `system` namespace envelope a command payload is published in.
 
 - <span id="system-const-command"></span>`const COMMAND: &'static str`
 
+- <span id="system-new"></span>`fn new(mode: DoorOpenCheck, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`DoorOpenCheck`](../../types/control/index.md#dooropencheck), [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `set_door_stat` request.
+
+- <span id="system-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="system-new"></span>`fn new(store: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_cache_set` request.
+
+- <span id="system-const-command"></span>`const COMMAND: &'static str`
+
 - <span id="system-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `get_access_code` request.
@@ -1025,6 +1087,44 @@ The `system` namespace envelope a command payload is published in.
 ##### `impl<P> Serialize for System<P>`
 
 - <span id="system-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `Xcam<P>`
+
+```rust
+struct Xcam<P> {
+    pub xcam: P,
+}
+```
+
+The `xcam` namespace envelope a command payload is published in.
+
+#### Fields
+
+- **`xcam`**: `P`
+
+  The payload, serialized under `xcam`.
+
+#### Implementations
+
+- <span id="xcam-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="xcam-new"></span>`fn new(module: XcamModule, enable: bool, sensitivity: Option<XcamHaltSensitivity>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`XcamModule`](../../types/control/index.md#xcammodule), [`XcamHaltSensitivity`](../../types/control/index.md#xcamhaltsensitivity), [`ClampedTaskId`](#clampedtaskid)
+
+  Builds an `xcam_control_set` request.
+
+#### Trait Implementations
+
+##### `impl<P: clone::Clone> Clone for Xcam<P>`
+
+- <span id="xcam-clone"></span>`fn clone(&self) -> Xcam<P>` — [`Xcam`](#xcam)
+
+##### `impl<P: fmt::Debug> Debug for Xcam<P>`
+
+- <span id="xcam-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl<P> Serialize for Xcam<P>`
+
+- <span id="xcam-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `AmsControlOp`
 
@@ -1492,6 +1592,22 @@ type GCodeRequest = super::Print<GCodePayload>;
 
 Sends a raw G-code line to the printer for immediate execution.
 
+### `AirPrintDetectRequest`
+
+```rust
+type AirPrintDetectRequest = super::Print<AirPrintDetectPayload>;
+```
+
+Enables or disables non-visual air-printing detection.
+
+### `AirPurificationRequest`
+
+```rust
+type AirPurificationRequest = super::Print<AirPurificationPayload>;
+```
+
+Sets the end-of-print air purification mode.
+
 ### `AirductRequest`
 
 ```rust
@@ -1499,6 +1615,14 @@ type AirductRequest = super::Print<AirductPayload>;
 ```
 
 Switches the enclosure airduct damper between cooling, heating, and laser modes.
+
+### `AutoRecoveryRequest`
+
+```rust
+type AutoRecoveryRequest = super::Print<AutoRecoveryPayload>;
+```
+
+Enables or disables step-loss auto-recovery.
 
 ### `BuzzerRequest`
 
@@ -1508,6 +1632,38 @@ type BuzzerRequest = super::Print<BuzzerPayload>;
 
 Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
 
+### `DoorOpenCheckRequest`
+
+```rust
+type DoorOpenCheckRequest = super::System<DoorOpenCheckPayload>;
+```
+
+Sets the door-open check mode (BambuStudio `MachineObject::command_set_door_open_check`).
+
+### `FilamentBackupRequest`
+
+```rust
+type FilamentBackupRequest = super::Print<FilamentBackupPayload>;
+```
+
+Enables or disables AMS Filament Backup.
+
+### `FilamentTangleDetectRequest`
+
+```rust
+type FilamentTangleDetectRequest = super::Print<FilamentTangleDetectPayload>;
+```
+
+Enables or disables filament tangle detection.
+
+### `IdleHeatingProtectionRequest`
+
+```rust
+type IdleHeatingProtectionRequest = super::Print<IdleHeatingProtectionPayload>;
+```
+
+Turns idle heating protection on or off (BambuStudio `DevPrintOptions::command_set_against_continued_heating_mode`).
+
 ### `LedCtrlRequest`
 
 ```rust
@@ -1516,6 +1672,14 @@ type LedCtrlRequest = super::System<LedCtrlPayload>;
 
 Turns chamber or toolhead LEDs on or off.
 
+### `NozzleBlobDetectRequest`
+
+```rust
+type NozzleBlobDetectRequest = super::Print<NozzleBlobDetectPayload>;
+```
+
+Enables or disables nozzle blob detection.
+
 ### `PromptSoundRequest`
 
 ```rust
@@ -1523,6 +1687,30 @@ type PromptSoundRequest = super::Print<PromptSoundPayload>;
 ```
 
 Enables or disables the printer's notification sounds.
+
+### `SmartNozzleBlobDetectRequest`
+
+```rust
+type SmartNozzleBlobDetectRequest = super::Print<SmartNozzleBlobDetectPayload>;
+```
+
+Sets the smart nozzle blob detection mode.
+
+### `StoreSentFilesRequest`
+
+```rust
+type StoreSentFilesRequest = super::System<StoreSentFilesPayload>;
+```
+
+Sets whether sent files are kept on external storage (BambuStudio `MachineObject::command_set_save_remote_print_file_to_storage`).
+
+### `XcamControlRequest`
+
+```rust
+type XcamControlRequest = super::Xcam<XcamControlPayload>;
+```
+
+Turns a camera detector on or off (BambuStudio `DevPrintOptions::command_xcam_control`).
 
 ### `ProjectFileRequest`
 

@@ -587,7 +587,10 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - **`cali_idx`**: `Option<i32>`
 
-  Calibration index (-1 if uncalibrated).
+  Calibration index; -1 means no K profile is selected.
+  
+  -1 is not only "never calibrated": an X1C power-cycled mid-print came back with every
+  tray at -1 while the spools were unchanged (bambuddy #3219).
 
 - **`cols`**: `Option<Vec<String>>`
 
@@ -2185,7 +2188,7 @@ raw field and re-implementing the decode:
 
 - **`bed_target_temper`**: `Option<f64>`
 
-  Explicit bed target temperature. Separate from composite-packed `bed_temper`.
+  Bed target temperature, sent alongside `bed_temper` (old-gen models; never composite-packed).
 
 - **`chamber_temper`**: `Option<f64>`
 
@@ -2330,7 +2333,9 @@ raw field and re-implementing the decode:
   flag and the feature's user-facing name are the same thing. bambuddy reads the identical
   position in `parse_ams_filament_backup_from_cfg` (`services/bambu_mqtt.py`).
   
-  A1 / A1 Mini omit `cfg` entirely, so absent is not "off" — hence `Option`.
+  P1P, P1S, A1 and A1 Mini omit `cfg` entirely, so absent is not "off" — hence `Option`.
+  Those families carry Filament Backup in [`home_flag`](telemetry/report/index.md#printertelemetry) bit 10 instead
+  (BambuStudio's `parse_home_flag`; bambuddy #3259).
 
 - **`aux`**: `Option<String>`
 
@@ -2365,7 +2370,11 @@ raw field and re-implementing the decode:
 
 - **`mapping`**: `Option<Vec<i32>>`
 
-  IDEX AMS-to-extruder mapping array.
+  Per-filament AMS tray mapping of the running print.
+  
+  Each entry is `ams_id * 256 + slot_id`, and `65535` means unmapped (BambuStudio
+  `DeviceManager.cpp:807-810`). It is task-level state: an idle H2 keeps reporting the
+  previous print's mapping, so it is meaningful only while a print runs.
 
 - **`gcode_start_time`**: `Option<String>`
 

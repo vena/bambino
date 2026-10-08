@@ -10,17 +10,40 @@ These live below both `mqtt::commands` and `client` so a request constructor can
 typed value instead of the raw wire string or integer, without the command layer depending on
 the client. `crate::client` re-exports every one of them.
 
+## Contents
+
+- [Types](#types)
+  - [`CalibrationOption`](#calibrationoption)
+  - [`AirPurificationMode`](#airpurificationmode)
+  - [`BuzzerMode`](#buzzermode)
+  - [`DoorOpenCheck`](#dooropencheck)
+  - [`FanTarget`](#fantarget)
+  - [`IdleHeatingProtection`](#idleheatingprotection)
+  - [`LedNode`](#lednode)
+  - [`LightMode`](#lightmode)
+  - [`NozzleBlobDetectMode`](#nozzleblobdetectmode)
+  - [`PrintSpeed`](#printspeed)
+  - [`PrintStatus`](#printstatus)
+  - [`XcamHaltSensitivity`](#xcamhaltsensitivity)
+  - [`XcamModule`](#xcammodule)
+
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
 | [`CalibrationOption`](#calibrationoption) | struct | Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE]. |
+| [`AirPurificationMode`](#airpurificationmode) | enum | Where the chamber air is purified at the end of a print, `print_option`'s `air_purification` and `print.cfg` bits 36-37 [REF-MQTT-TELEMETRY]. |
 | [`BuzzerMode`](#buzzermode) | enum | Buzzer alarm/attention chime mode [REF-MQTT-LIFECYCLE]; supported on models with a physical fire alarm buzzer (H2 series). |
+| [`DoorOpenCheck`](#dooropencheck) | enum | What the printer does when its door opens mid-print, `set_door_stat`'s `config` and `print.cfg` bits 20-21 [REF-MQTT-TELEMETRY]. |
 | [`FanTarget`](#fantarget) | enum | Target onboard cooling fans [REF-CLIM-FANS]. |
+| [`IdleHeatingProtection`](#idleheatingprotection) | enum | Idle heating protection as reported in `print.cfg` bits 32-33 [REF-MQTT-TELEMETRY]. |
 | [`LedNode`](#lednode) | enum | A printer LED fixture addressed by `ledctrl` and reported in `lights_report`. |
 | [`LightMode`](#lightmode) | enum | An LED fixture's mode, as sent in `ledctrl` and reported in `lights_report`. |
+| [`NozzleBlobDetectMode`](#nozzleblobdetectmode) | enum | Smart nozzle blob detection mode, `print_option`'s `nozzle_blob_detect_v2` and `print.cfg` bits 43-44 [REF-MQTT-TELEMETRY]. |
 | [`PrintSpeed`](#printspeed) | enum | Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE]. |
 | [`PrintStatus`](#printstatus) | enum | Decoded classification of the printer's high-level `gcode_state` telemetry field. |
+| [`XcamHaltSensitivity`](#xcamhaltsensitivity) | enum | How eagerly a camera detector halts the print, as `xcam_control_set`'s `halt_print_sensitivity`. |
+| [`XcamModule`](#xcammodule) | enum | A camera detector `xcam_control_set` addresses by `module_name` (BambuStudio `DevPrintOptions.cpp`). |
 
 ## Types
 
@@ -104,6 +127,64 @@ named constants can be built, so a value never carries bits no routine owns.
 
 - <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](#calibrationoption)
 
+### `AirPurificationMode`
+
+```rust
+enum AirPurificationMode {
+    Disabled,
+    Inside,
+    Outside,
+}
+```
+
+Where the chamber air is purified at the end of a print, `print_option`'s `air_purification` and `print.cfg` bits 36-37 [REF-MQTT-TELEMETRY].
+
+#### Variants
+
+- **`Disabled`**
+
+  No purification at print end.
+
+- **`Inside`**
+
+  Recirculate through the internal filter.
+
+- **`Outside`**
+
+  Exhaust to the outside.
+
+#### Implementations
+
+- <span id="airpurificationmode-code"></span>`const fn code(self) -> u8`
+
+  The wire code: `0` disabled, `1` inside, `2` outside.
+
+- <span id="airpurificationmode-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes a wire code; `None` for any value outside `0..=2`.
+
+#### Trait Implementations
+
+##### `impl Clone for AirPurificationMode`
+
+- <span id="airpurificationmode-clone"></span>`fn clone(&self) -> AirPurificationMode` — [`AirPurificationMode`](#airpurificationmode)
+
+##### `impl Copy for AirPurificationMode`
+
+##### `impl Debug for AirPurificationMode`
+
+- <span id="airpurificationmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AirPurificationMode`
+
+##### `impl Hash for AirPurificationMode`
+
+- <span id="airpurificationmode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for AirPurificationMode`
+
+- <span id="airpurificationmode-partialeq-eq"></span>`fn eq(&self, other: &AirPurificationMode) -> bool` — [`AirPurificationMode`](#airpurificationmode)
+
 ### `BuzzerMode`
 
 ```rust
@@ -157,6 +238,64 @@ Buzzer alarm/attention chime mode [REF-MQTT-LIFECYCLE]; supported on models with
 ##### `impl PartialEq for BuzzerMode`
 
 - <span id="buzzermode-partialeq-eq"></span>`fn eq(&self, other: &BuzzerMode) -> bool` — [`BuzzerMode`](#buzzermode)
+
+### `DoorOpenCheck`
+
+```rust
+enum DoorOpenCheck {
+    Disabled,
+    Warn,
+    PausePrint,
+}
+```
+
+What the printer does when its door opens mid-print, `set_door_stat`'s `config` and `print.cfg` bits 20-21 [REF-MQTT-TELEMETRY].
+
+#### Variants
+
+- **`Disabled`**
+
+  Nothing.
+
+- **`Warn`**
+
+  Show a notification.
+
+- **`PausePrint`**
+
+  Pause the print.
+
+#### Implementations
+
+- <span id="dooropencheck-code"></span>`const fn code(self) -> u8`
+
+  The wire code: `0` disabled, `1` warn, `2` pause print.
+
+- <span id="dooropencheck-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes a wire code; `None` for any value outside `0..=2`.
+
+#### Trait Implementations
+
+##### `impl Clone for DoorOpenCheck`
+
+- <span id="dooropencheck-clone"></span>`fn clone(&self) -> DoorOpenCheck` — [`DoorOpenCheck`](#dooropencheck)
+
+##### `impl Copy for DoorOpenCheck`
+
+##### `impl Debug for DoorOpenCheck`
+
+- <span id="dooropencheck-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for DoorOpenCheck`
+
+##### `impl Hash for DoorOpenCheck`
+
+- <span id="dooropencheck-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for DoorOpenCheck`
+
+- <span id="dooropencheck-partialeq-eq"></span>`fn eq(&self, other: &DoorOpenCheck) -> bool` — [`DoorOpenCheck`](#dooropencheck)
 
 ### `FanTarget`
 
@@ -236,6 +375,64 @@ Target onboard cooling fans [REF-CLIM-FANS].
 ##### `impl PartialEq for FanTarget`
 
 - <span id="fantarget-partialeq-eq"></span>`fn eq(&self, other: &FanTarget) -> bool` — [`FanTarget`](#fantarget)
+
+### `IdleHeatingProtection`
+
+```rust
+enum IdleHeatingProtection {
+    Off,
+    On,
+    Unavailable,
+}
+```
+
+Idle heating protection as reported in `print.cfg` bits 32-33 [REF-MQTT-TELEMETRY].
+
+Three states, though the setter takes a bool. BambuStudio's Safety Options dialog greys the
+toggle out on `2` with "Unavailable while heating maintenance function is on."
+(`SafetyOptionsDialog.cpp`, `updateIdelHeatingProtect`); that meaning comes from UI text only.
+
+#### Variants
+
+- **`Off`**
+
+  Off.
+
+- **`On`**
+
+  On.
+
+- **`Unavailable`**
+
+  Can't be changed while the heating maintenance function runs.
+
+#### Implementations
+
+- <span id="idleheatingprotection-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes the two-bit field; `None` for the unassigned code `3`.
+
+#### Trait Implementations
+
+##### `impl Clone for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-clone"></span>`fn clone(&self) -> IdleHeatingProtection` — [`IdleHeatingProtection`](#idleheatingprotection)
+
+##### `impl Copy for IdleHeatingProtection`
+
+##### `impl Debug for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for IdleHeatingProtection`
+
+##### `impl Hash for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for IdleHeatingProtection`
+
+- <span id="idleheatingprotection-partialeq-eq"></span>`fn eq(&self, other: &IdleHeatingProtection) -> bool` — [`IdleHeatingProtection`](#idleheatingprotection)
 
 ### `LedNode`
 
@@ -376,6 +573,64 @@ An LED fixture's mode, as sent in `ledctrl` and reported in `lights_report`.
 ##### `impl ToString for LightMode`
 
 - <span id="lightmode-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `NozzleBlobDetectMode`
+
+```rust
+enum NozzleBlobDetectMode {
+    Off,
+    On,
+    Auto,
+}
+```
+
+Smart nozzle blob detection mode, `print_option`'s `nozzle_blob_detect_v2` and `print.cfg` bits 43-44 [REF-MQTT-TELEMETRY].
+
+#### Variants
+
+- **`Off`**
+
+  Detection off.
+
+- **`On`**
+
+  Detection on.
+
+- **`Auto`**
+
+  The printer decides per print.
+
+#### Implementations
+
+- <span id="nozzleblobdetectmode-code"></span>`const fn code(self) -> u8`
+
+  The wire code: `0` off, `1` on, `2` auto.
+
+- <span id="nozzleblobdetectmode-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
+
+  Decodes a wire code; `None` for any value outside `0..=2`.
+
+#### Trait Implementations
+
+##### `impl Clone for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-clone"></span>`fn clone(&self) -> NozzleBlobDetectMode` — [`NozzleBlobDetectMode`](#nozzleblobdetectmode)
+
+##### `impl Copy for NozzleBlobDetectMode`
+
+##### `impl Debug for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for NozzleBlobDetectMode`
+
+##### `impl Hash for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for NozzleBlobDetectMode`
+
+- <span id="nozzleblobdetectmode-partialeq-eq"></span>`fn eq(&self, other: &NozzleBlobDetectMode) -> bool` — [`NozzleBlobDetectMode`](#nozzleblobdetectmode)
 
 ### `PrintSpeed`
 
@@ -540,4 +795,191 @@ state should inspect the raw `gcode_state` string directly.
 ##### `impl PartialEq for PrintStatus`
 
 - <span id="printstatus-partialeq-eq"></span>`fn eq(&self, other: &PrintStatus) -> bool` — [`PrintStatus`](#printstatus)
+
+### `XcamHaltSensitivity`
+
+```rust
+enum XcamHaltSensitivity {
+    NeverHalt,
+    Low,
+    Medium,
+    High,
+}
+```
+
+How eagerly a camera detector halts the print, as `xcam_control_set`'s `halt_print_sensitivity`.
+
+`NeverHalt` only notifies. It is the AI-monitoring level BambuStudio offers alongside the three
+`XcamSensitivity` levels the per-detector telemetry reports.
+
+#### Variants
+
+- **`NeverHalt`**
+
+  Notify only.
+
+- **`Low`**
+
+  Least eager to halt.
+
+- **`Medium`**
+
+  Medium.
+
+- **`High`**
+
+  Most eager to halt.
+
+#### Implementations
+
+- <span id="xcamhaltsensitivity-const-all"></span>`const ALL: &'static [XcamHaltSensitivity]`
+
+- <span id="xcamhaltsensitivity-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The value's wire spelling.
+
+#### Trait Implementations
+
+##### `impl Clone for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-clone"></span>`fn clone(&self) -> XcamHaltSensitivity` — [`XcamHaltSensitivity`](#xcamhaltsensitivity)
+
+##### `impl Copy for XcamHaltSensitivity`
+
+##### `impl Debug for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for XcamHaltSensitivity`
+
+##### `impl FromStr for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="xcamhaltsensitivity-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
+
+##### `impl Hash for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-partialeq-eq"></span>`fn eq(&self, other: &XcamHaltSensitivity) -> bool` — [`XcamHaltSensitivity`](#xcamhaltsensitivity)
+
+##### `impl ToString for XcamHaltSensitivity`
+
+- <span id="xcamhaltsensitivity-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `XcamModule`
+
+```rust
+enum XcamModule {
+    PrintingMonitor,
+    SpaghettiDetector,
+    PileupDetector,
+    ClumpDetector,
+    AirprintDetector,
+    FirstLayerInspector,
+    BuildplateMarkerDetector,
+    PlateOffsetSwitch,
+    FodCheck,
+    ModelMovementCheck,
+}
+```
+
+A camera detector `xcam_control_set` addresses by `module_name` (BambuStudio `DevPrintOptions.cpp`).
+
+#### Variants
+
+- **`PrintingMonitor`**
+
+  AI monitoring, the older global switch.
+
+- **`SpaghettiDetector`**
+
+  Spaghetti detection.
+
+- **`PileupDetector`**
+
+  Purge chute pile-up detection.
+
+- **`ClumpDetector`**
+
+  Nozzle clumping detection.
+
+- **`AirprintDetector`**
+
+  Camera air-printing detection (not `print_option`'s non-visual one).
+
+- **`FirstLayerInspector`**
+
+  First-layer inspection.
+
+- **`BuildplateMarkerDetector`**
+
+  Build plate marker (plate type) detection.
+
+- **`PlateOffsetSwitch`**
+
+  Build plate alignment detection.
+
+- **`FodCheck`**
+
+  Foreign object detection.
+
+- **`ModelMovementCheck`**
+
+  Displacement detection.
+
+#### Implementations
+
+- <span id="xcammodule-const-all"></span>`const ALL: &'static [XcamModule]`
+
+- <span id="xcammodule-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The value's wire spelling.
+
+- <span id="xcammodule-takes-sensitivity"></span>`const fn takes_sensitivity(self) -> bool`
+
+  Whether BambuStudio sends a `halt_print_sensitivity` with this module.
+
+#### Trait Implementations
+
+##### `impl Clone for XcamModule`
+
+- <span id="xcammodule-clone"></span>`fn clone(&self) -> XcamModule` — [`XcamModule`](#xcammodule)
+
+##### `impl Copy for XcamModule`
+
+##### `impl Debug for XcamModule`
+
+- <span id="xcammodule-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for XcamModule`
+
+- <span id="xcammodule-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for XcamModule`
+
+##### `impl FromStr for XcamModule`
+
+- <span id="xcammodule-fromstr-type-err"></span>`type Err = Error`
+
+- <span id="xcammodule-fromstr-from-str"></span>`fn from_str(s: &str) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
+
+##### `impl Hash for XcamModule`
+
+- <span id="xcammodule-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for XcamModule`
+
+- <span id="xcammodule-partialeq-eq"></span>`fn eq(&self, other: &XcamModule) -> bool` — [`XcamModule`](#xcammodule)
+
+##### `impl ToString for XcamModule`
+
+- <span id="xcammodule-tostring-to-string"></span>`fn to_string(&self) -> String`
 
