@@ -141,6 +141,76 @@ impl BuzzerMode {
     }
 }
 
+/// Smart nozzle blob detection mode, `print_option`'s `nozzle_blob_detect_v2` and `print.cfg` bits 43-44 [REF-MQTT-TELEMETRY].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum NozzleBlobDetectMode {
+    /// Detection off.
+    Off,
+    /// Detection on.
+    On,
+    /// The printer decides per print.
+    Auto,
+}
+
+impl NozzleBlobDetectMode {
+    /// The wire code: `0` off, `1` on, `2` auto.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            NozzleBlobDetectMode::Off => 0,
+            NozzleBlobDetectMode::On => 1,
+            NozzleBlobDetectMode::Auto => 2,
+        }
+    }
+
+    /// Decodes a wire code; `None` for any value outside `0..=2`.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(NozzleBlobDetectMode::Off),
+            1 => Some(NozzleBlobDetectMode::On),
+            2 => Some(NozzleBlobDetectMode::Auto),
+            _ => None,
+        }
+    }
+}
+
+/// Where the chamber air is purified at the end of a print, `print_option`'s `air_purification` and `print.cfg` bits 36-37 [REF-MQTT-TELEMETRY].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum AirPurificationMode {
+    /// No purification at print end.
+    Disabled,
+    /// Recirculate through the internal filter.
+    Inside,
+    /// Exhaust to the outside.
+    Outside,
+}
+
+impl AirPurificationMode {
+    /// The wire code: `0` disabled, `1` inside, `2` outside.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            AirPurificationMode::Disabled => 0,
+            AirPurificationMode::Inside => 1,
+            AirPurificationMode::Outside => 2,
+        }
+    }
+
+    /// Decodes a wire code; `None` for any value outside `0..=2`.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(AirPurificationMode::Disabled),
+            1 => Some(AirPurificationMode::Inside),
+            2 => Some(AirPurificationMode::Outside),
+            _ => None,
+        }
+    }
+}
+
 /// Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]

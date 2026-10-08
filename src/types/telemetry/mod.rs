@@ -263,6 +263,52 @@ pub fn is_developer_mode(fun_hex: &str) -> Option<bool> {
     hex_bit(fun_hex, bits::FUN_MQTT_SIGNATURE_REQUIRED_BIT).map(|required| !required)
 }
 
+/// A `print` object with more keys than this is a full status report.
+///
+/// bambuddy's test (`bambu_mqtt.py`, the Filament Backup block, `len(print_data) > 30`): H2D
+/// firmware also sends small heartbeat frames whose `home_flag` is partial, so a `home_flag`
+/// read as settings or capability bits is taken only from a full report.
+pub(crate) const FULL_REPORT_MIN_KEYS: usize = 30;
+
+/// Counts the keys of a payload's `print` object without decoding their values.
+///
+/// `None` when the payload isn't JSON or has no `print` object.
+pub(crate) fn print_key_count(payload: &[u8]) -> Option<usize> {
+    use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
+
+    struct KeyCount(usize);
+
+    impl<'de> Deserialize<'de> for KeyCount {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Count;
+            impl<'de> Visitor<'de> for Count {
+                type Value = KeyCount;
+                fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    f.write_str("an object")
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<KeyCount, A::Error> {
+                    let mut keys = 0;
+                    while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {
+                        keys += 1;
+                    }
+                    Ok(KeyCount(keys))
+                }
+            }
+            deserializer.deserialize_map(Count)
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct Envelope {
+        print: Option<KeyCount>,
+    }
+
+    serde_json::from_slice::<Envelope>(payload)
+        .ok()?
+        .print
+        .map(|count| count.0)
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

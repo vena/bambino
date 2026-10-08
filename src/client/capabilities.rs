@@ -116,6 +116,54 @@ impl<'a> Capabilities<'a> {
     pub fn ams_drying_while_printing_support(&self) -> Support {
         self.quirks.ams_drying_while_printing_support(&self.context)
     }
+
+    /// Prompt sound support — see [`ModelQuirks::prompt_sound_support`].
+    #[must_use]
+    pub fn prompt_sound_support(&self) -> Support {
+        self.quirks.prompt_sound_support(&self.context)
+    }
+
+    /// Step-loss auto-recovery support — see [`ModelQuirks::auto_recovery_support`].
+    #[must_use]
+    pub fn auto_recovery_support(&self) -> Support {
+        self.quirks.auto_recovery_support(&self.context)
+    }
+
+    /// AMS Filament Backup support — see [`ModelQuirks::filament_backup_support`].
+    #[must_use]
+    pub fn filament_backup_support(&self) -> Support {
+        self.quirks.filament_backup_support(&self.context)
+    }
+
+    /// Filament tangle detection support — see [`ModelQuirks::filament_tangle_detect_support`].
+    #[must_use]
+    pub fn filament_tangle_detect_support(&self) -> Support {
+        self.quirks.filament_tangle_detect_support(&self.context)
+    }
+
+    /// On/off nozzle blob detection support — see [`ModelQuirks::nozzle_blob_detect_support`].
+    #[must_use]
+    pub fn nozzle_blob_detect_support(&self) -> Support {
+        self.quirks.nozzle_blob_detect_support(&self.context)
+    }
+
+    /// Smart nozzle blob detection support — see [`ModelQuirks::smart_nozzle_blob_detect_support`].
+    #[must_use]
+    pub fn smart_nozzle_blob_detect_support(&self) -> Support {
+        self.quirks.smart_nozzle_blob_detect_support(&self.context)
+    }
+
+    /// Non-visual air-printing detection support — see [`ModelQuirks::air_print_detect_support`].
+    #[must_use]
+    pub fn air_print_detect_support(&self) -> Support {
+        self.quirks.air_print_detect_support(&self.context)
+    }
+
+    /// End-of-print air purification support — see [`ModelQuirks::air_purification_support`].
+    #[must_use]
+    pub fn air_purification_support(&self) -> Support {
+        self.quirks.air_purification_support(&self.context)
+    }
 }
 
 impl core::fmt::Debug for Capabilities<'_> {

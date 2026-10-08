@@ -7,7 +7,7 @@
 use bambino::PrinterModel;
 use bambino::camera::CameraProtocol;
 use bambino::models::supported_models;
-use bambino::quirks::{BuildVolume, DoorSensor, ModelQuirks};
+use bambino::quirks::{BuildVolume, DoorSensor, ModelQuirks, QuirkContext};
 
 const MATRIX: &str = include_str!("../../MODEL_MATRIX.csv");
 
@@ -144,7 +144,9 @@ fn check(model: PrinterModel, q: &ModelQuirks, matrix: &[Vec<String>]) {
         assert_eq!(q.supports_airduct_mode(), yes(v), "{model} airduct");
     }
     if let Some(v) = get("Prompt Sound (Speaker)") {
-        assert_eq!(q.supports_prompt_sound(), yes(v), "{model} prompt sound");
+        // The model rule, before any report: an empty context.
+        let support = q.prompt_sound_support(&QuirkContext::empty());
+        assert_eq!(support.is_supported(), yes(v), "{model} prompt sound");
     }
     if let Some(v) = get("Fire Alarm Buzzer") {
         assert_eq!(q.has_buzzer(), yes(v), "{model} buzzer");

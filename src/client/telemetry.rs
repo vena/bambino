@@ -15,8 +15,8 @@ use crate::mqtt::MqttMessage;
 use crate::types::control::FanTarget;
 use crate::types::telemetry::merge::{keep_new, merge_keyed, merge_opt};
 use crate::types::telemetry::{
-    FanStrings, HeaterTemps, NozzleTemps, bits, decode_bed_temperatures, decode_fan_percent,
-    decode_nozzle_temperatures, unpack_temperature,
+    FULL_REPORT_MIN_KEYS, FanStrings, HeaterTemps, NozzleTemps, bits, decode_bed_temperatures,
+    decode_fan_percent, decode_nozzle_temperatures, print_key_count, unpack_temperature,
 };
 use crate::types::{
     AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, SdcardState,
@@ -84,6 +84,18 @@ pub(crate) struct TelemetryCache {
     // The `fun2` capability bitfield arrives on pushall and is absent from most incremental
     // frames, so it needs the same caching `xcam` does to be readable on a command path.
     pub(crate) last_fun2: Option<String>,
+    // `fun`, cached like `fun2`: its `print_option` support bits feed `quirk_context()`.
+    pub(crate) last_fun: Option<String>,
+    // `home_flag` from full status reports only (`FULL_REPORT_MIN_KEYS`). H2D also sends
+    // heartbeat frames with a partial `home_flag`, so the `print_option` getters and support bits
+    // read this one, never `last_home_flag`. The getters ignore the generation, since a setting
+    // persists across a reconnect; `quirk_context()` honors it, as for firmware.
+    pub(crate) last_full_home_flag: Option<u32>,
+    pub(crate) last_full_home_flag_generation: Option<u32>,
+    // The top-level `print.cfg` settings bitmask. Kept across reconnects: whether a printer sends
+    // `cfg` at all is a fixed property of the printer, and once it has, the `print_option`
+    // getters read `cfg` alone.
+    pub(crate) last_cfg: Option<String>,
     // The OTA firmware version, from a `get_version` round trip rather than from telemetry —
     // several capabilities are gated on it, and a caller should not have to re-query per check.
     pub(crate) last_firmware: Option<String>,
@@ -295,6 +307,19 @@ where
         }
         match report {
             Some(report) => {
+                let full_home_flag = report
+                    .print
+                    .as_ref()
+                    .and_then(|print| print.home_flag)
+                    .filter(|_| {
+                        print_key_count(&msg.payload)
+                            .is_some_and(|keys| keys > FULL_REPORT_MIN_KEYS)
+                    });
+                if let Some(flag) = full_home_flag {
+                    self.core.cache.last_full_home_flag = Some(flag);
+                    self.core.cache.last_full_home_flag_generation =
+                        Some(self.core.connection_generation);
+                }
                 self.update_telemetry_cache(&report);
                 TelemetryEvent::Report(Box::new(report), msg)
             }
@@ -313,6 +338,9 @@ where
         // Read before the `print` early-return: both accessors check the top level too.
         if let Some(fun2) = report.fun2() {
             self.core.cache.last_fun2 = Some(fun2.to_string());
+        }
+        if let Some(fun) = report.fun() {
+            self.core.cache.last_fun = Some(fun.to_string());
         }
         let Some(print) = report.print.as_ref() else {
             return;
@@ -333,6 +361,7 @@ where
             self.core.cache.last_home_flag_generation = Some(self.core.connection_generation);
         }
         keep_new(&mut self.core.cache.last_gcode_state, &print.gcode_state);
+        keep_new(&mut self.core.cache.last_cfg, &print.cfg);
         // A frame without the door field leaves the last observed state in place.
         if let Some(open) = print.door_state(self.quirks().door_sensor()) {
             self.core.cache.last_door_open = Some(open);

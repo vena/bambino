@@ -80,7 +80,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   G-Code Command Queue Wrapper (gcode_line [REF-MOTO-GCODE])
     *   Enclosure LED Lighting Control (ledctrl)
     *   Airduct AC Mode Selection (set_airduct)
-    *   Prompt Sound & Buzzer Commands (print_option, buzzer_ctrl)
+    *   Printer Settings (print_option: prompt sound, auto-recovery, Filament Backup, tangle/nozzle-blob/air-printing detection, air purification) & Buzzer (buzzer_ctrl)
     *   Physical Calibration Controls (calibration option bitmask calculation)
     *   AMS Controls (ams_control and ams_get_rfid commands)
     *   Feed Speed Level Configurations (print_speed command parameters)

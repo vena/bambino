@@ -31,7 +31,10 @@ pub use control::{
 };
 pub use gcode::GCodeRequest;
 pub use hardware::{
-    AirductMode, AirductRequest, BuzzerRequest, FlashTiming, LedCtrlRequest, PromptSoundRequest,
+    AirPrintDetectRequest, AirPurificationRequest, AirductMode, AirductRequest,
+    AutoRecoveryRequest, BuzzerRequest, FilamentBackupRequest, FilamentTangleDetectRequest,
+    FlashTiming, LedCtrlRequest, NozzleBlobDetectRequest, PromptSoundRequest,
+    SmartNozzleBlobDetectRequest,
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, NozzleRack, PrintJobConfig, ProjectFileRequest,
@@ -743,6 +746,58 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"print_option"#));
         assert!(json.contains(r#""sound_enable":true"#));
+    }
+
+    /// Every `print_option` setter, as BambuStudio builds it: one setting field each.
+    #[test]
+    fn test_print_option_requests_json() {
+        use crate::types::control::{AirPurificationMode, NozzleBlobDetectMode};
+        let cases = [
+            (
+                serde_json::to_value(AutoRecoveryRequest::new(true, 1)).unwrap(),
+                serde_json::json!({"option": 1, "auto_recovery": true}),
+            ),
+            (
+                serde_json::to_value(AutoRecoveryRequest::new(false, 1)).unwrap(),
+                serde_json::json!({"option": 0, "auto_recovery": false}),
+            ),
+            (
+                serde_json::to_value(FilamentBackupRequest::new(true, 1)).unwrap(),
+                serde_json::json!({"auto_switch_filament": true}),
+            ),
+            (
+                serde_json::to_value(FilamentTangleDetectRequest::new(false, 1)).unwrap(),
+                serde_json::json!({"filament_tangle_detect": false}),
+            ),
+            (
+                serde_json::to_value(NozzleBlobDetectRequest::new(true, 1)).unwrap(),
+                serde_json::json!({"nozzle_blob_detect": true}),
+            ),
+            (
+                serde_json::to_value(SmartNozzleBlobDetectRequest::new(
+                    NozzleBlobDetectMode::Auto,
+                    1,
+                ))
+                .unwrap(),
+                serde_json::json!({"nozzle_blob_detect_v2": 2}),
+            ),
+            (
+                serde_json::to_value(AirPrintDetectRequest::new(true, 1)).unwrap(),
+                serde_json::json!({"air_print_detect": true}),
+            ),
+            (
+                serde_json::to_value(AirPurificationRequest::new(AirPurificationMode::Outside, 1))
+                    .unwrap(),
+                serde_json::json!({"air_purification": 2}),
+            ),
+        ];
+        for (value, setting) in cases {
+            let mut expected = serde_json::json!({"command": "print_option", "sequence_id": "1"});
+            for (key, field) in setting.as_object().unwrap() {
+                expected[key] = field.clone();
+            }
+            assert_eq!(value["print"], expected);
+        }
     }
 
     #[test]

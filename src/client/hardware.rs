@@ -96,17 +96,6 @@ where
             .await
     }
 
-    /// Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
-    ///
-    /// Supported on models with onboard speakers (A1, A1 Mini, A2L).
-    pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<CommandHandle, Error> {
-        require(self.quirks().supports_prompt_sound(), || {
-            "prompt sound not available on this model".into()
-        })?;
-        self.dispatch(|seq| crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq))
-            .await
-    }
-
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
     ///
     /// Supported on models with a physical fire alarm buzzer (H2 series).

@@ -47,6 +47,21 @@ pub struct QuirkContext<'a> {
     /// the model — remote AMS drying is version-gated on H2D, H2D Pro, H2S, H2C, P2S and X2D for
     /// exactly this reason.
     pub firmware: Option<&'a str>,
+
+    /// The `fun` capability bitfield, if the printer reported one.
+    ///
+    /// Absent on the P1 and A1 families, like `fun2`. Where present it carries per-setting
+    /// support bits for several `print_option` settings, and BambuStudio lets it override the
+    /// matching `home_flag` bit.
+    pub fun: Option<&'a str>,
+
+    /// The `home_flag` bitfield of a full status report, if one was observed on the current connection.
+    ///
+    /// The capability field every family sends, so it is the only reported support signal on P1
+    /// and A1. Taken from a full report only, since H2D heartbeat frames carry a partial
+    /// `home_flag`, and from the current connection only, since what the printer supports can
+    /// change across a reboot.
+    pub home_flag: Option<u32>,
 }
 
 impl<'a> QuirkContext<'a> {
@@ -70,6 +85,20 @@ impl<'a> QuirkContext<'a> {
     #[must_use]
     pub fn with_firmware(mut self, firmware: Option<&'a str>) -> Self {
         self.firmware = firmware;
+        self
+    }
+
+    /// Sets the `fun` capability bitfield.
+    #[must_use]
+    pub fn with_fun(mut self, fun: Option<&'a str>) -> Self {
+        self.fun = fun;
+        self
+    }
+
+    /// Sets the `home_flag` bitfield.
+    #[must_use]
+    pub fn with_home_flag(mut self, home_flag: Option<u32>) -> Self {
+        self.home_flag = home_flag;
         self
     }
 }

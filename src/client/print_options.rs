@@ -1,0 +1,318 @@
+//! The `print_option` printer settings: a gated setter and a cached getter for each.
+//!
+//! Every `print_option` ack reports success, even on a model without the feature
+//! [REF-MQTT-TELEMETRY], so the ack proves nothing. Each setter therefore refuses up front
+//! when [`Capabilities`](super::Capabilities) says the setting is unsupported, and telemetry,
+//! through the matching getter, is the only confirmation that a change took.
+//!
+//! **Settle window.** The printer can keep reporting the old value for about 3 s (one or two
+//! status frames) after a change; BambuStudio and bambuddy both ignore telemetry for that long
+//! after sending. Wait that long before trusting a getter to confirm a setter.
+
+#[cfg(not(feature = "std"))]
+use alloc::format;
+
+use crate::error::Error;
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::mqtt::commands::{
+    AirPrintDetectRequest, AirPurificationRequest, AutoRecoveryRequest, FilamentBackupRequest,
+    FilamentTangleDetectRequest, NozzleBlobDetectRequest, PromptSoundRequest,
+    SmartNozzleBlobDetectRequest,
+};
+use crate::quirks::Support;
+use crate::types::control::{AirPurificationMode, NozzleBlobDetectMode};
+use crate::types::telemetry::bits::{self, SettingBits};
+
+use super::hardware::require;
+use super::{CommandHandle, PrinterClient};
+
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    FtpsTimer,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
+where
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
+    Timer: TimerProvider,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    FtpsTimer: TimerProvider,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
+{
+    /// Turns prompt notification sounds on or off.
+    ///
+    /// Confirm with [`prompt_sound_enabled()`](Self::prompt_sound_enabled) after the settle
+    /// window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::prompt_sound_support`](super::Capabilities::prompt_sound_support) is
+    /// `false`.
+    pub async fn set_prompt_sound(&mut self, enable: bool) -> Result<CommandHandle, Error> {
+        refuse_unless(self.capabilities().prompt_sound_support(), "prompt sound")?;
+        self.dispatch(|seq| PromptSoundRequest::new(enable, seq))
+            .await
+    }
+
+    /// Turns step-loss auto-recovery on or off.
+    ///
+    /// Confirm with [`auto_recovery_enabled()`](Self::auto_recovery_enabled) after the settle
+    /// window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::auto_recovery_support`](super::Capabilities::auto_recovery_support) is
+    /// `false`.
+    pub async fn set_auto_recovery(&mut self, enable: bool) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().auto_recovery_support(),
+            "step-loss auto-recovery",
+        )?;
+        self.dispatch(|seq| AutoRecoveryRequest::new(enable, seq))
+            .await
+    }
+
+    /// Turns AMS Filament Backup (auto-refill from a matching spool) on or off.
+    ///
+    /// Confirm with [`filament_backup_enabled()`](Self::filament_backup_enabled) after the
+    /// settle window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::filament_backup_support`](super::Capabilities::filament_backup_support)
+    /// is `false`.
+    pub async fn set_filament_backup(&mut self, enable: bool) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().filament_backup_support(),
+            "Filament Backup",
+        )?;
+        self.dispatch(|seq| FilamentBackupRequest::new(enable, seq))
+            .await
+    }
+
+    /// Turns filament tangle detection on or off.
+    ///
+    /// Refused until the printer has reported support, so poll telemetry after connecting
+    /// first. Confirm with
+    /// [`filament_tangle_detect_enabled()`](Self::filament_tangle_detect_enabled) after the
+    /// settle window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::filament_tangle_detect_support`](super::Capabilities::filament_tangle_detect_support)
+    /// is `false`.
+    pub async fn set_filament_tangle_detect(
+        &mut self,
+        enable: bool,
+    ) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().filament_tangle_detect_support(),
+            "filament tangle detection",
+        )?;
+        self.dispatch(|seq| FilamentTangleDetectRequest::new(enable, seq))
+            .await
+    }
+
+    /// Turns nozzle blob detection (the original, on/off form) on or off.
+    ///
+    /// Refused until the printer has reported support, so poll telemetry after connecting
+    /// first. Confirm with [`nozzle_blob_detect_enabled()`](Self::nozzle_blob_detect_enabled)
+    /// after the settle window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::nozzle_blob_detect_support`](super::Capabilities::nozzle_blob_detect_support)
+    /// is `false`.
+    pub async fn set_nozzle_blob_detect(&mut self, enable: bool) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().nozzle_blob_detect_support(),
+            "nozzle blob detection",
+        )?;
+        self.dispatch(|seq| NozzleBlobDetectRequest::new(enable, seq))
+            .await
+    }
+
+    /// Sets the smart nozzle blob detection mode (off, on, or auto).
+    ///
+    /// Refused until the printer has reported support, so poll telemetry after connecting
+    /// first. Confirm with
+    /// [`smart_nozzle_blob_detect_mode()`](Self::smart_nozzle_blob_detect_mode) after the
+    /// settle window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::smart_nozzle_blob_detect_support`](super::Capabilities::smart_nozzle_blob_detect_support)
+    /// is `false`.
+    pub async fn set_smart_nozzle_blob_detect(
+        &mut self,
+        mode: NozzleBlobDetectMode,
+    ) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().smart_nozzle_blob_detect_support(),
+            "smart nozzle blob detection",
+        )?;
+        self.dispatch(|seq| SmartNozzleBlobDetectRequest::new(mode, seq))
+            .await
+    }
+
+    /// Turns non-visual air-printing detection on or off.
+    ///
+    /// The detector BambuStudio shows in AMS settings on A1/A1 Mini and in print options
+    /// elsewhere; not the camera's AI air-printing detector. Refused until the printer has
+    /// reported support, so poll telemetry after connecting first. Confirm with
+    /// [`air_print_detect_enabled()`](Self::air_print_detect_enabled) after the settle window
+    /// described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::air_print_detect_support`](super::Capabilities::air_print_detect_support)
+    /// is `false`.
+    pub async fn set_air_print_detect(&mut self, enable: bool) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().air_print_detect_support(),
+            "air-printing detection",
+        )?;
+        self.dispatch(|seq| AirPrintDetectRequest::new(enable, seq))
+            .await
+    }
+
+    /// Sets where chamber air is purified at the end of every print.
+    ///
+    /// A persistent setting, unrelated to
+    /// [`disable_air_purification()`](Self::disable_air_purification), which answers an error
+    /// dialog by stopping purification once, now. Refused until the printer has reported
+    /// support, so poll telemetry after connecting first. Confirm with
+    /// [`air_purification_mode()`](Self::air_purification_mode) after the settle window
+    /// described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::air_purification_support`](super::Capabilities::air_purification_support)
+    /// is `false`.
+    pub async fn set_air_purification(
+        &mut self,
+        mode: AirPurificationMode,
+    ) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().air_purification_support(),
+            "end-of-print air purification",
+        )?;
+        self.dispatch(|seq| AirPurificationRequest::new(mode, seq))
+            .await
+    }
+
+    /// Whether prompt sounds are on, as last reported (`print.cfg` bit 22, else `home_flag` bit 17).
+    ///
+    /// `None` before any telemetry carrying the setting. See the module docs for the settle
+    /// window after a change.
+    #[must_use]
+    pub fn prompt_sound_enabled(&self) -> Option<bool> {
+        self.setting(bits::PROMPT_SOUND)
+    }
+
+    /// Whether step-loss auto-recovery is on, as last reported (`print.cfg` bit 16, else `home_flag` bit 4).
+    #[must_use]
+    pub fn auto_recovery_enabled(&self) -> Option<bool> {
+        self.setting(bits::AUTO_RECOVERY)
+    }
+
+    /// Whether AMS Filament Backup is on, as last reported (`print.cfg` bit 18, else `home_flag` bit 10).
+    #[must_use]
+    pub fn filament_backup_enabled(&self) -> Option<bool> {
+        self.setting(bits::FILAMENT_BACKUP)
+    }
+
+    /// Whether filament tangle detection is on, as last reported (`print.cfg` bit 23, else `home_flag` bit 20).
+    #[must_use]
+    pub fn filament_tangle_detect_enabled(&self) -> Option<bool> {
+        self.setting(bits::FILAMENT_TANGLE_DETECT)
+    }
+
+    /// Whether on/off nozzle blob detection is on, as last reported (`print.cfg` bit 24, else `home_flag` bit 24).
+    #[must_use]
+    pub fn nozzle_blob_detect_enabled(&self) -> Option<bool> {
+        self.setting(bits::NOZZLE_BLOB_DETECT)
+    }
+
+    /// Whether non-visual air-printing detection is on, as last reported (`home_flag` bit 28).
+    #[must_use]
+    pub fn air_print_detect_enabled(&self) -> Option<bool> {
+        self.setting(bits::AIR_PRINT_DETECT)
+    }
+
+    /// The smart nozzle blob detection mode, as last reported (`print.cfg` bits 43-44).
+    ///
+    /// `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+    /// code `3`.
+    #[must_use]
+    pub fn smart_nozzle_blob_detect_mode(&self) -> Option<NozzleBlobDetectMode> {
+        NozzleBlobDetectMode::from_code(self.cfg_field(bits::CFG_SMART_NOZZLE_BLOB_DETECT)?)
+    }
+
+    /// The end-of-print air purification mode, as last reported (`print.cfg` bits 36-37).
+    ///
+    /// `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+    /// code `3`.
+    #[must_use]
+    pub fn air_purification_mode(&self) -> Option<AirPurificationMode> {
+        AirPurificationMode::from_code(self.cfg_field(bits::CFG_AIR_PURIFICATION)?)
+    }
+
+    /// Reads one boolean setting from the cached `cfg`, else the `home_flag` of the last full status report.
+    ///
+    /// Heartbeat frames carry a partial `home_flag`, so only a full report's counts. It is read
+    /// from any connection, not just the current one: a setting persists across a reconnect, and
+    /// the connect-time pushall refreshes it.
+    fn setting(&self, setting: SettingBits) -> Option<bool> {
+        setting.read(
+            self.core.cache.last_cfg.as_deref(),
+            self.core.cache.last_full_home_flag,
+        )
+    }
+
+    /// Reads a two-bit mode field from the cached `cfg`.
+    fn cfg_field(&self, low: u32) -> Option<u32> {
+        bits::hex_field(self.core.cache.last_cfg.as_deref()?, low, 2)
+    }
+}
+
+/// Fails with [`Error::ModelMismatch`] naming `setting` unless `support` allows it.
+fn refuse_unless(support: Support, setting: &str) -> Result<(), Error> {
+    require(support.is_supported(), || {
+        format!("{setting} not available on this printer ({support:?})")
+    })
+}

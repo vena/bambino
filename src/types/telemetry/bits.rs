@@ -120,6 +120,95 @@ pub(crate) mod xcam_cfg {
 }
 
 // ---------------------------------------------------------------------------
+// `print_option` settings [REF-MQTT-TELEMETRY]
+// ---------------------------------------------------------------------------
+
+/// Where one `print_option` setting's current value is reported: a `print.cfg` bit, a `home_flag` bit, or both.
+///
+/// Bit indices per BambuStudio `DevPrintOptions.cpp` `ParseDetectionV1_0` and
+/// `DeviceManager.cpp` (`parse_home_flag`, the `/*cfg*/` block of `parse_new_info`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SettingBits {
+    /// Bit index in the top-level `print.cfg` hex string.
+    pub(crate) cfg: Option<u32>,
+    /// Bit index in `home_flag`.
+    pub(crate) home_flag: Option<u32>,
+}
+
+impl SettingBits {
+    /// Reads the setting, preferring `cfg` whenever one has been seen.
+    ///
+    /// Once a printer has sent `cfg` it is read alone, never mixed with `home_flag`: P1 and A1
+    /// omit `cfg` entirely, and H2D sends heartbeat frames with a partial `home_flag`
+    /// [REF-MQTT-TELEMETRY]. A setting `cfg` doesn't carry still reads `home_flag`.
+    pub(crate) fn read(self, cfg: Option<&str>, home_flag: Option<u32>) -> Option<bool> {
+        match (self.cfg, cfg) {
+            (Some(bit), Some(cfg)) => hex_bit(cfg, bit),
+            _ => Some(home_flag? & (1 << self.home_flag?) != 0),
+        }
+    }
+}
+
+/// Prompt sound enabled.
+pub(crate) const PROMPT_SOUND: SettingBits = SettingBits {
+    cfg: Some(22),
+    home_flag: Some(17),
+};
+/// Step-loss auto-recovery enabled.
+pub(crate) const AUTO_RECOVERY: SettingBits = SettingBits {
+    cfg: Some(16),
+    home_flag: Some(4),
+};
+/// AMS Filament Backup (auto-refill) enabled.
+pub(crate) const FILAMENT_BACKUP: SettingBits = SettingBits {
+    cfg: Some(18),
+    home_flag: Some(10),
+};
+/// Filament tangle detection enabled.
+pub(crate) const FILAMENT_TANGLE_DETECT: SettingBits = SettingBits {
+    cfg: Some(23),
+    home_flag: Some(20),
+};
+/// Nozzle blob detection (v1) enabled.
+pub(crate) const NOZZLE_BLOB_DETECT: SettingBits = SettingBits {
+    cfg: Some(24),
+    home_flag: Some(24),
+};
+/// Non-visual air-printing detection enabled; `cfg` doesn't carry it.
+pub(crate) const AIR_PRINT_DETECT: SettingBits = SettingBits {
+    cfg: None,
+    home_flag: Some(28),
+};
+/// Low bit of `print.cfg`'s two-bit air purification mode (bits 36-37).
+pub(crate) const CFG_AIR_PURIFICATION: u32 = 36;
+/// Low bit of `print.cfg`'s two-bit smart nozzle blob detection mode (bits 43-44).
+pub(crate) const CFG_SMART_NOZZLE_BLOB_DETECT: u32 = 43;
+
+/// `home_flag` bit 18: prompt sound supported.
+pub(crate) const HOME_FLAG_PROMPT_SOUND_SUPPORTED_BIT: u32 = 18;
+/// `home_flag` bit 19: filament tangle detection supported.
+pub(crate) const HOME_FLAG_TANGLE_DETECT_SUPPORTED_BIT: u32 = 19;
+/// `home_flag` bit 25: nozzle blob detection (v1) supported.
+pub(crate) const HOME_FLAG_NOZZLE_BLOB_DETECT_SUPPORTED_BIT: u32 = 25;
+/// `home_flag` bit 29: non-visual air-printing detection supported (`DeviceManager.cpp:1099`).
+pub(crate) const HOME_FLAG_AIR_PRINT_DETECT_SUPPORTED_BIT: u32 = 29;
+/// `fun` bit 8: prompt sound supported.
+pub(crate) const FUN_PROMPT_SOUND_BIT: u32 = 8;
+/// `fun` bit 9: filament tangle detection supported.
+pub(crate) const FUN_TANGLE_DETECT_BIT: u32 = 9;
+/// `fun` bit 13: nozzle blob detection (v1) supported.
+pub(crate) const FUN_NOZZLE_BLOB_DETECT_BIT: u32 = 13;
+/// `fun2` bit 4: air purification at print end supported.
+pub(crate) const FUN2_AIR_PURIFICATION_BIT: u32 = 4;
+/// `fun2` bit 15: smart nozzle blob detection (v2) supported.
+pub(crate) const FUN2_SMART_NOZZLE_BLOB_DETECT_BIT: u32 = 15;
+
+/// Whether `bit` is set in `home_flag`.
+pub(crate) fn home_flag_bit(home_flag: u32, bit: u32) -> bool {
+    home_flag & (1 << bit) != 0
+}
+
+// ---------------------------------------------------------------------------
 // Hex fields
 // ---------------------------------------------------------------------------
 
@@ -170,6 +259,15 @@ pub fn hex_bit(hex: &str, bit: u32) -> Option<bool> {
     any.then_some(false)
 }
 
+/// Reads a `width`-bit field starting at bit `low` of a hex string, via [`hex_bit`].
+///
+/// `None` only when the string carries no hex digits.
+pub(crate) fn hex_field(hex: &str, low: u32, width: u32) -> Option<u32> {
+    (0..width).try_fold(0, |acc, i| {
+        Some(acc | (u32::from(hex_bit(hex, low + i)?) << i))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +285,28 @@ mod tests {
     fn test_hex_bit_accepts_uppercase_prefix_and_whitespace() {
         assert_eq!(hex_bit(" 0X20000000", 29), Some(true));
         assert_eq!(hex_bit("0x20", 5), Some(true));
+    }
+
+    #[test]
+    fn test_setting_reads_cfg_alone_once_seen() {
+        // cfg bit 22 clear, home_flag bit 17 set: cfg wins.
+        assert_eq!(PROMPT_SOUND.read(Some("0"), Some(1 << 17)), Some(false));
+        assert_eq!(PROMPT_SOUND.read(Some("400000"), Some(0)), Some(true));
+        // No cfg yet: home_flag answers.
+        assert_eq!(PROMPT_SOUND.read(None, Some(1 << 17)), Some(true));
+        assert_eq!(PROMPT_SOUND.read(None, None), None);
+        // A setting cfg doesn't carry reads home_flag even once cfg is seen.
+        assert_eq!(AIR_PRINT_DETECT.read(Some("0"), Some(1 << 28)), Some(true));
+    }
+
+    #[test]
+    fn test_hex_field_reads_two_bit_modes() {
+        // Bits 43-44 = 0b10 (auto), bits 36-37 = 0b01 (inside).
+        let cfg = "0x100000000000";
+        assert_eq!(hex_field(cfg, CFG_SMART_NOZZLE_BLOB_DETECT, 2), Some(0b10));
+        let cfg = "0x1000000000";
+        assert_eq!(hex_field(cfg, CFG_AIR_PURIFICATION, 2), Some(0b01));
+        assert_eq!(hex_field("", CFG_AIR_PURIFICATION, 2), None);
     }
 
     #[test]

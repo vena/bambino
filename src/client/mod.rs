@@ -25,6 +25,7 @@ pub mod dummy;
 mod hardware;
 mod motion;
 mod print;
+mod print_options;
 mod storage;
 mod telemetry;
 mod thermal;
@@ -34,7 +35,8 @@ pub use crate::mqtt::commands::{AirductMode, IdleIgnoreScope};
 pub use crate::quirks::Axis;
 #[doc(inline)]
 pub use crate::types::control::{
-    BuzzerMode, CalibrationOption, FanTarget, LedNode, LightMode, PrintSpeed, PrintStatus,
+    AirPurificationMode, BuzzerMode, CalibrationOption, FanTarget, LedNode, LightMode,
+    NozzleBlobDetectMode, PrintSpeed, PrintStatus,
 };
 #[doc(inline)]
 pub use crate::types::telemetry::{HeaterTemps, NozzleTemps};
@@ -662,10 +664,11 @@ where
 
     /// Builds a [`QuirkContext`](crate::quirks::QuirkContext) from this client's cached state.
     ///
-    /// A snapshot of whatever has been observed so far: `fun2` from the last telemetry carrying
-    /// it, and firmware from the last [`get_version()`](Self::get_version). Fields never
-    /// observed stay `None`, which quirks read as "the printer didn't say" rather than as a
-    /// denial.
+    /// A snapshot of whatever has been observed so far: `fun` and `fun2` from the last telemetry
+    /// carrying them, `home_flag` (from full status reports) and firmware (from
+    /// [`get_version()`](Self::get_version)) only as observed on the current connection. Fields
+    /// never observed stay `None`, which quirks read as "the printer didn't say" rather than as
+    /// a denial.
     ///
     /// Prefer [`capabilities()`](Self::capabilities) unless you need to hand the context to a
     /// quirk directly — for instance to ask what a *different* model would answer given this
@@ -675,6 +678,21 @@ where
         crate::quirks::QuirkContext::empty()
             .with_fun2(self.core.cache.last_fun2.as_deref())
             .with_firmware(self.firmware_this_connection())
+            .with_fun(self.core.cache.last_fun.as_deref())
+            .with_home_flag(self.full_home_flag_this_connection())
+    }
+
+    /// Returns the `home_flag` cached from a full status report on the current MQTT connection.
+    ///
+    /// Capability bits come only from full reports, since H2D heartbeat frames carry a partial
+    /// `home_flag`; and only from this connection, like
+    /// [`firmware_this_connection`](Self::firmware_this_connection), since support can change
+    /// across a reboot.
+    fn full_home_flag_this_connection(&self) -> Option<u32> {
+        if self.core.cache.last_full_home_flag_generation? != self.core.connection_generation {
+            return None;
+        }
+        self.core.cache.last_full_home_flag
     }
 
     /// Returns the cached firmware version only if it was fetched on the current MQTT connection.

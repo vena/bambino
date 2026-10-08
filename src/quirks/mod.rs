@@ -25,6 +25,7 @@ use crate::camera::CameraProtocol;
 use crate::error::Error;
 use crate::models::PrinterModel;
 use crate::types::control::CalibrationOption;
+use crate::types::telemetry::bits;
 
 /// Reads the printer's own remote-dry answer out of a [`QuirkContext`]'s `fun2` string.
 ///
@@ -40,6 +41,26 @@ pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
     ctx.fun2.and_then(|hex| {
         crate::types::telemetry::hex_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
     })
+}
+
+/// Where a `print_option` setting's support is reported, read in BambuStudio's override order.
+///
+/// BambuStudio's `ParseDetectionV1_0` reads the `home_flag` bit first and lets a non-empty `fun`
+/// (or `fun2`) overwrite it, so `fun`/`fun2` win wherever both are present.
+struct SupportBits {
+    fun: Option<u32>,
+    fun2: Option<u32>,
+    home_flag: Option<u32>,
+}
+
+impl SupportBits {
+    fn resolve(self, ctx: &QuirkContext, model: Support) -> Support {
+        let hex = |field: Option<&str>, bit: Option<u32>| bits::hex_bit(field?, bit?);
+        hex(ctx.fun, self.fun)
+            .or_else(|| hex(ctx.fun2, self.fun2))
+            .or_else(|| Some(bits::home_flag_bit(ctx.home_flag?, self.home_flag?)))
+            .map_or(model, Support::Reported)
+    }
 }
 
 /// How a capability answer was reached — the printer's own report, an inference, or a default.
@@ -341,6 +362,7 @@ pub struct ModelQuirks {
     chamber_exhaust_fan: bool,
     airduct_mode: bool,
     prompt_sound: bool,
+    print_options_min_firmware: Option<&'static str>,
     buzzer: bool,
 }
 
@@ -377,6 +399,7 @@ impl ModelQuirks {
             chamber_exhaust_fan: false,
             airduct_mode: false,
             prompt_sound: false,
+            print_options_min_firmware: None,
             buzzer: false,
         }
     }
@@ -616,10 +639,120 @@ impl ModelQuirks {
         self.airduct_mode
     }
 
-    /// Returns true if the model plays prompt sound notifications: A1, A1 Mini, A2L (per Bambu Studio profiles).
+    /// Returns whether the printer can play prompt sound notifications, with its provenance.
+    ///
+    /// Reported by `fun` bit 8, else `home_flag` bit 18 (BambuStudio `ParseDetectionV1_0`).
+    /// Otherwise the model rule: A1, A1 Mini and A2L only, BambuStudio's per-model
+    /// `support_prompt_sound` (`N1.json`, `N2S.json`, `N9.json`).
     #[must_use]
-    pub fn supports_prompt_sound(&self) -> bool {
-        self.prompt_sound
+    pub fn prompt_sound_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: Some(bits::FUN_PROMPT_SOUND_BIT),
+            fun2: None,
+            home_flag: Some(bits::HOME_FLAG_PROMPT_SOUND_SUPPORTED_BIT),
+        }
+        .resolve(ctx, Support::Inferred(self.prompt_sound))
+    }
+
+    /// Returns whether the printer can set step-loss auto-recovery, with its provenance.
+    ///
+    /// No telemetry bit reports it. BambuStudio's per-model `support_auto_recovery_step_loss` is
+    /// true on every model, but on the X1 and X1C only from firmware `01.01.01.00`; with that
+    /// version unread, they are assumed supported.
+    #[must_use]
+    pub fn auto_recovery_support(&self, ctx: &QuirkContext) -> Support {
+        self.print_options_rule(ctx)
+    }
+
+    /// Returns whether the printer can set AMS Filament Backup, with its provenance.
+    ///
+    /// The same model rule as [`auto_recovery_support`](Self::auto_recovery_support), from
+    /// BambuStudio's per-model `support_filament_backup`. BambuStudio additionally hides the
+    /// control without an AMS attached (`DevFilaSystem::CanShowFilamentBackup`); this does not
+    /// check for one.
+    #[must_use]
+    pub fn filament_backup_support(&self, ctx: &QuirkContext) -> Support {
+        self.print_options_rule(ctx)
+    }
+
+    /// Returns whether the printer can detect filament tangles, with its provenance.
+    ///
+    /// Reported by `fun` bit 9, else `home_flag` bit 19. No model rule exists, so nothing
+    /// reported means `Assumed(false)`.
+    #[must_use]
+    pub fn filament_tangle_detect_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: Some(bits::FUN_TANGLE_DETECT_BIT),
+            fun2: None,
+            home_flag: Some(bits::HOME_FLAG_TANGLE_DETECT_SUPPORTED_BIT),
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer has on/off nozzle blob detection, with its provenance.
+    ///
+    /// Reported by `fun` bit 13, else `home_flag` bit 25. No model rule exists, so nothing
+    /// reported means `Assumed(false)`.
+    #[must_use]
+    pub fn nozzle_blob_detect_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: Some(bits::FUN_NOZZLE_BLOB_DETECT_BIT),
+            fun2: None,
+            home_flag: Some(bits::HOME_FLAG_NOZZLE_BLOB_DETECT_SUPPORTED_BIT),
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer has the off/on/auto smart nozzle blob detection, with its provenance.
+    ///
+    /// Reported by `fun2` bit 15 only. No model rule exists, so nothing reported means
+    /// `Assumed(false)` — always the case on P1 and A1, which send no `fun2`.
+    #[must_use]
+    pub fn smart_nozzle_blob_detect_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: Some(bits::FUN2_SMART_NOZZLE_BLOB_DETECT_BIT),
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer has non-visual air-printing detection, with its provenance.
+    ///
+    /// Reported by `home_flag` bit 29 (`DeviceManager.cpp:1099`). No model rule exists, so
+    /// nothing reported means `Assumed(false)`. BambuStudio also forces it off while the AMS
+    /// runs its AMS2/AMS-HT firmware (`DeviceManager.cpp:1100-1103`); this crate doesn't decode
+    /// which AMS firmware runs, so that override isn't applied.
+    #[must_use]
+    pub fn air_print_detect_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: None,
+            home_flag: Some(bits::HOME_FLAG_AIR_PRINT_DETECT_SUPPORTED_BIT),
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer can purify chamber air at print end, with its provenance.
+    ///
+    /// Reported by `fun2` bit 4 only. No model rule exists, so nothing reported means
+    /// `Assumed(false)`.
+    #[must_use]
+    pub fn air_purification_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: Some(bits::FUN2_AIR_PURIFICATION_BIT),
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// The shared auto-recovery and Filament Backup model rule.
+    fn print_options_rule(&self, ctx: &QuirkContext) -> Support {
+        self.print_options_min_firmware
+            .map_or(Support::Inferred(true), |min| {
+                firmware_gate(ctx, min, Support::Assumed(true))
+            })
     }
 
     /// Returns true if the model has a fire alarm buzzer module: H2S, H2D, H2D Pro, H2C (per pybambu).
@@ -1096,6 +1229,54 @@ mod tests {
     // Per-model quirks assertion tests
 
     #[test]
+    fn test_print_option_support_precedence() {
+        let p1s = PrinterModel::P1S.quirks();
+        // Nothing reported: the model rule.
+        assert_eq!(
+            p1s.prompt_sound_support(&QuirkContext::empty()),
+            Support::Inferred(false)
+        );
+        // home_flag bit 18 reports it where the model rule says no.
+        let ctx = QuirkContext::empty().with_home_flag(Some(1 << 18));
+        assert_eq!(p1s.prompt_sound_support(&ctx), Support::Reported(true));
+        // A present `fun` overrides home_flag, in both directions.
+        let ctx = ctx.with_fun(Some("0"));
+        assert_eq!(p1s.prompt_sound_support(&ctx), Support::Reported(false));
+        let ctx = QuirkContext::empty().with_fun(Some("100"));
+        assert_eq!(p1s.prompt_sound_support(&ctx), Support::Reported(true));
+        // No model rule: assumed absent until reported.
+        assert_eq!(
+            p1s.filament_tangle_detect_support(&QuirkContext::empty()),
+            Support::Assumed(false)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("10"));
+        assert_eq!(p1s.air_purification_support(&ctx), Support::Reported(true));
+        assert_eq!(
+            p1s.smart_nozzle_blob_detect_support(&ctx),
+            Support::Reported(false)
+        );
+    }
+
+    #[test]
+    fn test_print_options_firmware_gate_is_x1_only() {
+        let x1c = PrinterModel::X1C.quirks();
+        assert_eq!(
+            x1c.auto_recovery_support(&QuirkContext::empty()),
+            Support::Assumed(true)
+        );
+        let old = QuirkContext::empty().with_firmware(Some("01.00.00.00"));
+        assert_eq!(x1c.filament_backup_support(&old), Support::Inferred(false));
+        assert_eq!(
+            PrinterModel::X1.quirks().auto_recovery_support(&old),
+            Support::Inferred(false)
+        );
+        assert_eq!(
+            PrinterModel::X1E.quirks().auto_recovery_support(&old),
+            Support::Inferred(true)
+        );
+    }
+
+    #[test]
     fn test_a1_quirks() {
         let q = PrinterModel::A1.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
@@ -1115,7 +1296,10 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 100);
         assert!(!q.supports_airduct_mode());
-        assert!(q.supports_prompt_sound());
+        assert!(
+            q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1139,7 +1323,10 @@ mod tests {
         assert!(!q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
-        assert!(q.supports_prompt_sound());
+        assert!(
+            q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1163,7 +1350,10 @@ mod tests {
         assert!(!q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
-        assert!(q.supports_prompt_sound());
+        assert!(
+            q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1188,7 +1378,10 @@ mod tests {
             assert_eq!(q.nozzle_temp_max(), 300);
             assert_eq!(q.bed_temp_max(None), 100);
             assert!(!q.supports_airduct_mode());
-            assert!(!q.supports_prompt_sound());
+            assert!(
+                !q.prompt_sound_support(&QuirkContext::empty())
+                    .is_supported()
+            );
             assert!(!q.has_buzzer());
         }
     }
@@ -1213,7 +1406,10 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 110);
         assert!(q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1239,7 +1435,10 @@ mod tests {
         assert_eq!(q.bed_temp_max(Some(false)), 120);
         assert_eq!(q.bed_temp_max(None), 110);
         assert!(!q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1278,7 +1477,10 @@ mod tests {
         assert!(q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1301,7 +1503,10 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 120);
         assert!(q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(!q.has_buzzer());
     }
 
@@ -1323,7 +1528,10 @@ mod tests {
         assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(q.has_buzzer());
     }
 
@@ -1341,7 +1549,10 @@ mod tests {
         assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(q.has_buzzer());
     }
 
@@ -1358,7 +1569,10 @@ mod tests {
         assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(q.has_buzzer());
     }
 
@@ -1376,7 +1590,10 @@ mod tests {
         assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
-        assert!(!q.supports_prompt_sound());
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
         assert!(q.has_buzzer());
     }
 

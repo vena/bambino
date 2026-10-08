@@ -37,3 +37,11 @@ mod fun_field;
 mod misc;
 #[path = "tests/nozzle.rs"]
 mod nozzle;
+
+#[test]
+fn test_print_key_count_counts_only_the_print_object() {
+    let payload = br#"{"print":{"home_flag":1,"cfg":"0","nested":{"a":1,"b":2}},"info":{"x":1}}"#;
+    assert_eq!(print_key_count(payload), Some(3));
+    assert_eq!(print_key_count(br#"{"system":{"a":1}}"#), None);
+    assert_eq!(print_key_count(b"not json"), None);
+}

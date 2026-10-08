@@ -4,9 +4,12 @@
 //! `client_test.rs` (see issue #35).
 
 use bambino::client::HeaterTemps;
+use bambino::client::{AirPurificationMode, NozzleBlobDetectMode};
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
+use bambino::error::Error;
 use bambino::models::PrinterModel;
+use bambino::quirks::Support;
 
 use crate::common::client::{
     SERIAL, X1_SERIAL, connect_test_mqtt, spawn_broker, test_identity, with_broker,
@@ -1113,6 +1116,95 @@ async fn test_command_echo_is_unknown_and_leaves_the_cache_untouched() {
         "a command echo must not clobber the cached gcode_state"
     );
 
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// A full status report: `home_flag` plus enough filler keys to clear `FULL_REPORT_MIN_KEYS`.
+fn full_report(home_flag: u32) -> String {
+    let filler: String = (0..31).map(|i| format!(r#","filler{i}":0"#)).collect();
+    format!(r#"{{"print":{{"home_flag":{home_flag}{filler}}}}}"#)
+}
+
+/// `print_option` settings read a full report's `home_flag` until a `cfg` arrives, then `cfg`
+/// alone; a heartbeat's partial `home_flag` changes nothing; a reported support bit lifts the
+/// setter gate past the model rule.
+#[tokio::test]
+async fn test_print_option_settings_read_cfg_over_home_flag() {
+    // home_flag: Filament Backup on (10), prompt sound on (17) and supported (18), tangle
+    // detection supported (19) and on (20), air-print detection on (28).
+    const HOME_FLAG: u32 = 1 << 10 | 1 << 17 | 1 << 18 | 1 << 19 | 1 << 20 | 1 << 28;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, full_report(HOME_FLAG).as_bytes())
+                .await;
+            // A heartbeat: too few keys to be a full report, and its home_flag is partial.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":0}}"#)
+                .await;
+            // cfg: auto-recovery on (16), smart blob detection auto (43-44 = 2), air
+            // purification outside (36-37 = 2); prompt sound, backup and tangle off.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"cfg":"0x102000010000"}}"#)
+                .await;
+            let sound = read_publish_payload(&mut server_stream).await;
+            assert_eq!(sound["print"]["command"], "print_option");
+            assert_eq!(sound["print"]["sound_enable"], false);
+        })
+        .await;
+    assert_eq!(client.prompt_sound_enabled(), None);
+    assert_eq!(
+        client.capabilities().prompt_sound_support(),
+        Support::Inferred(false)
+    );
+
+    client.poll_telemetry().await.expect("home_flag report");
+    client.poll_telemetry().await.expect("heartbeat");
+    assert_eq!(client.prompt_sound_enabled(), Some(true));
+    assert_eq!(client.filament_backup_enabled(), Some(true));
+    assert_eq!(client.filament_tangle_detect_enabled(), Some(true));
+    assert_eq!(client.auto_recovery_enabled(), Some(false));
+    assert_eq!(client.air_print_detect_enabled(), Some(true));
+    assert_eq!(client.smart_nozzle_blob_detect_mode(), None);
+    assert_eq!(client.air_purification_mode(), None);
+    let caps = client.capabilities();
+    assert_eq!(caps.prompt_sound_support(), Support::Reported(true));
+    assert_eq!(
+        caps.filament_tangle_detect_support(),
+        Support::Reported(true)
+    );
+    assert_eq!(caps.air_print_detect_support(), Support::Reported(false));
+    assert_eq!(caps.air_purification_support(), Support::Assumed(false));
+    assert!(matches!(
+        client
+            .set_air_purification(AirPurificationMode::Inside)
+            .await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("cfg report");
+    assert_eq!(client.prompt_sound_enabled(), Some(false));
+    assert_eq!(client.filament_backup_enabled(), Some(false));
+    assert_eq!(client.filament_tangle_detect_enabled(), Some(false));
+    assert_eq!(client.auto_recovery_enabled(), Some(true));
+    // cfg doesn't carry air-print detection, so home_flag still answers it.
+    assert_eq!(client.air_print_detect_enabled(), Some(true));
+    assert_eq!(
+        client.smart_nozzle_blob_detect_mode(),
+        Some(NozzleBlobDetectMode::Auto)
+    );
+    assert_eq!(
+        client.air_purification_mode(),
+        Some(AirPurificationMode::Outside)
+    );
+
+    // The P1S model rule says no prompt sound, but this printer reported support.
+    client
+        .set_prompt_sound(false)
+        .await
+        .expect("reported support must lift the model rule");
     broker_task.await.expect("Broker task panicked");
 }
 

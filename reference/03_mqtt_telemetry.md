@@ -130,10 +130,10 @@ The `home_flag` integer field is a packed bitmask encoding printer hardware stat
 | 25 | `0x02000000` | Supports nozzle blob detect | Hardware supports nozzle blob detection |
 | 26 | `0x04000000` | `installed_plus` | Purpose unknown — present in OrcaSlicer and pybambu (`INSTALLED_PLUS`) but not publicly documented. OrcaSlicer references it as `is_support_p1s_plus`, suggesting P1S-specific |
 | 27 | `0x08000000` | `supported_plus` | Purpose unknown — paired with bit 26 in OrcaSlicer and pybambu (`SUPPORTED_PLUS`) |
-| 28 | `0x10000000` | Air print (spaghetti) status | Air print / spaghetti detection is currently enabled (model-specific: requires XCam AI engine; disabled on AMS-HT firmware) |
-| 29 | `0x20000000` | Supports air print detect | Hardware supports air print / spaghetti detection |
+| 28 | `0x10000000` | Non-visual air-printing detection enabled | Set by `print_option` `air_print_detect`. Not the camera spaghetti/air-printing detector: BambuStudio's UI calls it the *non-visual* detector (`PrintOptionsDialog.cpp`, `m_cb_non_visual_airprinting_detection`), and it ships on A1/A1 Mini, which have no AI camera (`air_print_detection_position: "ams_setting"` in `N1.json`/`N2S.json`) |
+| 29 | `0x20000000` | Supports non-visual air-printing detection | BambuStudio forces this false while the AMS runs its AMS2/AMS-HT firmware (`DeviceManager.cpp:1099-1103`) |
 
-The "supports" vs "enabled" bit pairs (e.g., 19/20, 25/24, 29/28) follow a pattern where the higher bit indicates hardware capability and the lower bit indicates user-toggled state. Detection features (tangle, blob, air print) are model-specific — they require XCam AI hardware present on X1, P1S, and newer platforms. See `MODEL_MATRIX.md` for per-model capability availability.
+The "supports" vs "enabled" bit pairs (e.g., 19/20, 25/24, 29/28) follow a pattern where the higher bit indicates hardware capability and the lower bit indicates user-toggled state. Detection features (tangle, blob, air print) are model-specific; air-printing detection is non-visual and needs no camera (bit 28 above). The `print_option` section below lists every setting's value and support bits. See `MODEL_MATRIX.md` for per-model capability availability.
 
 **Axis homing state (bits 0–2):** During a `G28` homing sequence, bits are set progressively as each axis completes. On a P1S the observed sequence is: all three bits clear (unhomed) → bits 0–1 set (X and Y homed, Z pending) → all three bits set (fully homed). The firmware does not reject motion gcode when axes are unhomed — the motion controller executes regardless. Clients must check bits 0–2 before dispatching motion commands and block or warn at the application layer (matching OrcaSlicer's behavior). See [REF-MOTO-GCODE] for homing safety constraints.
 
@@ -241,9 +241,13 @@ Bit positions confirmed against BambuStudio's `/*cfg*/` block (`src/slic3r/GUI/D
 | 20-21 | Door-open check state |
 | 22 | Prompt sound allowed |
 | 23 | Filament tangle detection |
+| 24 | Nozzle blob detection (v1) |
 | 25 | Upgrade kit installed |
 | 32-33 | Idle heating protection |
+| 36-37 | Air purification at print end (`0` disabled, `1` inside, `2` outside) |
+| 38-39 | Snapshot control (read-only here; set by `ipcam_cap_pic_set`; `0` and `3` mean unsupported) |
 | 42 | Liveview preview supported |
+| 43-44 | Smart nozzle blob detection (v2) mode (`0` off, `1` on, `2` auto) |
 
 Bit 18's "AMS Filament Backup" name is the feature's user-facing label: BambuStudio stores the bit as `SetAutoRefillEnabled(...)` and `DevFilaSystem::CanShowFilamentBackup()` gates the "Filament Backup" UI on that same `IsAutoRefillEnabled()`. bambuddy reads the identical position in `parse_ams_filament_backup_from_cfg` (`backend/app/services/bambu_mqtt.py`), citing `get_flag_bits(cfg, 18)`.
 
@@ -651,8 +655,8 @@ Controls the target routing of the internal air circulation flaps.
 
 #### Sound & Alerting Commands
 
-##### Configure Prompt Sound Enablement (`print_option`)
-Configures whether the printer's onboard speakers emit structural sound notifications during user-facing events. Supported on: `A1`, `A1 Mini`, `A2L`.
+##### Printer Settings (`print_option`)
+One command sets eight persistent printer settings. Each request carries `command`, `sequence_id` and exactly one setting field:
 ```json
 {
   "print": {
@@ -662,6 +666,27 @@ Configures whether the printer's onboard speakers emit structural sound notifica
   }
 }
 ```
+
+| Setting | Field and value | BambuStudio sender | Evidence |
+| --- | --- | --- | --- |
+| Prompt sound | `sound_enable`: bool | `DevPrintOptions::command_set_prompt_sound` | BambuStudio only |
+| Step-loss auto-recovery | `option`: int **and** `auto_recovery`: bool | `MachineObject::command_set_printing_option` | BambuStudio and bambuddy |
+| AMS Filament Backup | `auto_switch_filament`: bool | `MachineObject::command_ams_switch_filament` | BambuStudio and bambuddy |
+| Filament tangle detection | `filament_tangle_detect`: bool | `DevPrintOptions::command_set_filament_tangle_detect` | BambuStudio only |
+| Nozzle blob detection (v1) | `nozzle_blob_detect`: bool | `DevPrintOptions::command_nozzle_blob_detect` | BambuStudio only |
+| Smart nozzle blob detection (v2) | `nozzle_blob_detect_v2`: int, `0` off, `1` on, `2` auto | `DevPrintOptions::command_smart_nozzle_blob_detect_mode` | BambuStudio only |
+| Non-visual air-printing detection | `air_print_detect`: bool | `MachineObject::command_ams_air_print_detect` | BambuStudio only |
+| Air purification at print end | `air_purification`: int, `0` disabled, `1` inside, `2` outside | `DevPrintOptions::command_set_purify_air_at_print_end` | BambuStudio only |
+
+"BambuStudio only" is single-source, but BambuStudio is the vendor's client and the sender itself, so the wire shape is not in doubt. bambuddy's `_set_print_option` (`backend/app/services/bambu_mqtt.py`) sends only `auto_recovery` and `auto_switch_filament`.
+
+**`auto_recovery` sends two fields.** BambuStudio sends `"option": (int)auto_recovery << PRINT_OP_AUTO_RECOVERY` (`PRINT_OP_AUTO_RECOVERY = 0`, `DeviceManager.hpp:185`) alongside `"auto_recovery": bool`; bambuddy sends only `auto_recovery`. bambino follows BambuStudio.
+
+**Air purification here is unrelated to `close_air_filt`**, the error dialog's one-shot "stop purifying now".
+
+**Reading a setting back.** The ack reports success even on a model without the feature (see the ack table), so only telemetry confirms a change. Each setting's value is in a `cfg` bit (table above) and/or a `home_flag` bit: prompt sound `cfg` 22 / `home_flag` 17, auto-recovery 16 / 4, Filament Backup 18 / 10, tangle detection 23 / 20, nozzle blob v1 24 / 24, nozzle blob v2 `cfg` 43-44 only, air purification `cfg` 36-37 only, air-printing detection `home_flag` 28 only. Once a printer has sent any `cfg`, read `cfg` alone for every setting it carries; before that, read `home_flag`, and only from a full status report (more than 30 `print` keys, bambuddy's test): H2D also sends small heartbeat frames whose `home_flag` is partial (bits 8-9 clear with a card inserted). The same applies to the `home_flag` support bits below. Only status frames count: a `project_file` ack echoes the request's own `"cfg": "0"` (bambuddy #3040). The printer can keep reporting the old value for about 3 s after a change: BambuStudio ignores telemetry for a setting for `HOLD_TIME_3SEC` after sending, and bambuddy's `_xcam_hold_start` comment says "the next 1-2 push_status frames may still carry the printer's OLD cfg for ~3 s".
+
+**Support.** BambuStudio's support bits (`DevPrintOptions.cpp` `ParseDetectionV1_0`; a non-empty `fun` overrides `home_flag`): prompt sound `fun` 8 / `home_flag` 18; tangle detection `fun` 9 / `home_flag` 19; nozzle blob v1 `fun` 13 / `home_flag` 25; nozzle blob v2 `fun2` 15; air purification `fun2` 4; air-printing detection `home_flag` 29. Auto-recovery and Filament Backup have no telemetry bit: `support_auto_recovery_step_loss` and `support_filament_backup` in `resources/printers/*.json` are true on every model, on X1/X1C (`BL-P001`/`BL-P002`) only from firmware `01.01.01.00`. Prompt sound's per-model `support_prompt_sound` is true only on `N1`, `N2S` and `N9` (A1 Mini, A1, A2L).
 
 ##### Configure Enclosure Buzzer Mode (`buzzer_ctrl`)
 Controls the operating behavior of the physical fire alarm buzzer module. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`.

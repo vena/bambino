@@ -57,10 +57,18 @@ const X1_AMS_POOL: AmsPoolComposition = AmsPoolComposition::Shared {
     ams_lite: AmsLiteSlot::NotSupported,
 };
 
+/// First X1/X1C release with step-loss auto-recovery and Filament Backup.
+///
+/// BambuStudio's `BL-P001.json`/`BL-P002.json` set `support_auto_recovery_step_loss` and
+/// `support_filament_backup` false at `00.00.00.00` and true from `01.01.01.00`; every other
+/// model's profile has both from its first release.
+const X1C_PRINT_OPTIONS_MIN_FIRMWARE: &str = "01.01.01.00";
+
 /// X1 Carbon: no active chamber heater, voltage-dependent bed ceiling.
 pub(crate) const X1C: ModelQuirks = ModelQuirks {
     door: DoorSensor::HomeFlag,
     chamber_temperature_sensor: true,
+    print_options_min_firmware: Some(X1C_PRINT_OPTIONS_MIN_FIRMWARE),
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(X1_Z_MAX),

@@ -1,9 +1,11 @@
-//! Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
+//! Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` settings).
 
 use serde::Serialize;
 
 use super::ClampedTaskId;
-use crate::types::control::{BuzzerMode, LedNode, LightMode};
+use crate::types::control::{
+    AirPurificationMode, BuzzerMode, LedNode, LightMode, NozzleBlobDetectMode,
+};
 
 /// Chamber illumination and toolhead LED control configurations.
 #[derive(Debug, Clone, Serialize)]
@@ -161,6 +163,228 @@ impl PromptSoundRequest {
                 command: Self::COMMAND,
                 sound_enable: enable,
                 sequence_id: sequence_id.into(),
+            },
+        }
+    }
+}
+
+/// Bit of `print_option`'s `option` field carrying auto-recovery, BambuStudio's `PRINT_OP_AUTO_RECOVERY` (`DeviceManager.hpp:185`).
+pub(crate) const PRINT_OP_AUTO_RECOVERY: u32 = 0;
+
+/// Turns step-loss auto-recovery on or off.
+///
+/// Carries the setting twice, as BambuStudio's `command_set_printing_option` does
+/// (`DeviceManager.cpp:1832-1842`): as bit `PRINT_OP_AUTO_RECOVERY` (0) of `option` and as
+/// `auto_recovery`. bambuddy sends only `auto_recovery`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AutoRecoveryPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// The setting as a bit of the legacy option bitmask.
+    pub option: u32,
+    /// Whether auto-recovery is enabled.
+    pub auto_recovery: bool,
+}
+
+/// Enables or disables step-loss auto-recovery.
+pub type AutoRecoveryRequest = super::Print<AutoRecoveryPayload>;
+
+impl AutoRecoveryRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request enabling or disabling step-loss auto-recovery.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: AutoRecoveryPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                option: u32::from(enable) << PRINT_OP_AUTO_RECOVERY,
+                auto_recovery: enable,
+            },
+        }
+    }
+}
+
+/// Turns AMS Filament Backup (auto-refill from a matching spool) on or off.
+#[derive(Debug, Clone, Serialize)]
+pub struct FilamentBackupPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether Filament Backup is enabled.
+    pub auto_switch_filament: bool,
+}
+
+/// Enables or disables AMS Filament Backup.
+pub type FilamentBackupRequest = super::Print<FilamentBackupPayload>;
+
+impl FilamentBackupRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request enabling or disabling Filament Backup.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: FilamentBackupPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                auto_switch_filament: enable,
+            },
+        }
+    }
+}
+
+/// Turns filament tangle detection on or off.
+#[derive(Debug, Clone, Serialize)]
+pub struct FilamentTangleDetectPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether tangle detection is enabled.
+    pub filament_tangle_detect: bool,
+}
+
+/// Enables or disables filament tangle detection.
+pub type FilamentTangleDetectRequest = super::Print<FilamentTangleDetectPayload>;
+
+impl FilamentTangleDetectRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request enabling or disabling filament tangle detection.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: FilamentTangleDetectPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                filament_tangle_detect: enable,
+            },
+        }
+    }
+}
+
+/// Turns nozzle blob detection (the original, on/off form) on or off.
+#[derive(Debug, Clone, Serialize)]
+pub struct NozzleBlobDetectPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether nozzle blob detection is enabled.
+    pub nozzle_blob_detect: bool,
+}
+
+/// Enables or disables nozzle blob detection.
+pub type NozzleBlobDetectRequest = super::Print<NozzleBlobDetectPayload>;
+
+impl NozzleBlobDetectRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request enabling or disabling nozzle blob detection.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: NozzleBlobDetectPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                nozzle_blob_detect: enable,
+            },
+        }
+    }
+}
+
+/// Sets the smart nozzle blob detection mode (off, on, or auto).
+#[derive(Debug, Clone, Serialize)]
+pub struct SmartNozzleBlobDetectPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// The mode's code — see [`NozzleBlobDetectMode::code`].
+    pub nozzle_blob_detect_v2: u8,
+}
+
+/// Sets the smart nozzle blob detection mode.
+pub type SmartNozzleBlobDetectRequest = super::Print<SmartNozzleBlobDetectPayload>;
+
+impl SmartNozzleBlobDetectRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request setting the smart nozzle blob detection mode.
+    pub fn new(mode: NozzleBlobDetectMode, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: SmartNozzleBlobDetectPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                nozzle_blob_detect_v2: mode.code(),
+            },
+        }
+    }
+}
+
+/// Turns non-visual air-printing detection on or off.
+///
+/// Not the camera's AI air-printing detector, which `xcam_control_set` drives.
+#[derive(Debug, Clone, Serialize)]
+pub struct AirPrintDetectPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether air-printing detection is enabled.
+    pub air_print_detect: bool,
+}
+
+/// Enables or disables non-visual air-printing detection.
+pub type AirPrintDetectRequest = super::Print<AirPrintDetectPayload>;
+
+impl AirPrintDetectRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request enabling or disabling air-printing detection.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: AirPrintDetectPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                air_print_detect: enable,
+            },
+        }
+    }
+}
+
+/// Sets where chamber air is purified at the end of a print.
+#[derive(Debug, Clone, Serialize)]
+pub struct AirPurificationPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// The mode's code — see [`AirPurificationMode::code`].
+    pub air_purification: u8,
+}
+
+/// Sets the end-of-print air purification mode.
+pub type AirPurificationRequest = super::Print<AirPurificationPayload>;
+
+impl AirPurificationRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request setting the end-of-print air purification mode.
+    pub fn new(mode: AirPurificationMode, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: AirPurificationPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                air_purification: mode.code(),
             },
         }
     }
