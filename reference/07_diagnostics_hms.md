@@ -79,6 +79,8 @@ module_id = (attr >> 24) & 0xFF
 #### Real Hardware Faults vs. Non-Error Status Codes
 The printer publishes both hardware failures and non-error state indications (such as axis homing progress) within the `print_error` and `hms` registers. For `print_error`, non-error state indications are represented by low-word values less than `0x4000` (16384 decimal); only codes with a low 16-bit value `>= 0x4000` represent actual faults. For `hms` entries specifically, the check must compare the **full 32-bit `code`** against `0x4000`, not just its low 16 bits (BUG-109 — confirmed against BambuStudio's bundled `resources/hms/hms_en_093.json` fault catalog: 4591/4592 cataloged genuine `hms[]` faults have `code_low < 0x4000`, so a low-word-only check misclassifies nearly every real fault as a non-fault status step).
 
+**A `print_error` has no level field; the first hex digit of its low word stands in for one.** `0x4xxx` stops the task, `0x8xxx` pauses it, and `0xCxxx` is a prompt, which map onto the `hms[]` alert levels 1 (error), 2 (warning) and 3 (notification). Anything else is an invalid level. This is consistent with the `>= 0x4000` fault threshold above. *(Verification source: bambuddy `hms_errors.py` `alert_level_from_print_error`, issue #2728; single source — BambuStudio has no equivalent derivation.)*
+
 ##### User-Action Echoes
 During user-initiated print cancellations, the firmware raises specific confirmation codes (such as `0300_400C` and `0500_400E`) to confirm cancellation has completed. These are status confirmations, not active faults, and must not be treated as actual system errors.
 
@@ -175,6 +177,8 @@ BambuStudio is looser — `CalibUtils::get_pa_k_n_value_by_cali_idx` scans the w
 Note this is the *same* flow-code vocabulary as `NozzleInfo`'s `type` key on H2-generation printers, but `type` reports nozzle **material** on legacy printers — see §3's note on that key.
 
 *(Verification sources: bambuddy issue #3044 and commit `e5a18bf5`.)*
+
+**A tray `cali_idx` of `-1` can mean "selection lost", not only "never calibrated".** An X1C power-cycled mid-print came back with every tray at `cali_idx: -1` while spools, tags and remain% were unchanged. A consumer that detects AMS changes only from tray type, tag or remain% will miss this and print on the default K. *(Verification source: bambuddy `kprofile_drift.py`, issue #3219; single observation.)*
 
 #### Calibration Profiles Database Telemetry Schema (The Read Stream)
 The printer returns the complete onboard profile list over the report topic (`device/{serial_number}/report`). Parsers must inspect the payload to extract the `"filaments"` array nested inside the query response envelope:

@@ -503,7 +503,10 @@ pub struct AmsTray {
     /// Flow rate calibration N factor.
     pub n: Option<i32>,
 
-    /// Calibration index (-1 if uncalibrated).
+    /// Calibration index; -1 means no K profile is selected.
+    ///
+    /// -1 is not only "never calibrated": an X1C power-cycled mid-print came back with every
+    /// tray at -1 while the spools were unchanged (bambuddy #3219).
     pub cali_idx: Option<i32>,
 
     /// Multi-color columns array (e.g. `["000000FF"]`).

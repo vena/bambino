@@ -40,6 +40,14 @@ Status telemetry structures, string emission anomalies, and task-ID overflow lim
 
 The last two are the ones most easily missed: bare subtask names with no `/usr/` path and **no `auto_` prefix**, so a filter keyed on the prefix or the path lets them through as user prints. Match the four **exactly**, after normalizing path, suffix and case — never on a `pa_` stem, or a user's own `pa_bracket.3mf` gets swallowed with them. *(Verification source: bambuddy issue #2957 and its follow-ups.)*
 
+**The printer does not echo a dispatched `subtask_name` verbatim.** A consumer matching the echo against what it sent must allow for three things:
+
+*   **Spaces become `_`**, including a leading or trailing space: `Part ` is echoed as `Part_`.
+*   **Long names are truncated** at about 100 characters and marked with a trailing `...`. The cut is not a fixed character count (a name with multibyte characters came back at 98), so match the marker, not a length.
+*   **A print started from the printer's own screen** reports the file's full name, `.3mf` extension included, as `subtask_name`. A dispatched print reports whatever the client sent.
+
+*(Verification source: bambuddy `main.py` `_normalise_subtask_name` / `_SUBTASK_TRUNCATION_MARKER`, issues #2829, #3241 and #3009; single source.)*
+
 ```json
 {
   "print": {
@@ -108,7 +116,7 @@ The `home_flag` integer field is a packed bitmask encoding printer hardware stat
 | 5 | `0x00000020` | Camera recording | Timelapse/recording is active |
 | 7 | `0x00000080` | AMS calibrate remaining | AMS remaining filament calibration enabled |
 | 8–9 | `0x00000300` | SD card state | 2-bit value (`get_flag_bits(flag, 8, 2)`): `0`=no card, `1`=normal, `2`=abnormal, `3`=read-only (BUG-123; confirmed against BambuStudio's `DeviceManager.cpp:1092` and pybambu's `const.py:265-266`/`models.py:3408-3412` — the top-level `sdcard` boolean can never report a degraded state, only this bitmask can) |
-| 10 | `0x00000400` | AMS auto-switch | AMS automatic filament switching enabled |
+| 10 | `0x00000400` | AMS Filament Backup | Same setting as `cfg` bit 18 (auto-refill), and the only source for it on families that never send `cfg` — see the `cfg` table below |
 | 15 | `0x00008000` | Supports flow calibration | Hardware supports flow calibration (false on H2D despite firmware reporting — OrcaSlicer overrides) |
 | 16 | `0x00010000` | Supports PA calibration | Hardware supports pressure advance calibration (false on P1 series despite firmware reporting — OrcaSlicer overrides) |
 | 17 | `0x00020000` | XCam prompt sound enabled | XCam prompt sound is currently enabled |
@@ -239,7 +247,9 @@ Bit positions confirmed against BambuStudio's `/*cfg*/` block (`src/slic3r/GUI/D
 
 Bit 18's "AMS Filament Backup" name is the feature's user-facing label: BambuStudio stores the bit as `SetAutoRefillEnabled(...)` and `DevFilaSystem::CanShowFilamentBackup()` gates the "Filament Backup" UI on that same `IsAutoRefillEnabled()`. bambuddy reads the identical position in `parse_ams_filament_backup_from_cfg` (`backend/app/services/bambu_mqtt.py`), citing `get_flag_bits(cfg, 18)`.
 
-**A1 and A1 Mini omit `cfg` entirely** (bambuddy records this in the same function), so an absent `cfg` is "unknown", never "every setting off".
+**P1P, P1S, A1 and A1 Mini omit `cfg` entirely**, so an absent `cfg` is "unknown", never "every setting off". bambino's own full P1S dump (`tests/mocks/P1S.json`, 63 `print` keys) has no `cfg`. The only `cfg` a P1S capture shows is a `project_file` ack echoing the request's own `"cfg": "0"` back, which is not printer state.
+
+On those families Filament Backup is read from **`home_flag` bit 10** instead. BambuStudio's `parse_home_flag` sets `SetAutoRefillEnabled((flag >> 10) & 0x1)` for every family (`DeviceManager.cpp:1080`), and bambuddy's `parse_ams_filament_backup_from_home_flag` reads the same bit, recording that on printers sending both, the two bits agreed in every captured snapshot (bambuddy #3259). Two caveats from bambuddy: read it only from a full status report, since H2D also sends small heartbeat frames with a partial `home_flag`; and on a printer that sends `cfg`, keep reading `cfg` alone.
 
 #### Developer LAN Mode Bitmask Evaluation
 Developer LAN Mode is evaluated via the `fun` telemetry field bit `0x20000000` (which represents the `MQTT_SIGNATURE_REQUIRED` flag). The boolean evaluation is inverted:
@@ -415,6 +425,8 @@ Queues a raw G-code string directly to the printer's motion-controller execution
 
 ##### Submit Print Job (project_file)
 Initiates print execution of a sliced `.3mf` file currently residing on the MicroSD card.
+
+**`param` must name a plate the archive actually contains.** A single-plate export cut out of a larger project keeps its *original* plate number, so a client that defaults to `Metadata/plate_1.gcode` can name a plate that isn't there. The printer acks that command, can't find the G-code, and wedges. Read the plate number from the archive's own `Metadata/plate_<N>.gcode` members. *(Verification source: bambuddy `threemf_tools.default_plate_number`, issue #2947; single source. bambino has no default here — `PrintJobConfig::plate_gcode_path` is caller-supplied.)*
 
 **BUG-119**: `flow_cali`/`profile_id`/`project_id`/`task_id` below were previously missing from bambino's payload entirely — bambuddy cites a real production incident (#1478) where a consumer relying on the wrong one of `flow_cali`/`extrude_cali_flag` silently skipped calibration, and a task-continuation firmware bug (#1042/#1011) requiring a fresh `project_id`/`task_id` per submission (not hardcoded `"0"`). `subtask_id`/`project_id`/`task_id` share one value, minted fresh per submission.
 ```json

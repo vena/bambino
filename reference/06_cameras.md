@@ -94,3 +94,6 @@ P2S printers running firmware `01.02.00.00` suffer from two distinct RTSP stream
 1.  **Slow Keyframe Pacing**: The initial metadata packet is too small for standard format probing. Demuxers must be configured with a larger probe size (at least `1,048,576` bytes / 1MB) and extended format analysis duration to correctly identify the stream structure.
 2.  **Non-Advancing RTP Timestamps**: Every frame is erroneously stamped with a static timestamp of approximately `0.06` seconds. If the demuxer utilizes Constant Frame Rate (CFR) conversion with default stream-embedded timestamps, it will interpret every frame after the first as a duplicate and drop them, causing the video stream to freeze.
     *   *Mitigation*: The stream must be processed using the wall-clock packet arrival times rather than trusting the stream-embedded RTP clock ticks.
+
+#### X1C RTSP Sessions End After About a Minute
+A stock X1C ends every RTSP session after roughly one minute. A long-lived viewer must reconnect, and any reconnect limit must count *consecutive* failures (reset by a session that delivered frames), not reconnects over the stream's lifetime — a lifetime cap stops an X1C live view for good after about half an hour. *(Verification source: bambuddy `camera_profiles.py` `rtsp_reconnect_max`; single source.)*
