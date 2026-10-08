@@ -69,6 +69,7 @@ pub(crate) const X1C: ModelQuirks = ModelQuirks {
     door: DoorSensor::HomeFlag,
     chamber_temperature_sensor: true,
     print_options_min_firmware: Some(X1C_PRINT_OPTIONS_MIN_FIRMWARE),
+    store_sent_files: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(X1_Z_MAX),

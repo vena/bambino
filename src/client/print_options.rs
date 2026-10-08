@@ -1,4 +1,8 @@
-//! The `print_option` printer settings: a gated setter and a cached getter for each.
+//! Persistent printer settings: a gated setter and a cached getter for each.
+//!
+//! Covers the eight `print_option` settings plus the door-open check (`set_door_stat`), idle
+//! heating protection (`set_against_continued_heating_mode`) and storing sent files
+//! (`print_cache_set`), which share the same `print.cfg` read-back.
 //!
 //! Every `print_option` ack reports success, even on a model without the feature
 //! [REF-MQTT-TELEMETRY], so the ack proves nothing. Each setter therefore refuses up front
@@ -19,8 +23,13 @@ use crate::mqtt::commands::{
     FilamentTangleDetectRequest, NozzleBlobDetectRequest, PromptSoundRequest,
     SmartNozzleBlobDetectRequest,
 };
+use crate::mqtt::commands::{
+    DoorOpenCheckRequest, IdleHeatingProtectionRequest, StoreSentFilesRequest,
+};
 use crate::quirks::Support;
-use crate::types::control::{AirPurificationMode, NozzleBlobDetectMode};
+use crate::types::control::{
+    AirPurificationMode, DoorOpenCheck, IdleHeatingProtection, NozzleBlobDetectMode,
+};
 use crate::types::telemetry::bits::{self, SettingBits};
 
 use super::hardware::require;
@@ -235,6 +244,69 @@ where
             .await
     }
 
+    /// Sets what the printer does when its door opens mid-print.
+    ///
+    /// Confirm with [`door_open_check()`](Self::door_open_check) after the settle window
+    /// described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::door_open_check_support`](super::Capabilities::door_open_check_support)
+    /// is `false`.
+    pub async fn set_door_open_check(
+        &mut self,
+        mode: DoorOpenCheck,
+    ) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().door_open_check_support(),
+            "door-open check",
+        )?;
+        self.dispatch(|seq| DoorOpenCheckRequest::new(mode, seq))
+            .await
+    }
+
+    /// Turns idle heating protection on or off.
+    ///
+    /// Probably has no effect while [`idle_heating_protection()`](Self::idle_heating_protection)
+    /// reads [`IdleHeatingProtection::Unavailable`]. Refused until the printer has reported
+    /// support, so poll telemetry after connecting first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::idle_heating_protection_support`](super::Capabilities::idle_heating_protection_support)
+    /// is `false`.
+    pub async fn set_idle_heating_protection(
+        &mut self,
+        enable: bool,
+    ) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().idle_heating_protection_support(),
+            "idle heating protection",
+        )?;
+        self.dispatch(|seq| IdleHeatingProtectionRequest::new(enable, seq))
+            .await
+    }
+
+    /// Sets whether files sent from Bambu Studio, Bambu Handy and MakerWorld are kept on external storage.
+    ///
+    /// Confirm with [`store_sent_files_enabled()`](Self::store_sent_files_enabled) after the
+    /// settle window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`ModelQuirks::supports_store_sent_files`](crate::quirks::ModelQuirks::supports_store_sent_files)
+    /// is `false`.
+    pub async fn set_store_sent_files(&mut self, store: bool) -> Result<CommandHandle, Error> {
+        require(self.quirks().supports_store_sent_files(), || {
+            "storing sent files not available on this model".into()
+        })?;
+        self.dispatch(|seq| StoreSentFilesRequest::new(store, seq))
+            .await
+    }
+
     /// Whether prompt sounds are on, as last reported (`print.cfg` bit 22, else `home_flag` bit 17).
     ///
     /// `None` before any telemetry carrying the setting. See the module docs for the settle
@@ -290,6 +362,30 @@ where
     #[must_use]
     pub fn air_purification_mode(&self) -> Option<AirPurificationMode> {
         AirPurificationMode::from_code(self.cfg_field(bits::CFG_AIR_PURIFICATION)?)
+    }
+
+    /// The door-open check mode, as last reported (`print.cfg` bits 20-21).
+    ///
+    /// `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+    /// code `3`.
+    #[must_use]
+    pub fn door_open_check(&self) -> Option<DoorOpenCheck> {
+        DoorOpenCheck::from_code(self.cfg_field(bits::CFG_DOOR_OPEN_CHECK)?)
+    }
+
+    /// Idle heating protection, as last reported (`print.cfg` bits 32-33).
+    ///
+    /// `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
+    /// code `3`.
+    #[must_use]
+    pub fn idle_heating_protection(&self) -> Option<IdleHeatingProtection> {
+        IdleHeatingProtection::from_code(self.cfg_field(bits::CFG_IDLE_HEATING_PROTECTION)?)
+    }
+
+    /// Whether sent files are kept on external storage, as last reported (`print.cfg` bit 19).
+    #[must_use]
+    pub fn store_sent_files_enabled(&self) -> Option<bool> {
+        self.setting(bits::STORE_SENT_FILES)
     }
 
     /// Reads one boolean setting from the cached `cfg`, else the `home_flag` of the last full status report.

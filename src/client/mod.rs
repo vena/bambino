@@ -35,8 +35,8 @@ pub use crate::mqtt::commands::{AirductMode, IdleIgnoreScope};
 pub use crate::quirks::Axis;
 #[doc(inline)]
 pub use crate::types::control::{
-    AirPurificationMode, BuzzerMode, CalibrationOption, FanTarget, LedNode, LightMode,
-    NozzleBlobDetectMode, PrintSpeed, PrintStatus,
+    AirPurificationMode, BuzzerMode, CalibrationOption, DoorOpenCheck, FanTarget,
+    IdleHeatingProtection, LedNode, LightMode, NozzleBlobDetectMode, PrintSpeed, PrintStatus,
 };
 #[doc(inline)]
 pub use crate::types::telemetry::{HeaterTemps, NozzleTemps};

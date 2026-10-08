@@ -84,6 +84,7 @@ pub(crate) const X2D: ModelQuirks = ModelQuirks {
     auxiliary_left2_fan: true,
     airduct_mode: true,
     chamber_exhaust_fan: true,
+    store_sent_files: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume {

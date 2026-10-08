@@ -688,6 +688,17 @@ One command sets eight persistent printer settings. Each request carries `comman
 
 **Support.** BambuStudio's support bits (`DevPrintOptions.cpp` `ParseDetectionV1_0`; a non-empty `fun` overrides `home_flag`): prompt sound `fun` 8 / `home_flag` 18; tangle detection `fun` 9 / `home_flag` 19; nozzle blob v1 `fun` 13 / `home_flag` 25; nozzle blob v2 `fun2` 15; air purification `fun2` 4; air-printing detection `home_flag` 29. Auto-recovery and Filament Backup have no telemetry bit: `support_auto_recovery_step_loss` and `support_filament_backup` in `resources/printers/*.json` are true on every model, on X1/X1C (`BL-P001`/`BL-P002`) only from firmware `01.01.01.00`. Prompt sound's per-model `support_prompt_sound` is true only on `N1`, `N2S` and `N9` (A1 Mini, A1, A2L).
 
+##### Other Persistent Settings (`set_door_stat`, `set_against_continued_heating_mode`, `print_cache_set`)
+Three more settings read back from `cfg` like the `print_option` ones, each with its own command. All three are single-source (BambuStudio), and none has ack evidence.
+
+| Setting | Request | Value in `cfg` | Support |
+| --- | --- | --- | --- |
+| Door-open check | `{"system": {"command": "set_door_stat", "config": 0\|1\|2}}`: disabled, warn, pause print (`MachineObject::command_set_door_open_check`) | bits 20-21, same codes | `fun` bit 12 (`DeviceManager.cpp:4470`); bambino falls back to the model having a door sensor |
+| Idle heating protection | `{"print": {"command": "set_against_continued_heating_mode", "enable": bool}}` (`DevPrintOptions::command_set_against_continued_heating_mode`) | bits 32-33: `0` off, `1` on, `2` unavailable while heating maintenance runs (meaning from `SafetyOptionsDialog.cpp` UI text) | `fun` bit 62 (`DevPrintOptions.cpp:243`) |
+| Store sent files on external storage | `{"system": {"command": "print_cache_set", "config": bool}}` (`MachineObject::command_set_save_remote_print_file_to_storage`) | bit 19 | none reported; per-model `support_save_remote_print_file_to_storage`: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C |
+
+BambuStudio shows the door-open check in its Safety Options dialog on models with `support_safety_options: true` (X2D, P2S) and in Print Options elsewhere. Both send the same command.
+
 ##### Configure Enclosure Buzzer Mode (`buzzer_ctrl`)
 Controls the operating behavior of the physical fire alarm buzzer module. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`.
 ```json

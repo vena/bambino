@@ -211,6 +211,69 @@ impl AirPurificationMode {
     }
 }
 
+/// What the printer does when its door opens mid-print, `set_door_stat`'s `config` and `print.cfg` bits 20-21 [REF-MQTT-TELEMETRY].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum DoorOpenCheck {
+    /// Nothing.
+    Disabled,
+    /// Show a notification.
+    Warn,
+    /// Pause the print.
+    PausePrint,
+}
+
+impl DoorOpenCheck {
+    /// The wire code: `0` disabled, `1` warn, `2` pause print.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            DoorOpenCheck::Disabled => 0,
+            DoorOpenCheck::Warn => 1,
+            DoorOpenCheck::PausePrint => 2,
+        }
+    }
+
+    /// Decodes a wire code; `None` for any value outside `0..=2`.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(DoorOpenCheck::Disabled),
+            1 => Some(DoorOpenCheck::Warn),
+            2 => Some(DoorOpenCheck::PausePrint),
+            _ => None,
+        }
+    }
+}
+
+/// Idle heating protection as reported in `print.cfg` bits 32-33 [REF-MQTT-TELEMETRY].
+///
+/// Three states, though the setter takes a bool. BambuStudio's Safety Options dialog greys the
+/// toggle out on `2` with "Unavailable while heating maintenance function is on."
+/// (`SafetyOptionsDialog.cpp`, `updateIdelHeatingProtect`); that meaning comes from UI text only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IdleHeatingProtection {
+    /// Off.
+    Off,
+    /// On.
+    On,
+    /// Can't be changed while the heating maintenance function runs.
+    Unavailable,
+}
+
+impl IdleHeatingProtection {
+    /// Decodes the two-bit field; `None` for the unassigned code `3`.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(IdleHeatingProtection::Off),
+            1 => Some(IdleHeatingProtection::On),
+            2 => Some(IdleHeatingProtection::Unavailable),
+            _ => None,
+        }
+    }
+}
+
 /// Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]

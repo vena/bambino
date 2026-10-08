@@ -179,6 +179,15 @@ pub(crate) const AIR_PRINT_DETECT: SettingBits = SettingBits {
     cfg: None,
     home_flag: Some(28),
 };
+/// Store sent files on external storage; `print.cfg` only (`DeviceManager.cpp:4434-4436`).
+pub(crate) const STORE_SENT_FILES: SettingBits = SettingBits {
+    cfg: Some(19),
+    home_flag: None,
+};
+/// Low bit of `print.cfg`'s two-bit door-open check mode (bits 20-21, `DeviceManager.cpp:4438-4440`).
+pub(crate) const CFG_DOOR_OPEN_CHECK: u32 = 20;
+/// Low bit of `print.cfg`'s two-bit idle heating protection state (bits 32-33).
+pub(crate) const CFG_IDLE_HEATING_PROTECTION: u32 = 32;
 /// Low bit of `print.cfg`'s two-bit air purification mode (bits 36-37).
 pub(crate) const CFG_AIR_PURIFICATION: u32 = 36;
 /// Low bit of `print.cfg`'s two-bit smart nozzle blob detection mode (bits 43-44).
@@ -198,6 +207,10 @@ pub(crate) const FUN_PROMPT_SOUND_BIT: u32 = 8;
 pub(crate) const FUN_TANGLE_DETECT_BIT: u32 = 9;
 /// `fun` bit 13: nozzle blob detection (v1) supported.
 pub(crate) const FUN_NOZZLE_BLOB_DETECT_BIT: u32 = 13;
+/// `fun` bit 12: door-open check supported (`DeviceManager.cpp:4470`).
+pub(crate) const FUN_DOOR_OPEN_CHECK_BIT: u32 = 12;
+/// `fun` bit 62: idle heating protection supported (`DevPrintOptions.cpp:243`).
+pub(crate) const FUN_IDLE_HEATING_PROTECTION_BIT: u32 = 62;
 /// `fun2` bit 4: air purification at print end supported.
 pub(crate) const FUN2_AIR_PURIFICATION_BIT: u32 = 4;
 /// `fun2` bit 15: smart nozzle blob detection (v2) supported.

@@ -363,6 +363,7 @@ pub struct ModelQuirks {
     airduct_mode: bool,
     prompt_sound: bool,
     print_options_min_firmware: Option<&'static str>,
+    store_sent_files: bool,
     buzzer: bool,
 }
 
@@ -400,6 +401,7 @@ impl ModelQuirks {
             airduct_mode: false,
             prompt_sound: false,
             print_options_min_firmware: None,
+            store_sent_files: false,
             buzzer: false,
         }
     }
@@ -745,6 +747,44 @@ impl ModelQuirks {
             home_flag: None,
         }
         .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer can warn or pause when its door opens mid-print, with its provenance.
+    ///
+    /// Reported by `fun` bit 12 (`DeviceManager.cpp:4470`). Otherwise inferred from the model's
+    /// door sensor: a printer without one can't check its door.
+    #[must_use]
+    pub fn door_open_check_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: Some(bits::FUN_DOOR_OPEN_CHECK_BIT),
+            fun2: None,
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Inferred(self.door != DoorSensor::None))
+    }
+
+    /// Returns whether the printer has idle heating protection, with its provenance.
+    ///
+    /// Reported by `fun` bit 62 (`DevPrintOptions.cpp:243`). No model rule exists, so nothing
+    /// reported means `Assumed(false)` — always the case on P1 and A1, which send no `fun`.
+    #[must_use]
+    pub fn idle_heating_protection_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: Some(bits::FUN_IDLE_HEATING_PROTECTION_BIT),
+            fun2: None,
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns true if the model can keep sent print files on external storage: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C.
+    ///
+    /// No telemetry bit reports it. BambuStudio's per-model
+    /// `support_save_remote_print_file_to_storage` (`resources/printers/*.json`) is true from
+    /// each listed model's first firmware and absent elsewhere.
+    #[must_use]
+    pub fn supports_store_sent_files(&self) -> bool {
+        self.store_sent_files
     }
 
     /// The shared auto-recovery and Filament Backup model rule.
@@ -1255,6 +1295,64 @@ mod tests {
             p1s.smart_nozzle_blob_detect_support(&ctx),
             Support::Reported(false)
         );
+    }
+
+    #[test]
+    fn test_safety_and_storage_setting_support() {
+        let empty = QuirkContext::empty();
+        // Door-open check: the door sensor is the model floor, fun bit 12 overrides it.
+        assert_eq!(
+            PrinterModel::H2D.quirks().door_open_check_support(&empty),
+            Support::Inferred(true)
+        );
+        assert_eq!(
+            PrinterModel::P1S.quirks().door_open_check_support(&empty),
+            Support::Inferred(false)
+        );
+        let fun_clear = QuirkContext::empty().with_fun(Some("0"));
+        assert_eq!(
+            PrinterModel::H2D
+                .quirks()
+                .door_open_check_support(&fun_clear),
+            Support::Reported(false)
+        );
+        // Idle heating protection: fun bit 62 only.
+        let fun_62 = QuirkContext::empty().with_fun(Some("4000000000000000"));
+        assert_eq!(
+            PrinterModel::H2D
+                .quirks()
+                .idle_heating_protection_support(&fun_62),
+            Support::Reported(true)
+        );
+        assert_eq!(
+            PrinterModel::H2D
+                .quirks()
+                .idle_heating_protection_support(&empty),
+            Support::Assumed(false)
+        );
+        // Store sent files: BambuStudio's per-model profiles.
+        for model in [
+            PrinterModel::X1,
+            PrinterModel::X1C,
+            PrinterModel::X2D,
+            PrinterModel::P2S,
+            PrinterModel::H2S,
+            PrinterModel::H2D,
+            PrinterModel::H2DPro,
+            PrinterModel::H2C,
+        ] {
+            assert!(model.quirks().supports_store_sent_files(), "{model:?}");
+        }
+        for model in [
+            PrinterModel::X1E,
+            PrinterModel::P1S,
+            PrinterModel::P1P,
+            PrinterModel::A1,
+            PrinterModel::A1Mini,
+            PrinterModel::A2L,
+        ] {
+            assert!(!model.quirks().supports_store_sent_files(), "{model:?}");
+        }
     }
 
     #[test]

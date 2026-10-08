@@ -80,6 +80,7 @@ const fn h2(
         chamber_temperature_sensor: true,
         nozzles,
         airduct_mode: true,
+        store_sent_files: true,
         buzzer: true,
         chamber_exhaust_fan: true,
         ..ModelQuirks::new(

@@ -32,9 +32,10 @@ pub use control::{
 pub use gcode::GCodeRequest;
 pub use hardware::{
     AirPrintDetectRequest, AirPurificationRequest, AirductMode, AirductRequest,
-    AutoRecoveryRequest, BuzzerRequest, FilamentBackupRequest, FilamentTangleDetectRequest,
-    FlashTiming, LedCtrlRequest, NozzleBlobDetectRequest, PromptSoundRequest,
-    SmartNozzleBlobDetectRequest,
+    AutoRecoveryRequest, BuzzerRequest, DoorOpenCheckRequest, FilamentBackupRequest,
+    FilamentTangleDetectRequest, FlashTiming, IdleHeatingProtectionRequest, LedCtrlRequest,
+    NozzleBlobDetectRequest, PromptSoundRequest, SmartNozzleBlobDetectRequest,
+    StoreSentFilesRequest,
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, NozzleRack, PrintJobConfig, ProjectFileRequest,
@@ -798,6 +799,24 @@ mod tests {
             }
             assert_eq!(value["print"], expected);
         }
+    }
+
+    /// The settings commands outside `print_option`, as BambuStudio builds them.
+    #[test]
+    fn test_safety_and_storage_setting_requests_json() {
+        use crate::types::control::DoorOpenCheck;
+        assert_eq!(
+            serde_json::to_value(DoorOpenCheckRequest::new(DoorOpenCheck::PausePrint, 1)).unwrap(),
+            serde_json::json!({"system": {"command": "set_door_stat", "sequence_id": "1", "config": 2}})
+        );
+        assert_eq!(
+            serde_json::to_value(IdleHeatingProtectionRequest::new(true, 1)).unwrap(),
+            serde_json::json!({"print": {"command": "set_against_continued_heating_mode", "sequence_id": "1", "enable": true}})
+        );
+        assert_eq!(
+            serde_json::to_value(StoreSentFilesRequest::new(false, 1)).unwrap(),
+            serde_json::json!({"system": {"command": "print_cache_set", "sequence_id": "1", "config": false}})
+        );
     }
 
     #[test]

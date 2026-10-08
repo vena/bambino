@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use super::ClampedTaskId;
 use crate::types::control::{
-    AirPurificationMode, BuzzerMode, LedNode, LightMode, NozzleBlobDetectMode,
+    AirPurificationMode, BuzzerMode, DoorOpenCheck, LedNode, LightMode, NozzleBlobDetectMode,
 };
 
 /// Chamber illumination and toolhead LED control configurations.
@@ -385,6 +385,96 @@ impl AirPurificationRequest {
                 command: Self::COMMAND,
                 sequence_id: sequence_id.into(),
                 air_purification: mode.code(),
+            },
+        }
+    }
+}
+
+/// Sets what the printer does when its door opens mid-print.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoorOpenCheckPayload {
+    /// Wire command name, always `"set_door_stat"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// The mode's code — see [`DoorOpenCheck::code`].
+    pub config: u8,
+}
+
+/// Sets the door-open check mode (BambuStudio `MachineObject::command_set_door_open_check`).
+pub type DoorOpenCheckRequest = super::System<DoorOpenCheckPayload>;
+
+impl DoorOpenCheckRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "set_door_stat";
+
+    /// Builds a `set_door_stat` request.
+    pub fn new(mode: DoorOpenCheck, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            system: DoorOpenCheckPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                config: mode.code(),
+            },
+        }
+    }
+}
+
+/// Turns idle heating protection on or off.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdleHeatingProtectionPayload {
+    /// Wire command name, always `"set_against_continued_heating_mode"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether idle heating protection is enabled.
+    pub enable: bool,
+}
+
+/// Turns idle heating protection on or off (BambuStudio `DevPrintOptions::command_set_against_continued_heating_mode`).
+pub type IdleHeatingProtectionRequest = super::Print<IdleHeatingProtectionPayload>;
+
+impl IdleHeatingProtectionRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "set_against_continued_heating_mode";
+
+    /// Builds a `set_against_continued_heating_mode` request.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: IdleHeatingProtectionPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                enable,
+            },
+        }
+    }
+}
+
+/// Sets whether files sent from Bambu Studio, Bambu Handy and MakerWorld are kept on external storage.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoreSentFilesPayload {
+    /// Wire command name, always `"print_cache_set"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether sent files are kept.
+    pub config: bool,
+}
+
+/// Sets whether sent files are kept on external storage (BambuStudio `MachineObject::command_set_save_remote_print_file_to_storage`).
+pub type StoreSentFilesRequest = super::System<StoreSentFilesPayload>;
+
+impl StoreSentFilesRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_cache_set";
+
+    /// Builds a `print_cache_set` request.
+    pub fn new(store: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            system: StoreSentFilesPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                config: store,
             },
         }
     }

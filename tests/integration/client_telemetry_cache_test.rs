@@ -4,7 +4,9 @@
 //! `client_test.rs` (see issue #35).
 
 use bambino::client::HeaterTemps;
-use bambino::client::{AirPurificationMode, NozzleBlobDetectMode};
+use bambino::client::{
+    AirPurificationMode, DoorOpenCheck, IdleHeatingProtection, NozzleBlobDetectMode,
+};
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
 use bambino::error::Error;
@@ -12,7 +14,8 @@ use bambino::models::PrinterModel;
 use bambino::quirks::Support;
 
 use crate::common::client::{
-    SERIAL, X1_SERIAL, connect_test_mqtt, spawn_broker, test_identity, with_broker,
+    SERIAL, X1_SERIAL, connect_idle_client, connect_test_mqtt, spawn_broker, test_identity,
+    with_broker,
 };
 use crate::common::io::{DummyTlsConnector, MockDataStreamFactory};
 use crate::common::mock_mqtt::{ReportPublisher, handle_mqtt_handshake, read_publish_payload};
@@ -1205,6 +1208,83 @@ async fn test_print_option_settings_read_cfg_over_home_flag() {
         .set_prompt_sound(false)
         .await
         .expect("reported support must lift the model rule");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Door-open check, idle heating protection and stored sent files read back from `cfg`, and
+/// their setters reach the wire under their own wrappers.
+#[tokio::test]
+async fn test_safety_and_storage_settings_read_cfg_and_send() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            // cfg: store sent files (19), door check pause (20-21 = 2), idle heating protection
+            // unavailable (32-33 = 2). fun: door check (12) and idle heating protection (62).
+            ReportPublisher::new(SERIAL)
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","cfg":"200280000","fun":"4000000000001000"}}"#,
+                )
+                .await;
+            let door = read_publish_payload(&mut server_stream).await;
+            assert_eq!(door["system"]["command"], "set_door_stat");
+            assert_eq!(door["system"]["config"], 1);
+            let idle = read_publish_payload(&mut server_stream).await;
+            assert_eq!(
+                idle["print"]["command"],
+                "set_against_continued_heating_mode"
+            );
+            assert_eq!(idle["print"]["enable"], true);
+            let store = read_publish_payload(&mut server_stream).await;
+            assert_eq!(store["system"]["command"], "print_cache_set");
+            assert_eq!(store["system"]["config"], false);
+        })
+        .await;
+    assert_eq!(client.door_open_check(), None);
+    assert!(matches!(
+        client.set_idle_heating_protection(true).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("cfg report");
+    assert_eq!(client.store_sent_files_enabled(), Some(true));
+    assert_eq!(client.door_open_check(), Some(DoorOpenCheck::PausePrint));
+    assert_eq!(
+        client.idle_heating_protection(),
+        Some(IdleHeatingProtection::Unavailable)
+    );
+    assert_eq!(
+        client.capabilities().idle_heating_protection_support(),
+        Support::Reported(true)
+    );
+
+    client
+        .set_door_open_check(DoorOpenCheck::Warn)
+        .await
+        .expect("door check send");
+    client
+        .set_idle_heating_protection(true)
+        .await
+        .expect("idle heating protection send");
+    client
+        .set_store_sent_files(false)
+        .await
+        .expect("store sent files send");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// A P1S has no door sensor and no stored-files profile entry, so both setters refuse.
+#[tokio::test]
+async fn test_safety_and_storage_setters_refuse_on_p1s() {
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
+    assert!(matches!(
+        client.set_door_open_check(DoorOpenCheck::Warn).await,
+        Err(Error::ModelMismatch(_))
+    ));
+    assert!(matches!(
+        client.set_store_sent_files(true).await,
+        Err(Error::ModelMismatch(_))
+    ));
     broker_task.await.expect("Broker task panicked");
 }
 

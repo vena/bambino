@@ -58,6 +58,7 @@ pub(crate) const P2S: ModelQuirks = ModelQuirks {
     wallclock_rtsp_timestamps: true,
     auxiliary_left2_fan: true,
     airduct_mode: true,
+    store_sent_files: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(P2S_Z_MAX),

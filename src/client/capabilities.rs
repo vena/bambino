@@ -164,6 +164,18 @@ impl<'a> Capabilities<'a> {
     pub fn air_purification_support(&self) -> Support {
         self.quirks.air_purification_support(&self.context)
     }
+
+    /// Door-open check support — see [`ModelQuirks::door_open_check_support`].
+    #[must_use]
+    pub fn door_open_check_support(&self) -> Support {
+        self.quirks.door_open_check_support(&self.context)
+    }
+
+    /// Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`].
+    #[must_use]
+    pub fn idle_heating_protection_support(&self) -> Support {
+        self.quirks.idle_heating_protection_support(&self.context)
+    }
 }
 
 impl core::fmt::Debug for Capabilities<'_> {
