@@ -203,7 +203,7 @@ pub fn echo_key(payload: &[u8]) -> Option<EchoKey> {
 ///
 /// Evidence per entry:
 /// - `pause`/`resume`/`stop`/`gcode_line`/`clean_print_error`/`calibration`/`print_speed`/
-///   `ledctrl`: documented directly in reference/03_mqtt_telemetry.md:543-572 (REF-MQTT-ACK).
+///   `ledctrl`: documented directly in `reference/03_mqtt_telemetry.md` [REF-MQTT-ACK].
 /// - `ams_filament_setting`/`ams_filament_drying`/`extrusion_cali_get`/`extrusion_cali_set`/
 ///   `extrusion_cali_sel`/`extrusion_cali_del`: confirmed against real hardware by bambuddy's
 ///   independently reverse-engineered MQTT client (`backend/app/services/bambu_mqtt.py`),

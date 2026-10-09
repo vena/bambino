@@ -64,7 +64,8 @@ pub(crate) const AMS_LITE_ON_A2L_PHYSICAL_ID: u8 = 16;
 /// `tray_exist_bits`.
 pub(crate) const AMS_LITE_ON_A2L_NORMALIZED_ID: u8 = 6;
 /// The single-nozzle external spool, and IDEX's right (primary) carriage — BambuStudio's
-/// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md:165-166,200`). This is the id an
+/// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md`, "Virtual / External Spool
+/// Telemetry" and "Virtual Slot Remapping on Single-Nozzle Platforms"). This is the id an
 /// `ams_mapping2` payload must carry for a single-nozzle printer; sending the deputy id
 /// instead targets physical AMS tray 0 and produces firmware error `0700_8012`.
 pub(crate) const AMS_EXTERNAL_SPOOL_MAIN_ID: u8 = 255;

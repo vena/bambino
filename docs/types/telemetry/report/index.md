@@ -592,7 +592,7 @@ raw field and re-implementing the decode:
   [`ExtruderCollection`](../device/index.md) /
   [`ExtruderInfo`](../device/index.md) instead, which model the V2
   per-extruder `info` bit field BambuStudio actually uses for the deputy extruder
-  (`DevExtruderSystem.cpp`, `ExterSystemParser::ParseV2_0`).
+  (`DevExtruderSystem.cpp`, `ExtderSystemParser::ParseV2_0`).
 
 - **`s_obj`**: `Option<Vec<i32>>`
 

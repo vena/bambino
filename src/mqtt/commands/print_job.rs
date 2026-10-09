@@ -22,7 +22,8 @@ use super::ClampedTaskId;
 ///
 /// Valid ids are `-1` (unmapped), `0..=15` (4 standard units × 4 slots), and `128..=135`
 /// (AMS-HT). Firmware rejects anything else — `254`/`255` in particular — with a visible
-/// `0700_8012`/`07FF_8012` error (`reference/05_materials_ams.md:151`).
+/// `0700_8012`/`07FF_8012` error (`reference/05_materials_ams.md`, "External Spool Flat-Mapping
+/// Restrictions").
 ///
 /// Called from both `PrintJobConfig::with_ams` and `ProjectFileRequest::from_config`: the
 /// builder is only a convenience, and `from_config` is the actual enforcement point, since
@@ -257,7 +258,8 @@ impl PrintJobConfig {
     /// Values outside the documented flat channel space (`0..=15` standard AMS, `128..=135`
     /// AMS-HT, or `-1` unmapped) are folded to `-1` with a `log::warn!` — firmware rejects
     /// out-of-range values (254/255 in particular) with a visible error (`0700_8012`/
-    /// `07FF_8012`, `reference/05_materials_ams.md:151`). The `with_ams_mapping2`-derived path
+    /// `07FF_8012`; `reference/05_materials_ams.md`, "External Spool Flat-Mapping Restrictions").
+    /// The `with_ams_mapping2`-derived path
     /// already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
     /// (issue #56).
     ///
@@ -489,7 +491,8 @@ impl ProjectFileRequest {
 
         // Normalize before anything reads it. `ams` is a public field, so a caller can set
         // `MaterialSource::ExternalSpoolLeft`'s `{254, 0}` — documented IDEX-only — on a
-        // single-nozzle printer, where `reference/05_materials_ams.md:200` says the payload must
+        // single-nozzle printer, where `reference/05_materials_ams.md` ("Virtual Slot Remapping on
+        // Single-Nozzle Platforms") says the payload must
         // always carry `255`: transmitting `254` targets physical AMS tray 0 instead of the
         // external spool and yields firmware error `0700_8012` (issue #119).
         let mapping2 = match &config.ams {

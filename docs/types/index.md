@@ -1332,7 +1332,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
@@ -2280,7 +2280,7 @@ raw field and re-implementing the decode:
   [`ExtruderCollection`](telemetry/device/index.md) /
   [`ExtruderInfo`](telemetry/device/index.md) instead, which model the V2
   per-extruder `info` bit field BambuStudio actually uses for the deputy extruder
-  (`DevExtruderSystem.cpp`, `ExterSystemParser::ParseV2_0`).
+  (`DevExtruderSystem.cpp`, `ExtderSystemParser::ParseV2_0`).
 
 - **`s_obj`**: `Option<Vec<i32>>`
 

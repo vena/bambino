@@ -386,7 +386,7 @@ pub struct PrinterTelemetry {
     /// [`ExtruderCollection`](super::device::ExtruderCollection) /
     /// [`ExtruderInfo`](super::device::ExtruderInfo) instead, which model the V2
     /// per-extruder `info` bit field BambuStudio actually uses for the deputy extruder
-    /// (`DevExtruderSystem.cpp`, `ExterSystemParser::ParseV2_0`).
+    /// (`DevExtruderSystem.cpp`, `ExtderSystemParser::ParseV2_0`).
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub hw_switch_state: Option<i32>,
 

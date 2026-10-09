@@ -478,7 +478,8 @@ defaults for calibration flags.
   Values outside the documented flat channel space (`0..=15` standard AMS, `128..=135`
   AMS-HT, or `-1` unmapped) are folded to `-1` with a `log::warn!` — firmware rejects
   out-of-range values (254/255 in particular) with a visible error (`0700_8012`/
-  `07FF_8012`, `reference/05_materials_ams.md:151`). The `with_ams_mapping2`-derived path
+  `07FF_8012`; `reference/05_materials_ams.md`, "External Spool Flat-Mapping Restrictions").
+  The `with_ams_mapping2`-derived path
   already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
   (issue #56).
 

@@ -96,7 +96,7 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 - **`extruder_id`**: `Option<u8>`
 
   Which hotend to feed — `0` = right/main, `1` = left/deputy. Omitted from the wire when
-  `None`, matching BambuStudio, whose `DeviceManager::command_ams_change_filament` takes
+  `None`, matching BambuStudio, whose `MachineObject::command_ams_change_filament` takes
   it as an optional field and leaves it out unless a Filament Track Switch is fitted.
   
   **Required on a Filament Track Switch machine.** Without a switch each AMS is wired to
