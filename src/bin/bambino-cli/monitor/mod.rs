@@ -207,7 +207,8 @@ pub async fn run(target: &Target) -> Result<(), CliError> {
     // counter below, not by `poll_wire`'s 30s per-read deadline (`mqtt/client/frame.rs`) —
     // every time this select drops the in-flight telemetry future (every KEEPALIVE_TICK_SECS),
     // that deadline resets before it can fire. Confirmed on real hardware 2026-07-06; see
-    // CLAUDE.md's "select!-multiplexed consumers" entry for why this is expected, not a bug.
+    // `.claude/rules/wire-read-deadline.md` (select!-multiplexed consumers) for why this is
+    // expected, not a bug.
     let result = loop {
         tokio::select! {
             telemetry_res = printer.poll_telemetry() => {
