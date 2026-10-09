@@ -804,10 +804,10 @@ fn build_tls_config<'a>(
 /// default) -- an app sdkconfig choice bambino cannot see or require, with no field for it in
 /// `esp_idf_svc::tls::Config` (0.53.0) (GitHub issue #168). `crt_bundle_attach` has neither
 /// limitation: confirmed against ESP-IDF v5.5.5's `esp_tls_mbedtls.c` `set_client_config`, it is
-/// checked *before* `use_global_ca_store`/`cacert_buf` and the no-verification fallback, gated only by
-/// `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` (on by ESP-IDF default), and `set_client_config` sets
-/// `MBEDTLS_SSL_VERIFY_REQUIRED` immediately *before* invoking this hook -- so overriding it
-/// back to `MBEDTLS_SSL_VERIFY_NONE` here is what actually takes effect. `conf` is the
+/// checked *before* `use_global_ca_store`/`cacert_buf` and the no-verification fallback, gated
+/// only by `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` (on by ESP-IDF default), and `set_client_config`
+/// sets `MBEDTLS_SSL_VERIFY_REQUIRED` immediately *before* invoking this hook -- so overriding
+/// it back to `MBEDTLS_SSL_VERIFY_NONE` here is what actually takes effect. `conf` is the
 /// `mbedtls_ssl_config*` `set_client_config` builds, passed through as `void*`; ESP-IDF's own
 /// `esp_crt_bundle_attach` (the implementation this replaces) receives and casts the same
 /// pointer. The C call site never inspects this function's return value, so `ESP_OK` is
