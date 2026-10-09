@@ -7,7 +7,7 @@
 # that matters -- nothing broken reaches main, because the matrix still runs
 # locally before the push -- while changing the cadence from once-per-commit to
 # once-per-push. A five-commit branch now pays it once instead of five times.
-# pre-commit runs `make check-commit`, the ~65s subset; see the check-commit
+# pre-commit runs `make check-commit`, the ~55s subset; see the check-commit
 # comment in the Makefile for the measurements behind the split.
 #
 # check-fast, NOT check-all: `make check-esp-idf` is already path-filtered CI

@@ -166,7 +166,7 @@ check-embassy-probe:
 #
 # Deliberately NOT part of check-fast, and invoked from .github/workflows/ci.yml
 # as its own step: rustdoc does not reuse `cargo build` artifacts, and the
-# pre-commit hook already runs check-fast on every commit. It is cheap (~9s warm
+# pre-push hook already runs check-fast before every push. It is cheap (~9s warm
 # after a src/ touch, vs ~10min for check-fast), so folding it in would be
 # affordable -- the separation is about keeping a class of problem that never
 # blocks anything at commit time off the commit path, not about the 9s.
