@@ -192,8 +192,8 @@ pub struct PrinterTelemetry {
     /// Estimated remaining print duration, in **minutes**.
     ///
     /// The wire unit is minutes, not seconds — BambuStudio multiplies by 60 on both parse arms
-    /// to reach its own seconds-based `mc_left_time` (`DeviceManager.cpp:3081-3086`), and
-    /// bambuddy does the same (`notification_service.py:1163-1169`, "in minutes, convert to
+    /// to reach its own seconds-based `mc_left_time` (`DeviceManager.cpp`), and
+    /// bambuddy does the same (`notification_service.py`, "in minutes, convert to
     /// seconds"). Callers wanting seconds must multiply.
     ///
     /// Permissive: BambuStudio branches on `is_string()` here, so the quoted form is real.
@@ -210,7 +210,7 @@ pub struct PrinterTelemetry {
 
     /// Motion controller progress percentage (0–100).
     ///
-    /// Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp:3060-3065`) and
+    /// Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp`) and
     /// bambuddy coerces via `float()`/`_probe_number`, so the quoted form is confirmed.
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub mc_percent: Option<i32>,
@@ -354,7 +354,7 @@ pub struct PrinterTelemetry {
     ///
     /// Carries the printer's own firmware capability flags — most importantly bit 5,
     /// remote-dry support. Read via [`fun2_bit`](super::TelemetryReport::fun2_bit) rather than directly:
-    /// BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
+    /// BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp`) and
     /// reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
     /// integer the way `fun` is.
     #[serde(default)]
@@ -425,7 +425,7 @@ pub struct PrinterTelemetry {
     /// Alternative remaining time field (minutes).
     ///
     /// Prefer [`mc_remaining_time`](Self::mc_remaining_time): it is the field BambuStudio reads
-    /// for the ETA (`DeviceManager.cpp:3081-3086`) and the one `PrinterClient::print_progress`
+    /// for the ETA (`DeviceManager.cpp`) and the one `PrinterClient::print_progress`
     /// tracks. This one is kept for completeness; nothing in either upstream client prefers it.
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub remain_time: Option<i32>,
@@ -453,15 +453,15 @@ pub struct PrinterTelemetry {
     /// Auxiliary state hex string, sent only by firmware using BambuStudio's "np" payload format.
     ///
     /// Its *presence* is one quarter of BambuStudio's `check_enable_np` probe
-    /// (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_np_format`]. BambuStudio reads it
-    /// as a string (`DeviceManager.cpp:4492`).
+    /// (`DeviceManager.cpp`) — see [`Self::reports_np_format`]. BambuStudio reads it
+    /// as a string (`DeviceManager.cpp`).
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub aux: Option<String>,
 
     /// Third capability bitfield.
     ///
     /// Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS-side "np" flag
-    /// (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
+    /// (`DeviceManager.cpp`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
     /// [`Self::reports_np_format`]. Masked into `u32` like [`home_flag`](Self::home_flag).
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_flags")]
     pub flag3: Option<u32>,
@@ -484,7 +484,7 @@ pub struct PrinterTelemetry {
     /// Per-filament AMS tray mapping of the running print.
     ///
     /// Each entry is `ams_id * 256 + slot_id`, and `65535` means unmapped (BambuStudio
-    /// `DeviceManager.cpp:807-810`). It is task-level state: an idle H2 keeps reporting the
+    /// `DeviceManager.cpp`). It is task-level state: an idle H2 keeps reporting the
     /// previous print's mapping, so it is meaningful only while a print runs.
     #[serde(default)]
     pub mapping: Option<Vec<i32>>,
@@ -529,7 +529,7 @@ pub struct PrinterTelemetry {
     /// a retained or reused archive.
     ///
     /// Firmware sends this as **either a number or a decimal string** — BambuStudio branches on
-    /// `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp:2617-2626`), so
+    /// `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp`), so
     /// the permissive deserializer is load-bearing rather than defensive: a bare `Option<i32>`
     /// would fail the entire telemetry frame on the string form.
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
@@ -559,8 +559,8 @@ pub struct NetInfo {
 /// SD-card presence/health state, decoded from a two-bit field (`aux` bits 12–13 or `home_flag` bits 8–9).
 ///
 /// Confirmed against BambuStudio's `MachineObject::parse_home_flag`
-/// (`DeviceManager.cpp:1075`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
-/// corroborated by pybambu's `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard`
+/// (`DeviceManager.cpp`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
+/// corroborated by pybambu's `const.py`/`models.py` (same bits). The `sdcard`
 /// boolean field can never report a degraded state — only the bit fields distinguish "no card,"
 /// "normal," "abnormal," and "read-only."
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -601,10 +601,10 @@ impl PrinterTelemetry {
     /// BambuStudio tracks it as `is_enable_np` / `is_enable_ams_np` and never expands "np"; the
     /// name here follows it rather than guessing.
     ///
-    /// Mirrors BambuStudio's selector (`StatusPanel.cpp:5376`,
+    /// Mirrors BambuStudio's selector (`StatusPanel.cpp`,
     /// `obj->is_enable_np || obj->is_enable_ams_np`): either `cfg`, `fun`, `aux` and `stat` are
-    /// all present (`check_enable_np`, `DeviceManager.cpp:4338-4346`), or `flag3` bit 9 is set
-    /// (`DeviceManager.cpp:3111`). `false` means this frame didn't show it, which on a partial
+    /// all present (`check_enable_np`, `DeviceManager.cpp`), or `flag3` bit 9 is set
+    /// (`DeviceManager.cpp`). `false` means this frame didn't show it, which on a partial
     /// frame is not proof the firmware lacks it.
     #[must_use]
     pub fn reports_np_format(&self) -> bool {
@@ -680,10 +680,10 @@ impl PrinterTelemetry {
     ///
     /// Previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
     /// pybambu-sourced heuristic. Both first-party clients (BambuStudio's
-    /// `DevPrintOptions.cpp:26`, OrcaSlicer identically) actually decode that bit as
+    /// `DevPrintOptions.cpp`, OrcaSlicer identically) actually decode that bit as
     /// `is_support_prompt_sound_detection`, unrelated to networking — confirmed wrong, not
     /// merely disputed. Real wired-ethernet state comes from `print.net.conf` bit 0
-    /// (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
+    /// (`DeviceManager.cpp`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
     /// (not `None`) when `net`/`net.conf` haven't been observed yet, matching
     /// `is_ethernet_active_via_wifi_signal()`'s existing no-signal-observed convention.
     pub fn is_ethernet_active(&self) -> bool {
@@ -731,7 +731,7 @@ impl PrinterTelemetry {
     /// returns the first present of `aux`, `home_flag`, `sdcard`, which is the same answer.
     ///
     /// bambuddy reads only `sdcard`, saying heartbeat pushes clear `home_flag` bits 8–9 with a
-    /// card inserted (`bambu_mqtt.py:4915-4927`). BambuStudio, the authoritative source, reads the
+    /// card inserted (`bambu_mqtt.py`). BambuStudio, the authoritative source, reads the
     /// bits on every frame that carries `home_flag`, so they are followed here; see
     /// `reference/03_mqtt_telemetry.md` for the disagreement.
     #[must_use]

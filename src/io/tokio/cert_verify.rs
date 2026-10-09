@@ -360,7 +360,7 @@ pub(super) fn check_ca_capable(
 ///
 /// Reimplements rustls's own `SignatureScheme::supported_in_tls13()`, which is crate-private and
 /// therefore unreachable from here. The `rustls-webpki` free functions this verifier replaces
-/// open with that gate (`rustls/src/webpki/verify.rs:194-196`); omitting it let a peer sign the
+/// open with that gate (`rustls/src/webpki/verify.rs`); omitting it let a peer sign the
 /// CertificateVerify with `RSA_PKCS1_SHA1` (or any other PKCS#1/SHA-1 scheme) and be accepted in
 /// a TLS 1.3 handshake. `supported_verify_schemes` advertises the full ring mapping including
 /// PKCS#1 — legal for TLS 1.2, which is what makes it reachable — so the gate has to live on the

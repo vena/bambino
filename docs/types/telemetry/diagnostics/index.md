@@ -46,7 +46,7 @@ Controller information segment detailing current temperature coordinates.
   The chamber controller's temperatures: `temp` unpacked, with `target` overriding the packed target when present.
 
   `target` is the authoritative target on new-gen models (bambuddy reads it separately,
-  `bambu_mqtt.py:2652`); BambuStudio derives both halves from the packed `temp`. `None` when
+  `bambu_mqtt.py`); BambuStudio derives both halves from the packed `temp`. `None` when
   `temp` is absent.
 
 #### Trait Implementations

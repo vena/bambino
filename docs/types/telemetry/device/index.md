@@ -500,7 +500,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
@@ -530,7 +530,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
   Info bitmask.
   
-  Three bits are known, decoded by BambuStudio's `DevExtruderSystem.cpp:354-356` via
+  Three bits are known, decoded by BambuStudio's `DevExtruderSystem.cpp` via
   `DevUtil::get_flag_bits(info, N)` (which reads a single bit at position `N`, its `count`
   defaulting to 1):
   
@@ -566,7 +566,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
   Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
   resolving which physical tray is feeding this extruder right now, confirmed
-  against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
+  against BambuStudio's `ExtderSystemParser::ParseV2_0` (`DevExtruderSystem.cpp`), which
   decodes `snow` directly with no extruder-map inversion needed.
 
 - <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
@@ -736,7 +736,7 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Normalized physical wear tracker value.
   
   A float: H2C, P2S and X2D send `0.0`, and BambuStudio stores it as `float m_wear`
-  (`DevNozzleSystem.h:104`).
+  (`DevNozzleSystem.h`).
 
 - **`serial_number`**: `Option<String>`
 
@@ -777,14 +777,14 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   which is what makes it meaningful on a rack machine where hotends are swapped between
   slots. Reported by H2C Vortek rack hotends; absent elsewhere — BambuStudio guards it with
   `if (njon.contains("p_t"))` and a `/*maybe not contains*/` note
-  (`DevNozzleSystem.cpp:789-791`, parsing the same `device.nozzle` push this field comes
+  (`DevNozzleSystem.cpp`, parsing the same `device.nozzle` push this field comes
   from).
   
   **Units are seconds.** BambuStudio's nozzle-rack panel names the value `usedSeconds` and
   formats it as `usedSeconds / 3600` hours, falling back to `usedSeconds / 60` minutes
   under an hour and displaying `"0 h"` below a minute
-  (`wgtDeviceNozzleRackUpdate.cpp:669-679`). ha-bambulab agrees independently, dividing by
-  3600 for an hours sensor (`definitions.py:951`).
+  (`wgtDeviceNozzleRackUpdate.cpp`). ha-bambulab agrees independently, dividing by
+  3600 for an hours sensor (`definitions.py`).
 
 #### Implementations
 
@@ -809,7 +809,7 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
 
   Confirmed directly against BambuStudio's source
-  (`DevNozzleSystem.cpp:769`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
+  (`DevNozzleSystem.cpp`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
   nozzles are appended to the *same* `nozzle.info` array as installed ones, distinguished
   by `DevUtil::get_hex_bits(id, 1) == 1`. `get_hex_bits(num, pos, base=10)` extracts the
   4-bit **nibble** at `pos*4` (`(num >> (pos*4)) & 0xF`), not a single bit — so this

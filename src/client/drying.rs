@@ -108,7 +108,7 @@ where
 
     /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
     ///
-    /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
+    /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp`) exactly —
     /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
     pub async fn stop_drying(&mut self, ams_id: u8) -> Result<CommandHandle, Error> {
         if !is_valid_ams_id(ams_id) {
@@ -368,7 +368,7 @@ where
     /// heaterless unit takes), or a cached [`AmsUnitModel`] whose
     /// [`supports_drying`](AmsUnitModel::supports_drying) is `false`.
     /// These are two independent gates on purpose, matching the pair BambuStudio writes out
-    /// longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
+    /// longhand at `Widgets/AMSControl.cpp`: the printer must act on the command *and* the
     /// attached box must have a heater.
     ///
     /// [`Error::InvalidArgument`] for an `ams_id` outside the documented address space.
@@ -376,7 +376,7 @@ where
     /// [`Error::InvalidArgument`] when the temperature falls outside the unit's
     /// [`dry_temp_range`](AmsUnitModel::dry_temp_range). **Both bounds are rejected, not
     /// clamped**: BambuStudio refuses a temperature below the floor exactly as it refuses one
-    /// above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a caller's value
+    /// above the ceiling (`AMSDryControl.cpp`), and silently rewriting a caller's value
     /// would start a heating cycle they did not ask for.
     ///
     /// The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
@@ -421,7 +421,7 @@ where
             .cooling_temp
             .or(material.map(DryingMaterial::softening_temp))
             // BambuStudio's own fallback when a tray's filament resolves to no preset
-            // (`AMSDryControl.cpp:813`), not a zero.
+            // (`AMSDryControl.cpp`), not a zero.
             .unwrap_or(DEFAULT_COMMAND_COOLING_TEMP);
         let filament = self
             .filament

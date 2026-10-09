@@ -9,9 +9,9 @@ fn unit_with_info(info: &str) -> AmsUnit {
     }
 }
 
-/// Every known unit type: wire value (BambuStudio `DevAmsType`, `DevDefs.h:54-62`), drying range
-/// (only the AMS 2 Pro and AMS-HT have heaters: BambuStudio `AMSItem.hpp:255`, bambuddy
-/// `print_scheduler.py:3976`), and slot count (`None` where upstream counts observed trays).
+/// Every known unit type: wire value (BambuStudio `DevAmsType`, `DevDefs.h`), drying range
+/// (only the AMS 2 Pro and AMS-HT have heaters: BambuStudio `AMSItem.hpp`, bambuddy
+/// `print_scheduler.py`), and slot count (`None` where upstream counts observed trays).
 type UnitModelRow = (u8, AmsUnitModel, Option<(u32, u32)>, Option<u8>);
 
 const UNIT_MODELS: [UnitModelRow; 6] = [

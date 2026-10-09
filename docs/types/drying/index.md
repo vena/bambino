@@ -20,15 +20,15 @@ variants (`"Bambu PLA Basic"`); these are the base material types behind them, o
 All values transcribed from `resources/profiles/BBL/filament/fdm_filament_*.json` at
 BambuStudio, read directly rather than from a secondary account of them. bambuddy
 corroborates the idle column independently (`DEFAULT_DRYING_PRESETS`,
-`print_scheduler.py:777-786`) and selects the per-unit column the same way (line 3807,
-`temp_key = module_type if module_type in ("n3f", "n3s") else "n3f"`).
+`print_scheduler.py`) and selects the per-unit column the same way
+(`temp_key = module_type if module_type in ("n3f", "n3s") else "n3f"`).
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
 | [`DryingMaterial`](#dryingmaterial) | enum | A base filament material with vendor-published drying parameters. |
-| [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp) | const | Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset (`AMSDryControl.cpp:813`, `int cooling_temp = 50;`). |
+| [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp) | const | Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset (`AMSDryControl.cpp`, `int cooling_temp = 50;`). |
 
 ## Types
 
@@ -60,7 +60,7 @@ A base filament material with vendor-published drying parameters.
 
 Each material's profile stores temperature and time as a 4-element array indexed
 `[N3F idle, N3S idle, N3F printing, N3S printing]` — the mapping is explicit in
-BambuStudio's `DevUtilBackend.cpp:87-91`, which reads exactly those four positions into
+BambuStudio's `DevUtilBackend.cpp`, which reads exactly those four positions into
 `..._on_idle[N3F]`, `..._on_idle[N3S]`, `..._on_print[N3F]`, `..._on_print[N3S]`. Everything
 here is indexed the same way, via [`AmsUnitModel`](../telemetry/ams/index.md#amsunitmodel) plus a `printing` flag.
 
@@ -174,11 +174,11 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   **Capped at [`heat_distortion_temp`](#dryingmaterial) in both columns.**
   BambuStudio disables Start whenever the temperature exceeds the heat-distortion
-  temperature and a tray is loaded, idle or printing (`AMSDryControl.cpp:1213-1230`), yet
+  temperature and a tray is loaded, idle or printing (`AMSDryControl.cpp`), yet
   three raw profile values break that rule (TPU idle on both units, PVA idle on the AMS-HT).
   The value returned is the one BambuStudio would let a loaded tray start with. It also
   floors the printing column at the softening temperature
-  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`);
+  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp`);
   no published printing value exceeds [`softening_temp`](#dryingmaterial), so that
   half is a no-op here.
 
@@ -195,8 +195,8 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   **Also what a drying cycle sends as its wire `cooling_temp`** — not the profile's
   similarly named `filament_dev_drying_cooling_temperature`. BambuStudio parses that second
-  field (`DevUtilBackend.cpp:109-110`) but never sends it: the drying command is built from
-  the softening temperature (`AMSDryControl.cpp:816`). See [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp)
+  field (`DevUtilBackend.cpp`) but never sends it: the drying command is built from
+  the softening temperature (`AMSDryControl.cpp`). See [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp)
   for what BambuStudio sends when a tray's filament resolves to no preset at all.
 
 - <span id="dryingmaterial-heat-distortion-temp"></span>`fn heat_distortion_temp(self) -> u32`
@@ -205,28 +205,28 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   [`Pe`](#dryingmaterial) and [`Pha`](#dryingmaterial) publish no value of their own and inherit 45 °C
   from `fdm_filament_common.json:108-110`; BambuStudio reads the merged parent+child config
-  (`PresetBundle.cpp:5081-5109`). BambuStudio refuses to start a cycle above this on a
-  loaded tray (`AMSDryControl.cpp:1213-1230`), and it is one of the three inputs to the
+  (`PresetBundle.cpp`). BambuStudio refuses to start a cycle above this on a
+  loaded tray (`AMSDryControl.cpp`), and it is one of the three inputs to the
   while-printing clamp (`min(printing_temp, softening_temp, heat_distortion_temp)`,
-  `AMSDryControl.cpp:1723-1725`).
+  `AMSDryControl.cpp`).
 
 - <span id="dryingmaterial-fully-dryable-by"></span>`fn fully_dryable_by(self, unit: AmsUnitModel) -> bool` — [`AmsUnitModel`](../telemetry/ams/index.md#amsunitmodel)
 
   Returns true if this unit can dry this material *completely*.
 
   A `false` here does not mean "don't dry it" — BambuStudio still permits the cycle and
-  shows "This filament may not be completely dried" (`AMSDryControl.cpp:1203`). It means
+  shows "This filament may not be completely dried" (`AMSDryControl.cpp`). It means
   the cycle will not fully remove the moisture.
 
   Read from `filament_dev_ams_drying_ams_limitations`, whose values do **not** use the
   `DevAmsType` numbering the rest of this module does: in that field `"0"` is the AMS 2 Pro
-  and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp:58-61`), where `DevAmsType`
+  and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp`), where `DevAmsType`
   makes them `3` and `4`. `["-1"]` means neither unit qualifies.
 
   **A profile that omits the key inherits `["1"]` (AMS-HT only)** from
   `fdm_filament_common.json:105-107`, which every material preset inherits; BambuStudio
-  reads the merged parent+child config (`PresetBundle.cpp:5081-5109`,
-  `DevUtilBackend.cpp:63-113`). So the seven materials with no key of their own — ABS, ASA,
+  reads the merged parent+child config (`PresetBundle.cpp`,
+  `DevUtilBackend.cpp`). So the seven materials with no key of their own — ABS, ASA,
   HIPS, PC, PA, PVA, TPU — are fully dryable by the AMS-HT and not the AMS 2 Pro. PPA and
   PPS name `["-1"]` explicitly.
 
@@ -267,5 +267,5 @@ const DEFAULT_COMMAND_COOLING_TEMP: u32 = 50u32;
 ```
 
 Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset
-(`AMSDryControl.cpp:813`, `int cooling_temp = 50;`).
+(`AMSDryControl.cpp`, `int cooling_temp = 50;`).
 

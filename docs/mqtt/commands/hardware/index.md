@@ -222,7 +222,7 @@ struct AutoRecoveryPayload {
 Turns step-loss auto-recovery on or off.
 
 Carries the setting twice, as BambuStudio's `command_set_printing_option` does
-(`DeviceManager.cpp:1832-1842`): as bit `PRINT_OP_AUTO_RECOVERY` (0) of `option` and as
+(`DeviceManager.cpp`): as bit `PRINT_OP_AUTO_RECOVERY` (0) of `option` and as
 `auto_recovery`. bambuddy sends only `auto_recovery`.
 
 #### Fields

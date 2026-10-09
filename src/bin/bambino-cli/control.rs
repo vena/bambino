@@ -289,7 +289,7 @@ const DRY_UNIT_RESOLVE_TIMEOUT_SECS: u64 = 5;
 /// warm-up loop exists for the same reason.
 ///
 /// Falls back to the AMS 2 Pro column when the unit cannot be identified, matching bambuddy
-/// (`print_scheduler.py:3807`, `temp_key = module_type if module_type in ("n3f","n3s") else
+/// (`print_scheduler.py`, `temp_key = module_type if module_type in ("n3f","n3s") else
 /// "n3f"`). That is also the lower of the two columns on every material where they differ, so an
 /// unidentified unit errs cool rather than hot — and the real ceiling is enforced by the drying
 /// gate regardless. The fallback now warns on stderr: erring cool still means the filament

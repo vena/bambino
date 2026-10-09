@@ -105,7 +105,7 @@ pub(crate) const X1: ModelQuirks = ModelQuirks {
 /// (<https://wiki.bambulab.com/en/x1/manual/X1E-firmware-release-history>) through `01.02.00.00`
 /// mentions remote drying, but the drying guide doesn't name the X1E as unsupported either, and
 /// bambuddy's docstring names X1E among the models that fall through to "allowed"
-/// (`printer_manager.py:334`). Extrapolating the X1C rule onto the X1E would invent a restriction
+/// (`printer_manager.py`). Extrapolating the X1C rule onto the X1E would invent a restriction
 /// no source states.
 pub(crate) const X1E: ModelQuirks = ModelQuirks {
     door: DoorSensor::HomeFlag,

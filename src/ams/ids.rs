@@ -17,18 +17,18 @@ pub(crate) const VALID_AMS_IDS_TEXT: &str = "0..=3, 6 or 16 (A2L AMS Lite), 128.
 /// own issue #1274 by a month with no cited evidence of a standard unit above id 3; #1274
 /// itself only confirms `ams_id=128` (AMS-HT). Three independent sources now agree `3` is
 /// correct: user-supplied official Bambu Lab documentation caps standard AMS 2 Pro units at
-/// 4 on every product line; BambuStudio's own `DevAms::GetTrayId` (`DevFilaSystem.cpp:247-269`)
+/// 4 on every product line; BambuStudio's own `DevAms::GetTrayId` (`DevFilaSystem.cpp`)
 /// hardcodes AMS-HT's bit-index base offset at `16`, which is only correct if standard units
 /// never reach bits 16+ (i.e. never exceed id 3); and pybambu's uncapped `tray_now >> 2`
 /// decode doesn't corroborate 8 units either — it's simply unbounded, not evidence of an
 /// observed 8th unit.
 pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
 /// AMS-HT unit ids are capped at 135 (8 lettered units, "A"-"H"), not BambuStudio's wider
-/// `< 153` bound (`DevFilaSystem.cpp:411` `GetTrayNameByTrayId`, `CalibUtils.cpp:140-141`) —
+/// `< 153` bound (`DevFilaSystem.cpp` `GetTrayNameByTrayId`, `CalibUtils.cpp`) —
 /// deliberately, not an oversight. That bound is defensive-margin coding, not a confirmed
 /// protocol ceiling: bambuddy's actual AMS-HT *operational* logic (not just a storage-layer
-/// check) caps at the same 135 bambino uses (`backend/app/api/routes/printers.py:2822,3073-3074`,
-/// `backend/app/main.py:7993-7995`'s 8-letter `HT-{A..H}` labeling). The two upstreams disagree
+/// check) caps at the same 135 bambino uses (`backend/app/api/routes/printers.py`,
+/// `backend/app/main.py`'s 8-letter `HT-{A..H}` labeling). The two upstreams disagree
 /// with each other here; bambino follows the one with real operational AMS-HT-unit logic
 /// behind it. Raise this again only with hardware evidence for a 9th+ AMS-HT unit (id 136+) —
 /// re-litigated without new evidence in the 2026-09-08 telemetry review sweep, same conclusion.
@@ -46,7 +46,7 @@ pub(crate) const AMS_HT_ID_MAX: u8 = 135;
 /// untranslated it falls through every branch here and resolves to the unmapped sentinel.
 ///
 /// BambuStudio encodes the same pairing as a distinct *unit type* rather than a distinct id —
-/// `AMS_LITE_MIXED = 5`, commented "AMS-Lite for N9" (`DeviceCore/DevDefs.h:61`), N9 being the
+/// `AMS_LITE_MIXED = 5`, commented "AMS-Lite for N9" (`DeviceCore/DevDefs.h`), N9 being the
 /// A2L's dev token — read from the unit's own `info` type nibble. It therefore never reads
 /// this id at all; see [`AMS_LITE_ON_A2L_NORMALIZED_ID`] for where the two routes reconverge.
 pub(crate) const AMS_LITE_ON_A2L_PHYSICAL_ID: u8 = 16;
@@ -54,9 +54,9 @@ pub(crate) const AMS_LITE_ON_A2L_PHYSICAL_ID: u8 = 16;
 /// so the standard `ams_id * 4 + slot` formula lands its global tray ids at 24-27.
 ///
 /// 24 is not an arbitrary choice: it is BambuStudio's own `AMS_LITE_MIXED_TRAY_INDEX_OFFSET`
-/// (`DeviceCore/DevDefs.h:93`), applied as `24 + slot_id` in all three of `DevAms::GetTrayId`
-/// (`DevFilaSystem.cpp:262-263`), `DevMappingUtil::ams_filament_mapping` and
-/// `DevMapping.cpp:102-104` — none of which consult `ams_id`, because the type already told
+/// (`DeviceCore/DevDefs.h`), applied as `24 + slot_id` in all three of `DevAms::GetTrayId`
+/// (`DevFilaSystem.cpp`), `DevMappingUtil::ams_filament_mapping` and
+/// `DevMapping.cpp` — none of which consult `ams_id`, because the type already told
 /// them which unit this is. bambuddy instead normalizes to the same id 6 this crate uses
 /// (`normalize_am_unit_id` in `bambu_mqtt.py`). Two routes, one answer.
 ///
@@ -154,7 +154,7 @@ pub(crate) const fn is_unit_slot(ams_id: u8, slot_id: u8) -> bool {
 /// Only the A2L-attached AMS Lite differs: telemetry normalizes its physical id 16 to 6, but
 /// every per-unit command addresses it as 16 with a local `0..=3` slot — confirmed from the
 /// firmware's own `ams_mapping2` (`{ams_id: 16, slot_id: 0-3}`, bambuddy `a2l_lite_wire_ids`,
-/// `bambu_mqtt.py:142-163`), and BambuStudio sends `ams_get_rfid {ams_id: 16}` for the unit.
+/// `bambu_mqtt.py`), and BambuStudio sends `ams_get_rfid {ams_id: 16}` for the unit.
 /// Callers may pass either spelling; every other id passes through untouched.
 #[must_use]
 pub(crate) const fn wire_ams_id(ams_id: u8) -> u8 {

@@ -153,14 +153,14 @@ pub struct CommandRefusal {
     /// Non-zero device error code.
     ///
     /// BambuStudio shows it through the same dialog as the `print_error` register
-    /// (`DeviceManager.cpp:3044`), so it decodes the same way — see
+    /// (`DeviceManager.cpp`), so it decodes the same way — see
     /// [`decoded_error()`](Self::decoded_error).
     pub err_code: Option<u32>,
     /// Non-zero per-command code.
     ///
     /// For `ams_change_filament`, `-2` means the chamber and `-4` the AMS is too hot to load the
     /// filament without softening it; the echo's `soft_temp` field, when present, is the limit
-    /// in °C (BambuStudio `DeviceManager.cpp:2993-3016`).
+    /// in °C (BambuStudio `DeviceManager.cpp`).
     pub errno: Option<i32>,
 }
 

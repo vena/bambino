@@ -105,7 +105,7 @@ impl MaterialSource {
             // `ams_mapping2` is the one place an A2L-attached AMS Lite's *physical* id 16 goes back on
             // the wire, paired with a local slot. CONFIRMED against the firmware's own mapping
             // (bambuddy's `a2l_lite_wire_ids`) and BambuStudio, which writes the unreduced
-            // `ams_id` into its mapping entry (`DevMapping.cpp:88-89`).
+            // `ams_id` into its mapping entry (`DevMapping.cpp`).
             MaterialSource::AmsLite { slot_id } => {
                 if *slot_id < super::ids::AMS_SLOTS_PER_UNIT {
                     AmsMapping2Entry {
@@ -239,7 +239,7 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
 /// `filament_id` is the slicer's 1-based *project filament index*, and several project filaments
 /// can print from one spool, so a project can use more filament ids than the printer has
 /// channels. BambuStudio allows 32 (`EnforcerBlockerType::ExtruderMax = Extruder32`,
-/// `Model.hpp:755`). Capping at the 24 physical channels (#146's reasoning) dropped ids 25-32
+/// `Model.hpp`). Capping at the 24 physical channels (#146's reasoning) dropped ids 25-32
 /// (#342).
 ///
 /// This is deliberately a single crate-wide cap rather than a per-model one: the mapping

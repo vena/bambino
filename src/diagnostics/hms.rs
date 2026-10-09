@@ -61,7 +61,7 @@ impl HmsSeverity {
     /// Extracts the severity level from the high 16 bits of the 32-bit `code` value.
     ///
     /// Bit representation: `(code >> 16) & 0xFFFF` [REF-DIAG-HMS]. Confirmed against
-    /// BambuStudio's `parse_hms_info` (`DevHMS.cpp:7-25`, identical in OrcaSlicer) and
+    /// BambuStudio's `parse_hms_info` (`DevHMS.cpp`, identical in OrcaSlicer) and
     /// pybambu's `get_HMS_severity`, both of which derive severity from `code >> 16`.
     pub fn from_code(code: u32) -> Self {
         match (code >> 16) & 0xFFFF {

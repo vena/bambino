@@ -836,7 +836,7 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
 
 /// The builder's unset defaults are what reaches the wire, so they are pinned here rather than
 /// only described in doc comments. `cooling_temp` in particular defaults to BambuStudio's own
-/// fallback of 50 (`AMSDryControl.cpp:813`), not to zero.
+/// fallback of 50 (`AMSDryControl.cpp`), not to zero.
 #[tokio::test]
 async fn test_dry_builder_defaults_reach_the_wire() {
     let (mut client, broker_task) =

@@ -7,7 +7,7 @@
 AI failure-detection and print-option settings (`print.xcam`).
 
 Two protocol generations share this one wire object, and BambuStudio branches between them
-(`DeviceCore/DevPrintOptions.cpp:39-85`). New-gen firmware sends `xcam.cfg`, a packed integer
+(`DeviceCore/DevPrintOptions.cpp`). New-gen firmware sends `xcam.cfg`, a packed integer
 bitmask carrying every detector's enable bit and sensitivity level. Old-gen firmware sends
 discrete boolean keys instead. Both are modeled here; the accessors prefer `cfg` when present,
 mirroring BambuStudio's own precedence.
@@ -114,7 +114,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   AI-monitoring sensitivity as a bare string (`"low"`/`"medium"`/`"high"`).
   
-  Old-gen only, and bambuddy reports it as reliably stale (`bambu_mqtt.py:2723`, "it's always
+  Old-gen only, and bambuddy reports it as reliably stale (`bambu_mqtt.py`, "it's always
   stale"). Prefer the per-detector sensitivity off `cfg` whenever `cfg` is present.
 
 - **`first_layer_inspector`**: `Option<bool>`
@@ -141,7 +141,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
   Every `xcam` key this struct does not model, preserved verbatim.
   
   `auto_recovery_step_loss` and `filament_tangle_detect` land here deliberately: bambuddy
-  reads them out of `xcam` (`bambu_mqtt.py:2792-2795`, itself commented "tracked locally
+  reads them out of `xcam` (`bambu_mqtt.py`, itself commented "tracked locally
   only"), but BambuStudio sources both from `home_flag` instead (bits 4 and 20), and no
   capture shows either inside `xcam`. Same for `ipcam_record`/`timelapse`, which bambino
   models under [`IpcamTelemetry`](../diagnostics/index.md#ipcamtelemetry) from `print.ipcam`.

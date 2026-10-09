@@ -405,13 +405,13 @@ the intermediate `print.ams` object.
 - **`calibrate_remain_flag`**: `Option<bool>`
 
   Whether AMS-side remaining-filament detection is enabled. Confirmed
-  independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
-  and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
+  independently by `bambu-printer-manager` (`bambucommands.py`, `bambutools.py`)
+  and `OpenBambuAPI/local-printer-api.md` (community protocol spec).
 
 - **`cfs`**: `Option<Vec<AmsFilamentStep>>`
 
   Per-slot filament-change step codes. Confirmed against BambuStudio's
-  `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
+  `DevFilaSystem.cpp` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
   consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
 #### Implementations
@@ -608,7 +608,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
   Accurate remaining weight in grams, when firmware can resolve it. Distinct
   from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
-  `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
+  `DevFilaSystem.cpp`/`.h` (`remain_g`, introduced in commit `31637e013`,
   "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
   "not provided", preserved here as the raw wire value; use `remaining_weight_grams()`
   for the sentinel-translated `Option<u32>`.
@@ -618,7 +618,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
   Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching,
   distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
   avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
-  BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
+  BambuStudio's `DevFilaSystem.cpp` (`filament_setting_id`) and `DevMapping.cpp`
   (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
   `filament_id` when auto-matching a spool to a slicer preset.
 
@@ -667,7 +667,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
   Accurate remaining weight in grams, translating `remain_g`'s raw wire
   sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
-  (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
+  (`DevFilaSystem.cpp`): `remain_g < 0` means "not provided by firmware" and
   `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
   returned. Does not replicate BambuStudio's percentage-based fallback (`weight * remain
   / 100`) when `remain_g` is absent — callers needing that estimate already have
@@ -732,7 +732,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   Ambient temperature inside the expansion enclosure, in degrees Celsius.
   
   Optional because BambuStudio reads it only when present (`ParseAmsInfo`,
-  `DevFilaSystem.cpp:667-684`): a partial unit push without it must not fail the frame.
+  `DevFilaSystem.cpp`): a partial unit push without it must not fail the frame.
 
 - **`humidity`**: `Option<String>`
 
@@ -856,7 +856,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   aliases values 4–15 into 0–3 and reports a valid inlet for a unit that has none.
 
   **Unverified against hardware.** No Filament Track Switch has been available; the decode
-  follows BambuStudio's `DevFilaSystem.cpp:598-609`, corroborated by bambuddy (`c5e00558`,
+  follows BambuStudio's `DevFilaSystem.cpp`, corroborated by bambuddy (`c5e00558`,
   `7a42e0a7`). See issue #137.
 
 - <span id="amsunit-has-unfixed-extruder"></span>`fn has_unfixed_extruder(&self) -> bool`
@@ -876,14 +876,14 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<AmsDryFanStatus>` — [`AmsDryFanStatus`](telemetry/ams/index.md#amsdryfanstatus)
 
   Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
-  `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
-  `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
+  `DevFilaSystem.cpp` (`get_flag_bits(info, 18, 2)`) and independently by
+  `bambu-printer-manager`'s `bambutools.py`, an exact match.
 
 - <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<AmsDryFanStatus>` — [`AmsDryFanStatus`](telemetry/ams/index.md#amsdryfanstatus)
 
   Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
-  `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
-  `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
+  `DevFilaSystem.cpp` (`get_flag_bits(info, 20, 2)`) and independently by
+  `bambu-printer-manager`'s `bambutools.py`, an exact match.
 
 - <span id="amsunit-dry-block-reasons"></span>`fn dry_block_reasons(&self) -> Option<Vec<DryBlockReason>>` — [`DryBlockReason`](telemetry/ams/index.md#dryblockreason)
 
@@ -1037,7 +1037,7 @@ Controller information segment detailing current temperature coordinates.
   The chamber controller's temperatures: `temp` unpacked, with `target` overriding the packed target when present.
 
   `target` is the authoritative target on new-gen models (bambuddy reads it separately,
-  `bambu_mqtt.py:2652`); BambuStudio derives both halves from the packed `temp`. `None` when
+  `bambu_mqtt.py`); BambuStudio derives both halves from the packed `temp`. `None` when
   `temp` is absent.
 
 #### Trait Implementations
@@ -1332,7 +1332,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
@@ -1362,7 +1362,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
   Info bitmask.
   
-  Three bits are known, decoded by BambuStudio's `DevExtruderSystem.cpp:354-356` via
+  Three bits are known, decoded by BambuStudio's `DevExtruderSystem.cpp` via
   `DevUtil::get_flag_bits(info, N)` (which reads a single bit at position `N`, its `count`
   defaulting to 1):
   
@@ -1398,7 +1398,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
   Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
   resolving which physical tray is feeding this extruder right now, confirmed
-  against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
+  against BambuStudio's `ExtderSystemParser::ParseV2_0` (`DevExtruderSystem.cpp`), which
   decodes `snow` directly with no extruder-map inversion needed.
 
 - <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
@@ -1800,7 +1800,7 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Normalized physical wear tracker value.
   
   A float: H2C, P2S and X2D send `0.0`, and BambuStudio stores it as `float m_wear`
-  (`DevNozzleSystem.h:104`).
+  (`DevNozzleSystem.h`).
 
 - **`serial_number`**: `Option<String>`
 
@@ -1841,14 +1841,14 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   which is what makes it meaningful on a rack machine where hotends are swapped between
   slots. Reported by H2C Vortek rack hotends; absent elsewhere — BambuStudio guards it with
   `if (njon.contains("p_t"))` and a `/*maybe not contains*/` note
-  (`DevNozzleSystem.cpp:789-791`, parsing the same `device.nozzle` push this field comes
+  (`DevNozzleSystem.cpp`, parsing the same `device.nozzle` push this field comes
   from).
   
   **Units are seconds.** BambuStudio's nozzle-rack panel names the value `usedSeconds` and
   formats it as `usedSeconds / 3600` hours, falling back to `usedSeconds / 60` minutes
   under an hour and displaying `"0 h"` below a minute
-  (`wgtDeviceNozzleRackUpdate.cpp:669-679`). ha-bambulab agrees independently, dividing by
-  3600 for an hours sensor (`definitions.py:951`).
+  (`wgtDeviceNozzleRackUpdate.cpp`). ha-bambulab agrees independently, dividing by
+  3600 for an hours sensor (`definitions.py`).
 
 #### Implementations
 
@@ -1873,7 +1873,7 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
 
   Confirmed directly against BambuStudio's source
-  (`DevNozzleSystem.cpp:769`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
+  (`DevNozzleSystem.cpp`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
   nozzles are appended to the *same* `nozzle.info` array as installed ones, distinguished
   by `DevUtil::get_hex_bits(id, 1) == 1`. `get_hex_bits(num, pos, base=10)` extracts the
   4-bit **nibble** at `pos*4` (`(num >> (pos*4)) & 0xF`), not a single bit — so this
@@ -2073,8 +2073,8 @@ raw field and re-implementing the decode:
   Estimated remaining print duration, in **minutes**.
   
   The wire unit is minutes, not seconds — BambuStudio multiplies by 60 on both parse arms
-  to reach its own seconds-based `mc_left_time` (`DeviceManager.cpp:3081-3086`), and
-  bambuddy does the same (`notification_service.py:1163-1169`, "in minutes, convert to
+  to reach its own seconds-based `mc_left_time` (`DeviceManager.cpp`), and
+  bambuddy does the same (`notification_service.py`, "in minutes, convert to
   seconds"). Callers wanting seconds must multiply.
   
   Permissive: BambuStudio branches on `is_string()` here, so the quoted form is real.
@@ -2091,7 +2091,7 @@ raw field and re-implementing the decode:
 
   Motion controller progress percentage (0–100).
   
-  Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp:3060-3065`) and
+  Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp`) and
   bambuddy coerces via `float()`/`_probe_number`, so the quoted form is confirmed.
 
 - **`mc_print_sub_stage`**: `Option<i32>`
@@ -2248,7 +2248,7 @@ raw field and re-implementing the decode:
   
   Carries the printer's own firmware capability flags — most importantly bit 5,
   remote-dry support. Read via [`fun2_bit`](telemetry/index.md#telemetryreport) rather than directly:
-  BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
+  BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp`) and
   reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
   integer the way `fun` is.
 
@@ -2319,7 +2319,7 @@ raw field and re-implementing the decode:
   Alternative remaining time field (minutes).
   
   Prefer [`mc_remaining_time`](telemetry/report/index.md#printertelemetry): it is the field BambuStudio reads
-  for the ETA (`DeviceManager.cpp:3081-3086`) and the one `PrinterClient::print_progress`
+  for the ETA (`DeviceManager.cpp`) and the one `PrinterClient::print_progress`
   tracks. This one is kept for completeness; nothing in either upstream client prefers it.
 
 - **`cfg`**: `Option<String>`
@@ -2347,15 +2347,15 @@ raw field and re-implementing the decode:
   Auxiliary state hex string, sent only by firmware using BambuStudio's "np" payload format.
   
   Its *presence* is one quarter of BambuStudio's `check_enable_np` probe
-  (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_np_format`](telemetry/report/index.md#printertelemetry). BambuStudio reads it
-  as a string (`DeviceManager.cpp:4492`).
+  (`DeviceManager.cpp`) — see [`Self::reports_np_format`](telemetry/report/index.md#printertelemetry). BambuStudio reads it
+  as a string (`DeviceManager.cpp`).
 
 - **`flag3`**: `Option<u32>`
 
   Third capability bitfield.
   
   Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS-side "np" flag
-  (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
+  (`DeviceManager.cpp`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
   [`Self::reports_np_format`](telemetry/report/index.md#printertelemetry). Masked into `u32` like [`home_flag`](telemetry/report/index.md#printertelemetry).
 
 - **`stg`**: `Option<Vec<i32>>`
@@ -2378,7 +2378,7 @@ raw field and re-implementing the decode:
   Per-filament AMS tray mapping of the running print.
   
   Each entry is `ams_id * 256 + slot_id`, and `65535` means unmapped (BambuStudio
-  `DeviceManager.cpp:807-810`). It is task-level state: an idle H2 keeps reporting the
+  `DeviceManager.cpp`). It is task-level state: an idle H2 keeps reporting the
   previous print's mapping, so it is meaningful only while a print runs.
 
 - **`gcode_start_time`**: `Option<String>`
@@ -2423,7 +2423,7 @@ raw field and re-implementing the decode:
   a retained or reused archive.
   
   Firmware sends this as **either a number or a decimal string** — BambuStudio branches on
-  `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp:2617-2626`), so
+  `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp`), so
   the permissive deserializer is load-bearing rather than defensive: a bare `Option<i32>`
   would fail the entire telemetry frame on the string form.
 
@@ -2454,10 +2454,10 @@ raw field and re-implementing the decode:
   BambuStudio tracks it as `is_enable_np` / `is_enable_ams_np` and never expands "np"; the
   name here follows it rather than guessing.
 
-  Mirrors BambuStudio's selector (`StatusPanel.cpp:5376`,
+  Mirrors BambuStudio's selector (`StatusPanel.cpp`,
   `obj->is_enable_np || obj->is_enable_ams_np`): either `cfg`, `fun`, `aux` and `stat` are
-  all present (`check_enable_np`, `DeviceManager.cpp:4338-4346`), or `flag3` bit 9 is set
-  (`DeviceManager.cpp:3111`). `false` means this frame didn't show it, which on a partial
+  all present (`check_enable_np`, `DeviceManager.cpp`), or `flag3` bit 9 is set
+  (`DeviceManager.cpp`). `false` means this frame didn't show it, which on a partial
   frame is not proof the firmware lacks it.
 
 - <span id="printertelemetry-current-stage"></span>`fn current_stage(&self) -> Option<PrintStage>` — [`PrintStage`](telemetry/stage/index.md#printstage)
@@ -2506,10 +2506,10 @@ raw field and re-implementing the decode:
 
   Previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
   pybambu-sourced heuristic. Both first-party clients (BambuStudio's
-  `DevPrintOptions.cpp:26`, OrcaSlicer identically) actually decode that bit as
+  `DevPrintOptions.cpp`, OrcaSlicer identically) actually decode that bit as
   `is_support_prompt_sound_detection`, unrelated to networking — confirmed wrong, not
   merely disputed. Real wired-ethernet state comes from `print.net.conf` bit 0
-  (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
+  (`DeviceManager.cpp`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
   (not `None`) when `net`/`net.conf` haven't been observed yet, matching
   `is_ethernet_active_via_wifi_signal()`'s existing no-signal-observed convention.
 
@@ -2546,7 +2546,7 @@ raw field and re-implementing the decode:
   returns the first present of `aux`, `home_flag`, `sdcard`, which is the same answer.
 
   bambuddy reads only `sdcard`, saying heartbeat pushes clear `home_flag` bits 8–9 with a
-  card inserted (`bambu_mqtt.py:4915-4927`). BambuStudio, the authoritative source, reads the
+  card inserted (`bambu_mqtt.py`). BambuStudio, the authoritative source, reads the
   bits on every frame that carries `home_flag`, so they are followed here; see
   `reference/03_mqtt_telemetry.md` for the disagreement.
 
@@ -2676,9 +2676,9 @@ top-level domains depending on which micro-system published the frame.
   `None` only when `fun2` is absent or carries no hex digits at all — "the printer didn't
   say", which is distinct from a bit that is present and clear. A bit index past the end of
   the string reads `false`, matching BambuStudio's extractor, which returns `0` rather than
-  failing (`DevUtil.cpp:53`).
+  failing (`DevUtil.cpp`).
 
-  Known bits (`DeviceManager.cpp:4466-4477`): `0` print with eMMC, `3` PA mode,
+  Known bits (`DeviceManager.cpp`): `0` print with eMMC, `3` PA mode,
   **`5` remote dry supported** (see [`supports_remote_dry`](telemetry/index.md#telemetryreport)),
   `6` update-remain hide display, `7` print TPU from left extruder (model-gated),
   `8` active arc fitting, `17` model internal storage, `19` check track-switch matches
@@ -2690,7 +2690,7 @@ top-level domains depending on which micro-system published the frame.
 
   This is the printer-side half of the drying gate; the attached unit's heater is the other
   half (see [`AmsUnitModel::supports_drying`](telemetry/ams/index.md#amsunitmodel)). BambuStudio requires both
-  (`Widgets/AMSControl.cpp:348`).
+  (`Widgets/AMSControl.cpp`).
 
   `None` means the printer never reported `fun2`, which is not the same as reporting `0` —
   older firmware omits the field entirely, and treating that as "unsupported" would refuse
@@ -2809,7 +2809,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   AI-monitoring sensitivity as a bare string (`"low"`/`"medium"`/`"high"`).
   
-  Old-gen only, and bambuddy reports it as reliably stale (`bambu_mqtt.py:2723`, "it's always
+  Old-gen only, and bambuddy reports it as reliably stale (`bambu_mqtt.py`, "it's always
   stale"). Prefer the per-detector sensitivity off `cfg` whenever `cfg` is present.
 
 - **`first_layer_inspector`**: `Option<bool>`
@@ -2836,7 +2836,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
   Every `xcam` key this struct does not model, preserved verbatim.
   
   `auto_recovery_step_loss` and `filament_tangle_detect` land here deliberately: bambuddy
-  reads them out of `xcam` (`bambu_mqtt.py:2792-2795`, itself commented "tracked locally
+  reads them out of `xcam` (`bambu_mqtt.py`, itself commented "tracked locally
   only"), but BambuStudio sources both from `home_flag` instead (bits 4 and 20), and no
   capture shows either inside `xcam`. Same for `ipcam_record`/`timelapse`, which bambino
   models under [`IpcamTelemetry`](telemetry/diagnostics/index.md#ipcamtelemetry) from `print.ipcam`.
@@ -3048,7 +3048,7 @@ Typed response from a `get_version` command containing all expansion bus modules
   The `ota` module is the main controller firmware, which is what version-gated
   capabilities are expressed against; the other modules report their own independent
   versions (`mc`, `esp32`, per-AMS entries) and are not interchangeable with it. bambuddy
-  reads the same module for the same purpose (`bambu_mqtt.py:998`, "Firmware version info
+  reads the same module for the same purpose (`bambu_mqtt.py`, "Firmware version info
   (from info.module[name=\"ota\"].sw_ver)").
 
   `None` when no `ota` module is present in the response.
@@ -3174,7 +3174,7 @@ A base filament material with vendor-published drying parameters.
 
 Each material's profile stores temperature and time as a 4-element array indexed
 `[N3F idle, N3S idle, N3F printing, N3S printing]` — the mapping is explicit in
-BambuStudio's `DevUtilBackend.cpp:87-91`, which reads exactly those four positions into
+BambuStudio's `DevUtilBackend.cpp`, which reads exactly those four positions into
 `..._on_idle[N3F]`, `..._on_idle[N3S]`, `..._on_print[N3F]`, `..._on_print[N3S]`. Everything
 here is indexed the same way, via [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel) plus a `printing` flag.
 
@@ -3288,11 +3288,11 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   **Capped at [`heat_distortion_temp`](drying/index.md#dryingmaterial) in both columns.**
   BambuStudio disables Start whenever the temperature exceeds the heat-distortion
-  temperature and a tray is loaded, idle or printing (`AMSDryControl.cpp:1213-1230`), yet
+  temperature and a tray is loaded, idle or printing (`AMSDryControl.cpp`), yet
   three raw profile values break that rule (TPU idle on both units, PVA idle on the AMS-HT).
   The value returned is the one BambuStudio would let a loaded tray start with. It also
   floors the printing column at the softening temperature
-  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`);
+  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp`);
   no published printing value exceeds [`softening_temp`](drying/index.md#dryingmaterial), so that
   half is a no-op here.
 
@@ -3309,8 +3309,8 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   **Also what a drying cycle sends as its wire `cooling_temp`** — not the profile's
   similarly named `filament_dev_drying_cooling_temperature`. BambuStudio parses that second
-  field (`DevUtilBackend.cpp:109-110`) but never sends it: the drying command is built from
-  the softening temperature (`AMSDryControl.cpp:816`). See [`DEFAULT_COMMAND_COOLING_TEMP`](drying/index.md#default-command-cooling-temp)
+  field (`DevUtilBackend.cpp`) but never sends it: the drying command is built from
+  the softening temperature (`AMSDryControl.cpp`). See [`DEFAULT_COMMAND_COOLING_TEMP`](drying/index.md#default-command-cooling-temp)
   for what BambuStudio sends when a tray's filament resolves to no preset at all.
 
 - <span id="dryingmaterial-heat-distortion-temp"></span>`fn heat_distortion_temp(self) -> u32`
@@ -3319,28 +3319,28 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   [`Pe`](drying/index.md#dryingmaterial) and [`Pha`](drying/index.md#dryingmaterial) publish no value of their own and inherit 45 °C
   from `fdm_filament_common.json:108-110`; BambuStudio reads the merged parent+child config
-  (`PresetBundle.cpp:5081-5109`). BambuStudio refuses to start a cycle above this on a
-  loaded tray (`AMSDryControl.cpp:1213-1230`), and it is one of the three inputs to the
+  (`PresetBundle.cpp`). BambuStudio refuses to start a cycle above this on a
+  loaded tray (`AMSDryControl.cpp`), and it is one of the three inputs to the
   while-printing clamp (`min(printing_temp, softening_temp, heat_distortion_temp)`,
-  `AMSDryControl.cpp:1723-1725`).
+  `AMSDryControl.cpp`).
 
 - <span id="dryingmaterial-fully-dryable-by"></span>`fn fully_dryable_by(self, unit: AmsUnitModel) -> bool` — [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel)
 
   Returns true if this unit can dry this material *completely*.
 
   A `false` here does not mean "don't dry it" — BambuStudio still permits the cycle and
-  shows "This filament may not be completely dried" (`AMSDryControl.cpp:1203`). It means
+  shows "This filament may not be completely dried" (`AMSDryControl.cpp`). It means
   the cycle will not fully remove the moisture.
 
   Read from `filament_dev_ams_drying_ams_limitations`, whose values do **not** use the
   `DevAmsType` numbering the rest of this module does: in that field `"0"` is the AMS 2 Pro
-  and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp:58-61`), where `DevAmsType`
+  and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp`), where `DevAmsType`
   makes them `3` and `4`. `["-1"]` means neither unit qualifies.
 
   **A profile that omits the key inherits `["1"]` (AMS-HT only)** from
   `fdm_filament_common.json:105-107`, which every material preset inherits; BambuStudio
-  reads the merged parent+child config (`PresetBundle.cpp:5081-5109`,
-  `DevUtilBackend.cpp:63-113`). So the seven materials with no key of their own — ABS, ASA,
+  reads the merged parent+child config (`PresetBundle.cpp`,
+  `DevUtilBackend.cpp`). So the seven materials with no key of their own — ABS, ASA,
   HIPS, PC, PA, PVA, TPU — are fully dryable by the AMS-HT and not the AMS 2 Pro. PPA and
   PPS name `["-1"]` explicitly.
 
@@ -3818,7 +3818,7 @@ enum AmsDryFanStatus {
 ```
 
 State of one drying fan from `info` bits 18–19 or 20–21, BambuStudio's
-`DevAms::DryFanStatus` (`DevFilaSystem.h:167-171`).
+`DevAms::DryFanStatus` (`DevFilaSystem.h`).
 
 #### Variants
 
@@ -3869,7 +3869,7 @@ enum AmsDryStatus {
 ```
 
 Drying-cycle state from `info` bits 4–7, BambuStudio's `DevAms::DryStatus`
-(`DevFilaSystem.h:148-158`).
+(`DevFilaSystem.h`).
 
 #### Variants
 
@@ -3939,7 +3939,7 @@ enum AmsDrySubStatus {
 ```
 
 Drying sub-state from `info` bits 22–23, BambuStudio's `DevAms::DrySubStatus`
-(`DevFilaSystem.h:160-165`).
+(`DevFilaSystem.h`).
 
 #### Variants
 
@@ -4001,7 +4001,7 @@ enum AmsFilamentStep {
 ```
 
 Per-slot filament-change step code. Mirrors BambuStudio's `DevFilamentStep` enum
-(`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
+(`DevDefs.h`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
 wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
 the source enum). `Unknown` preserves any other raw value rather than failing to decode.
 
@@ -4123,15 +4123,15 @@ about the printer; this answers questions about the box plugged into it, and the
 orthogonal. Remote drying in particular needs *both* gates to pass: an AMS that physically has
 a heater (here) and a printer whose firmware acts on the command rather than acking and
 discarding it (`ModelQuirks::ams_remote_drying_support`). BambuStudio writes the same pair out
-longhand at `Widgets/AMSControl.cpp:348`.
+longhand at `Widgets/AMSControl.cpp`.
 
 Do not infer any of this from `ams_id`: `0..=3` is shared by the original AMS, the AMS Lite and
 the AMS 2 Pro, and only the last of those can dry.
 
-Wire numbering matches BambuStudio's `DevAmsType` (`DevDefs.h:54-62`), which casts these four
-bits straight to it (`DevFilaSystem.cpp:598`). bambuddy reaches the same taxonomy by an
+Wire numbering matches BambuStudio's `DevAmsType` (`DevDefs.h`), which casts these four
+bits straight to it (`DevFilaSystem.cpp`). bambuddy reaches the same taxonomy by an
 independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
-(`bambu_mqtt.py:2492`) — and ha-bambulab spells out the full prefix map (`ams/N`,
+(`bambu_mqtt.py`) — and ha-bambulab spells out the full prefix map (`ams/N`,
 `ams_f1/N`, `n3f/N`, `n3s/N`).
 
 #### Variants
@@ -4177,9 +4177,9 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 
   True for [`Ams2Pro`](telemetry/ams/index.md#amsunitmodel) and [`AmsHt`](telemetry/ams/index.md#amsunitmodel) only. The original AMS and
   both AMS Lite variants have no heater, so a drying command addressed to one cannot do
-  anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp:255`,
+  anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp`,
   `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and independently by
-  bambuddy (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`).
+  bambuddy (`print_scheduler.py`, `if module_type not in ("n3f", "n3s"): skip`).
 
 - <span id="amsunitmodel-dry-temp-range"></span>`fn dry_temp_range(self) -> Option<(u32, u32)>`
 
@@ -4188,7 +4188,7 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 
   `(45, 65)` for the AMS 2 Pro and `(45, 85)` for the AMS-HT. **Both bounds are real** —
   BambuStudio refuses a temperature below the minimum just as it refuses one above the
-  maximum (`AMSDryControl.cpp:1186-1199`), so a caller clamping only the ceiling still
+  maximum (`AMSDryControl.cpp`), so a caller clamping only the ceiling still
   publishes values the vendor's own client rejects.
 
 - <span id="amsunitmodel-slot-count"></span>`fn slot_count(self) -> Option<u8>`
@@ -4233,8 +4233,8 @@ enum SdcardState {
 SD-card presence/health state, decoded from a two-bit field (`aux` bits 12–13 or `home_flag` bits 8–9).
 
 Confirmed against BambuStudio's `MachineObject::parse_home_flag`
-(`DeviceManager.cpp:1075`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
-corroborated by pybambu's `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard`
+(`DeviceManager.cpp`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
+corroborated by pybambu's `const.py`/`models.py` (same bits). The `sdcard`
 boolean field can never report a degraded state — only the bit fields distinguish "no card,"
 "normal," "abnormal," and "read-only."
 
@@ -4383,12 +4383,12 @@ fn hex_bit(hex: &str, bit: u32) -> Option<bool>
 
 Reads one bit of an unbounded-length hex capability string (`fun`, `fun2`), LSB-first from the right.
 
-`fun2` "may have infinite length" per BambuStudio's own comment (`DeviceManager.cpp:4464`),
+`fun2` "may have infinite length" per BambuStudio's own comment (`DeviceManager.cpp`),
 which is why this walks hex digits from the right instead of parsing into an integer — a
 string longer than 16 digits would fail that parse outright and report every capability as
 absent.
 
-Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): whitespace, a `0x`/`0X`
+Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp`): whitespace, a `0x`/`0X`
 prefix and any non-hex characters are ignored, and an index past the end of the string reads
 `false` rather than failing. Returns `None` only when no hex digits remain after filtering.
 
@@ -4422,5 +4422,5 @@ const DEFAULT_COMMAND_COOLING_TEMP: u32 = 50u32;
 ```
 
 Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset
-(`AMSDryControl.cpp:813`, `int cooling_temp = 50;`).
+(`AMSDryControl.cpp`, `int cooling_temp = 50;`).
 

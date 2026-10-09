@@ -667,7 +667,7 @@ The `print` namespace envelope a command payload is published in.
     uncalibrated.
   * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
     Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
-    `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
+    `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp`).
 
   The address is a [`CaliSelAddress`](../../diagnostics/kprofile/index.md#caliseladdress), which derives the wire `ams_id`, global `tray_id` and
   local `slot_id` from a unit and slot, so the three can't disagree (#397).
@@ -704,7 +704,7 @@ The `print` namespace envelope a command payload is published in.
   `PrinterClient::change_filament()` deriving `target`.
 
   Confirmed against BambuStudio's `command_ams_filament_settings`
-  (`DeviceManager.cpp:1707-1722`), whose `tag_tray_id` maps either
+  (`DeviceManager.cpp`), whose `tag_tray_id` maps either
   `VIRTUAL_TRAY_MAIN_ID`/`VIRTUAL_TRAY_DEPUTY_ID` to `254` and whose own call sites pass
   `slot_id: 0` for a virtual tray (`:4853`, `:4877`); and against bambuddy's
   `ams_set_filament_setting`, which sends `ams_id: 255`, `tray_id: 254`, `slot_id: 0` for
@@ -717,7 +717,7 @@ The `print` namespace envelope a command payload is published in.
   * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
     `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
     (`ams_id: 255`) require `tray_id: 254` (confirmed against
-    `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
+    `command_ams_filament_settings`, `DeviceManager.cpp` — `tag_ams_id ==
     VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
     `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
   * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
@@ -783,7 +783,7 @@ The `print` namespace envelope a command payload is published in.
   Builds a request loading slot `slot_id` of the unit at wire address `ams_id`.
 
   `target` is derived, never caller-supplied, per BambuStudio's
-  `command_ams_change_filament` (`DeviceManager.cpp:1602-1638`): the `ams_id` itself for
+  `command_ams_change_filament` (`DeviceManager.cpp`): the `ams_id` itself for
   any unit at wire address 16 or above (an A2L's AMS Lite, AMS-HT, an external spool), or
   the flat global tray (`ams_id * 4 + slot_id`) for a standard unit. A caller-supplied
   `target` that didn't match was a real hardware misconfiguration risk (`07FF_8012` class);
@@ -811,7 +811,7 @@ The `print` namespace envelope a command payload is published in.
 
   Builds a request stopping the drying cycle on the unit at `ams_id`.
 
-  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`): every field
+  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp`): every field
   but the unit and mode zeroed.
 
 - <span id="print-new"></span>`fn new(command: StandardCommand, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`StandardCommand`](control/index.md#standardcommand), [`ClampedTaskId`](#clampedtaskid)

@@ -179,19 +179,19 @@ where
     /// * `slot_id`: Slot within the AMS (`0..=3`).
     ///
     /// **Two commands, chosen by firmware payload format** — BambuStudio's selector
-    /// (`StatusPanel.cpp:5376-5399`). The MQTT transport is the same either way. A printer whose
+    /// (`StatusPanel.cpp`). The MQTT transport is the same either way. A printer whose
     /// telemetry shows BambuStudio's "np" format
     /// ([`PrinterTelemetry::reports_np_format`](crate::types::PrinterTelemetry::reports_np_format))
     /// gets `ams_get_rfid`; one whose `push_status` frames don't gets the G-code
-    /// `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp:1738-1743`), since
+    /// `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp`), since
     /// older firmware acks `ams_get_rfid` and does nothing. Before any telemetry has arrived the
     /// format is unknown and `ams_get_rfid` is sent — call
     /// [`poll_telemetry()`](Self::poll_telemetry) first on older firmware.
     ///
     /// **Refused while filament is loaded to the toolhead**, because the scan feeds filament to
     /// the reader: returns [`Error::InvalidState`] when the cached `ams.tray_now` is anything but
-    /// `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
-    /// same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
+    /// `255` (unloaded), matching bambuddy (`bambu_mqtt.py`). BambuStudio refuses the
+    /// same case with a dialog (`StatusPanel.cpp`). An unobserved `tray_now` passes.
     pub async fn scan_rfid(&mut self, ams_id: u8, slot_id: u8) -> Result<CommandHandle, Error> {
         // `is_unit_slot` keeps AMS-HT to its single slot (#357); without that the np path
         // published a nonexistent slot while the legacy path's `resolve_global_tray_id` rejected

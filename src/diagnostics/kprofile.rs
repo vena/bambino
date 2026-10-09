@@ -67,7 +67,7 @@ fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
 /// Structured representation of a Linear Advance calibration profile entry on the printer.
 ///
 /// Every field is optional on the read side, defaulting as BambuStudio's
-/// `from_json(PACalibResult)` does (`DevCalib.cpp:56-72`): one entry missing a key must not fail
+/// `from_json(PACalibResult)` does (`DevCalib.cpp`): one entry missing a key must not fail
 /// the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out as a timeout
 /// (#314).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -149,7 +149,7 @@ pub struct KProfileEntry {
 }
 
 impl Default for KProfileEntry {
-    /// The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp:56-72`):
+    /// The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp`):
     /// `cali_idx` `-1` (a fresh write), `k_value` `"0"`, everything else empty.
     fn default() -> Self {
         Self {
@@ -377,7 +377,7 @@ pub struct ExtrusionCaliSelPayload {
     /// Absolute global tray ID (not local slot index).
     pub tray_id: i32,
     /// Local slot within the unit: `0..=3` on a standard AMS or an AMS Lite on an A2L, `0` on
-    /// an AMS-HT or external spool. BambuStudio (`DeviceManager.cpp:2061-2078`) and bambuddy
+    /// an AMS-HT or external spool. BambuStudio (`DeviceManager.cpp`) and bambuddy
     /// both send it alongside the global `tray_id` (#315).
     pub slot_id: i32,
     /// Index of the calibration entry within the target's profile database (`KProfileEntry::cali_idx`).
@@ -415,7 +415,7 @@ impl ExtrusionCaliSelRequest {
     ///   uncalibrated.
     /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
     ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
-    ///   `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
+    ///   `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp`).
     ///
     /// The address is a [`CaliSelAddress`], which derives the wire `ams_id`, global `tray_id` and
     /// local `slot_id` from a unit and slot, so the three can't disagree (#397).
@@ -447,7 +447,7 @@ impl ExtrusionCaliSelRequest {
 /// [`resolve_global_tray_id`](crate::ams::resolve_global_tray_id): `ams_id * 4 + slot` on a
 /// standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1` example is
 /// unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's `GetTrayIndexMap`,
-/// `DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT (slot 0 only) or an external
+/// `DevFilaSystem.cpp`), the `ams_id` itself on an AMS-HT (slot 0 only) or an external
 /// holder (slot ignored) — which gives the cheat-sheet pairs on [`ExtrusionCaliSelRequest::new`].
 /// `slot_id` is the unit-local slot BambuStudio and bambuddy send beside it (#315): the caller's
 /// slot on a four-slot unit, `0` on an AMS-HT or external holder. `ams_id` is the wire form (an

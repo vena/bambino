@@ -35,7 +35,7 @@ where
 }
 
 /// Per-slot filament-change step code. Mirrors BambuStudio's `DevFilamentStep` enum
-/// (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
+/// (`DevDefs.h`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
 /// wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
 /// the source enum). `Unknown` preserves any other raw value rather than failing to decode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -167,12 +167,12 @@ pub struct AmsStatusReport {
     pub cali_stat: Option<i32>,
 
     /// Whether AMS-side remaining-filament detection is enabled. Confirmed
-    /// independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
-    /// and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
+    /// independently by `bambu-printer-manager` (`bambucommands.py`, `bambutools.py`)
+    /// and `OpenBambuAPI/local-printer-api.md` (community protocol spec).
     pub calibrate_remain_flag: Option<bool>,
 
     /// Per-slot filament-change step codes. Confirmed against BambuStudio's
-    /// `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
+    /// `DevFilaSystem.cpp` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
     /// consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
     pub cfs: Option<Vec<AmsFilamentStep>>,
 }
@@ -273,7 +273,7 @@ pub struct AmsUnit {
     /// Ambient temperature inside the expansion enclosure, in degrees Celsius.
     ///
     /// Optional because BambuStudio reads it only when present (`ParseAmsInfo`,
-    /// `DevFilaSystem.cpp:667-684`): a partial unit push without it must not fail the frame.
+    /// `DevFilaSystem.cpp`): a partial unit push without it must not fail the frame.
     pub temp: Option<String>,
 
     /// Enclosure climate relative humidity index (1-5 scale). Optional, as for `temp`.
@@ -520,7 +520,7 @@ pub struct AmsTray {
 
     /// Accurate remaining weight in grams, when firmware can resolve it. Distinct
     /// from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
-    /// `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
+    /// `DevFilaSystem.cpp`/`.h` (`remain_g`, introduced in commit `31637e013`,
     /// "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
     /// "not provided", preserved here as the raw wire value; use `remaining_weight_grams()`
     /// for the sentinel-translated `Option<u32>`.
@@ -529,7 +529,7 @@ pub struct AmsTray {
     /// Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching,
     /// distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
     /// avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
-    /// BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
+    /// BambuStudio's `DevFilaSystem.cpp` (`filament_setting_id`) and `DevMapping.cpp`
     /// (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
     /// `filament_id` when auto-matching a spool to a slicer preset.
     #[serde(rename = "setting_id")]
@@ -557,21 +557,21 @@ pub enum FilamentSwitchInlet {
 /// Minimum drying-chamber temperature (°C) accepted by an AMS unit's built-in heater.
 ///
 /// Applies to both drying units. Confirmed via BambuStudio's own input validation
-/// (`AMSDryControl.cpp:1186-1189`, and the field hints at 1442-1445 spelling out `"45-65°C"`
+/// (`AMSDryControl.cpp`, and the field hints at 1442-1445 spelling out `"45-65°C"`
 /// for the AMS 2 Pro and `"45-85°C"` for the AMS-HT).
 pub(crate) const AMS_DRY_TEMP_MIN: u32 = 45;
 
 /// Maximum drying-chamber temperature (°C) for an AMS-HT (`N3S`) unit's built-in heater.
 ///
 /// Confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-ht/Intr-to-ams-ht-workflow-and-features`)
-/// and BambuStudio's input validation (`AMSDryControl.cpp:1189`). This is a property of the
+/// and BambuStudio's input validation (`AMSDryControl.cpp`). This is a property of the
 /// physical AMS-HT hardware, not the host printer model.
 pub(crate) const AMS_HT_DRY_TEMP_MAX: u32 = 85;
 
 /// Maximum drying-chamber temperature (°C) for an AMS 2 Pro (`N3F`) unit's built-in heater.
 ///
 /// Confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-2-pro/manual/drying-function`)
-/// and BambuStudio's input validation (`AMSDryControl.cpp:1188`). Property of the physical
+/// and BambuStudio's input validation (`AMSDryControl.cpp`). Property of the physical
 /// AMS 2 Pro hardware, not the host printer model.
 pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
 
@@ -582,15 +582,15 @@ pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
 /// orthogonal. Remote drying in particular needs *both* gates to pass: an AMS that physically has
 /// a heater (here) and a printer whose firmware acts on the command rather than acking and
 /// discarding it (`ModelQuirks::ams_remote_drying_support`). BambuStudio writes the same pair out
-/// longhand at `Widgets/AMSControl.cpp:348`.
+/// longhand at `Widgets/AMSControl.cpp`.
 ///
 /// Do not infer any of this from `ams_id`: `0..=3` is shared by the original AMS, the AMS Lite and
 /// the AMS 2 Pro, and only the last of those can dry.
 ///
-/// Wire numbering matches BambuStudio's `DevAmsType` (`DevDefs.h:54-62`), which casts these four
-/// bits straight to it (`DevFilaSystem.cpp:598`). bambuddy reaches the same taxonomy by an
+/// Wire numbering matches BambuStudio's `DevAmsType` (`DevDefs.h`), which casts these four
+/// bits straight to it (`DevFilaSystem.cpp`). bambuddy reaches the same taxonomy by an
 /// independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
-/// (`bambu_mqtt.py:2492`) — and ha-bambulab spells out the full prefix map (`ams/N`,
+/// (`bambu_mqtt.py`) — and ha-bambulab spells out the full prefix map (`ams/N`,
 /// `ams_f1/N`, `n3f/N`, `n3s/N`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmsUnitModel {
@@ -632,9 +632,9 @@ impl AmsUnitModel {
     ///
     /// True for [`Ams2Pro`](Self::Ams2Pro) and [`AmsHt`](Self::AmsHt) only. The original AMS and
     /// both AMS Lite variants have no heater, so a drying command addressed to one cannot do
-    /// anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp:255`,
+    /// anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp`,
     /// `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and independently by
-    /// bambuddy (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`).
+    /// bambuddy (`print_scheduler.py`, `if module_type not in ("n3f", "n3s"): skip`).
     #[must_use]
     pub fn supports_drying(self) -> bool {
         self.drying_column().is_some()
@@ -659,7 +659,7 @@ impl AmsUnitModel {
     ///
     /// `(45, 65)` for the AMS 2 Pro and `(45, 85)` for the AMS-HT. **Both bounds are real** —
     /// BambuStudio refuses a temperature below the minimum just as it refuses one above the
-    /// maximum (`AMSDryControl.cpp:1186-1199`), so a caller clamping only the ceiling still
+    /// maximum (`AMSDryControl.cpp`), so a caller clamping only the ceiling still
     /// publishes values the vendor's own client rejects.
     #[must_use]
     pub fn dry_temp_range(self) -> Option<(u32, u32)> {
@@ -707,7 +707,7 @@ const AMS_UNIT_INFO_SWITCH_INLET_B: u8 = 0;
 const AMS_UNIT_INFO_SWITCH_INLET_A: u8 = 1;
 
 /// Drying-cycle state from `info` bits 4–7, BambuStudio's `DevAms::DryStatus`
-/// (`DevFilaSystem.h:148-158`).
+/// (`DevFilaSystem.h`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmsDryStatus {
     /// `0` — not drying.
@@ -747,7 +747,7 @@ impl AmsDryStatus {
 }
 
 /// Drying sub-state from `info` bits 22–23, BambuStudio's `DevAms::DrySubStatus`
-/// (`DevFilaSystem.h:160-165`).
+/// (`DevFilaSystem.h`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmsDrySubStatus {
     /// `0` — idle.
@@ -772,7 +772,7 @@ impl AmsDrySubStatus {
 }
 
 /// State of one drying fan from `info` bits 18–19 or 20–21, BambuStudio's
-/// `DevAms::DryFanStatus` (`DevFilaSystem.h:167-171`).
+/// `DevAms::DryFanStatus` (`DevFilaSystem.h`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmsDryFanStatus {
     /// `0` — off.
@@ -906,7 +906,7 @@ impl AmsUnit {
     /// aliases values 4–15 into 0–3 and reports a valid inlet for a unit that has none.
     ///
     /// **Unverified against hardware.** No Filament Track Switch has been available; the decode
-    /// follows BambuStudio's `DevFilaSystem.cpp:598-609`, corroborated by bambuddy (`c5e00558`,
+    /// follows BambuStudio's `DevFilaSystem.cpp`, corroborated by bambuddy (`c5e00558`,
     /// `7a42e0a7`). See issue #137.
     #[must_use]
     pub fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet> {
@@ -944,8 +944,8 @@ impl AmsUnit {
     }
 
     /// Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
-    /// `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
-    /// `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
+    /// `DevFilaSystem.cpp` (`get_flag_bits(info, 18, 2)`) and independently by
+    /// `bambu-printer-manager`'s `bambutools.py`, an exact match.
     #[must_use]
     pub fn dry_fan1_status(&self) -> Option<AmsDryFanStatus> {
         self.info_field(
@@ -956,8 +956,8 @@ impl AmsUnit {
     }
 
     /// Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
-    /// `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
-    /// `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
+    /// `DevFilaSystem.cpp` (`get_flag_bits(info, 20, 2)`) and independently by
+    /// `bambu-printer-manager`'s `bambutools.py`, an exact match.
     #[must_use]
     pub fn dry_fan2_status(&self) -> Option<AmsDryFanStatus> {
         self.info_field(
@@ -1006,7 +1006,7 @@ impl AmsUnit {
 /// a coincidence; the field is an enumerated code list, which is why it deserializes as
 /// `Vec<i32>`.
 ///
-/// Codes from BambuStudio's `DevAms::CannotDryReason` (`DevFilaSystem.h:167-179`), which has ten
+/// Codes from BambuStudio's `DevAms::CannotDryReason` (`DevFilaSystem.h`), which has ten
 /// members; bambuddy's `DRY_SF_REASON_MESSAGES` (`backend/app/services/drying_preflight.py`)
 /// agrees on `0`-`8` and omits `10`. The user-action split is bambuddy's — see
 /// [`needs_user_action`](Self::needs_user_action).
@@ -1034,7 +1034,7 @@ pub enum DryBlockReason {
     /// `10` — filament is at the AMS outlet and must be unloaded by hand before drying.
     ///
     /// Needs the user. BambuStudio's `FilamentAtAmsOutletManualUnload`, whose message asks for a manual
-    /// unload (`AMSDryControl.cpp:1355-1357`), unlike `3`, where Studio offers an unload button.
+    /// unload (`AMSDryControl.cpp`), unlike `3`, where Studio offers an unload button.
     FilamentAtOutletManualUnload,
     /// A code this crate doesn't know — newer firmware may add reasons, and folding one onto a
     /// neighbouring variant would report a wrong cause with full confidence.
@@ -1166,7 +1166,7 @@ impl AmsTray {
         // all, and treating that as absent-equivalent scrubbed the spool's material data on every
         // `TelemetryCache::sanitized_ams()` call. Fall back to the filament metadata instead —
         // the same fallback pybambu reaches for in `_has_filament_metadata` /
-        // `_resolve_loaded_state` (`models.py:3517-3538`), which gates on a `_state_reported`
+        // `_resolve_loaded_state` (`models.py`), which gates on a `_state_reported`
         // flag and accepts a non-empty `tray_info_idx`, or a `tray_type` that is neither empty
         // nor `"Empty"`, as proof a spool is loaded.
         let has_filament_metadata = self
@@ -1190,7 +1190,7 @@ impl AmsTray {
 
     /// Accurate remaining weight in grams, translating `remain_g`'s raw wire
     /// sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
-    /// (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
+    /// (`DevFilaSystem.cpp`): `remain_g < 0` means "not provided by firmware" and
     /// `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
     /// returned. Does not replicate BambuStudio's percentage-based fallback (`weight * remain
     /// / 100`) when `remain_g` is absent — callers needing that estimate already have
@@ -1223,7 +1223,7 @@ impl Mergeable for AmsTray {
     /// tray-level `state` field) — preserved on absence like every field with no confirmed
     /// counterpart elsewhere in this codebase. `remain_g`/
     /// `filament_setting_id` preserve-on-absence like every other field with a
-    /// confirmed 3-arg `ParseVal` counterpart (`DevFilaSystem.cpp:800-801`).
+    /// confirmed 3-arg `ParseVal` counterpart (`DevFilaSystem.cpp`).
     fn merge_from(&mut self, incoming: &Self) {
         let Self {
             id,

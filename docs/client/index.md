@@ -450,7 +450,7 @@ the generic pair, `err_code` a device error code, and `errno` a per-command code
   Non-zero device error code.
   
   BambuStudio shows it through the same dialog as the `print_error` register
-  (`DeviceManager.cpp:3044`), so it decodes the same way — see
+  (`DeviceManager.cpp`), so it decodes the same way — see
   [`decoded_error()`](command/index.md#commandrefusal).
 
 - **`errno`**: `Option<i32>`
@@ -459,7 +459,7 @@ the generic pair, `err_code` a device error code, and `errno` a per-command code
   
   For `ams_change_filament`, `-2` means the chamber and `-4` the AMS is too hot to load the
   filament without softening it; the echo's `soft_temp` field, when present, is the limit
-  in °C (BambuStudio `DeviceManager.cpp:2993-3016`).
+  in °C (BambuStudio `DeviceManager.cpp`).
 
 #### Implementations
 
@@ -710,7 +710,7 @@ client
   heaterless unit takes), or a cached [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) whose
   [`supports_drying`](../types/telemetry/ams/index.md#amsunitmodel) is `false`.
   These are two independent gates on purpose, matching the pair BambuStudio writes out
-  longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
+  longhand at `Widgets/AMSControl.cpp`: the printer must act on the command *and* the
   attached box must have a heater.
 
   [`Error::InvalidArgument`](../error/index.md#error) for an `ams_id` outside the documented address space.
@@ -718,7 +718,7 @@ client
   [`Error::InvalidArgument`](../error/index.md#error) when the temperature falls outside the unit's
   [`dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not
   clamped**: BambuStudio refuses a temperature below the floor exactly as it refuses one
-  above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a caller's value
+  above the ceiling (`AMSDryControl.cpp`), and silently rewriting a caller's value
   would start a heating cycle they did not ask for.
 
   The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
@@ -940,19 +940,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   * `slot_id`: Slot within the AMS (`0..=3`).
 
   **Two commands, chosen by firmware payload format** — BambuStudio's selector
-  (`StatusPanel.cpp:5376-5399`). The MQTT transport is the same either way. A printer whose
+  (`StatusPanel.cpp`). The MQTT transport is the same either way. A printer whose
   telemetry shows BambuStudio's "np" format
   (`PrinterTelemetry::reports_np_format`)
   gets `ams_get_rfid`; one whose `push_status` frames don't gets the G-code
-  `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp:1738-1743`), since
+  `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp`), since
   older firmware acks `ams_get_rfid` and does nothing. Before any telemetry has arrived the
   format is unknown and `ams_get_rfid` is sent — call
   [`poll_telemetry()`](#printerclient) first on older firmware.
 
   **Refused while filament is loaded to the toolhead**, because the scan feeds filament to
   the reader: returns [`Error::InvalidState`](../error/index.md#error) when the cached `ams.tray_now` is anything but
-  `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
-  same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
+  `255` (unloaded), matching bambuddy (`bambu_mqtt.py`). BambuStudio refuses the
+  same case with a dialog (`StatusPanel.cpp`). An unobserved `tray_now` passes.
 
 - <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: u8, slot_id: u8, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -1333,7 +1333,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
 
-  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
+  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp`) exactly —
   every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
@@ -1589,7 +1589,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   [`Error::InvalidState`](../error/index.md#error) unless the cached print state is `Running` or `Paused` (or not yet
   observed). This follows bambuddy, which gates on exactly those two
-  (`bambu_mqtt.py:7047`). Pausing to inspect a failed part, skipping it, then resuming is a
+  (`bambu_mqtt.py`). Pausing to inspect a failed part, skipping it, then resuming is a
   legitimate workflow, so `Paused` belongs alongside `Running`.
 
   Deliberately **not** gated on `xcam.allow_skip_parts`: that field reads `false` in every
@@ -1637,8 +1637,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   **Vibration compensation (bit 2) is kept on every model.** Both upstreams send the bit
   for any model: BambuStudio's calibration dialog offers Vibration Compensation with no
-  model gate (`Calibration.cpp:57`, gates at `:225-260`), and bambuddy's
-  `start_calibration` (`bambu_mqtt.py:6295-6345`) sets it unconditionally (#358). This is
+  model gate (`Calibration.cpp`, gates at `:225-260`), and bambuddy's
+  `start_calibration` (`bambu_mqtt.py`) sets it unconditionally (#358). This is
   separate from the print job's `vibration_cali` field, which
   [`start_print`](#printerclient) sends as `false` by default on every model (#375).
 
@@ -2101,7 +2101,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
   Prefers `device.extruder.info[active].snow`, BambuStudio's own preferred resolution
-  method (`DevExterSystem::ParseV2_0`, `DevExtderSystem.cpp:318-386`) — no
+  method (`ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`) — no
   `ams_extruder_map` inversion needed, since `snow` self-identifies both the AMS unit and
   slot directly. `None` when `device.extruder` telemetry hasn't been observed yet (common
   on single-nozzle models, which may not populate this sub-object at all) or the active

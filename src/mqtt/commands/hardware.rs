@@ -172,13 +172,13 @@ impl PromptSoundRequest {
     }
 }
 
-/// Bit of `print_option`'s `option` field carrying auto-recovery, BambuStudio's `PRINT_OP_AUTO_RECOVERY` (`DeviceManager.hpp:185`).
+/// Bit of `print_option`'s `option` field carrying auto-recovery, BambuStudio's `PRINT_OP_AUTO_RECOVERY` (`DeviceManager.hpp`).
 pub(crate) const PRINT_OP_AUTO_RECOVERY: u32 = 0;
 
 /// Turns step-loss auto-recovery on or off.
 ///
 /// Carries the setting twice, as BambuStudio's `command_set_printing_option` does
-/// (`DeviceManager.cpp:1832-1842`): as bit `PRINT_OP_AUTO_RECOVERY` (0) of `option` and as
+/// (`DeviceManager.cpp`): as bit `PRINT_OP_AUTO_RECOVERY` (0) of `option` and as
 /// `auto_recovery`. bambuddy sends only `auto_recovery`.
 #[derive(Debug, Clone, Serialize)]
 pub struct AutoRecoveryPayload {

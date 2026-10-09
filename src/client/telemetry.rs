@@ -415,7 +415,7 @@ where
             &print.mc_percent,
         );
         // `mc_remaining_time` is in minutes on the wire, not seconds — both BambuStudio
-        // (`DeviceManager.cpp:3081-3086`) and bambuddy (`notification_service.py:1163-1169`)
+        // (`DeviceManager.cpp`) and bambuddy (`notification_service.py`)
         // multiply by 60 to reach a seconds value. Convert here so `remaining_secs` is honest
         // about its own name; storing the raw value understated every ETA by 60x.
         if let Some(remaining) = print.mc_remaining_time {
@@ -610,7 +610,7 @@ where
     /// the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
     /// Prefers `device.extruder.info[active].snow`, BambuStudio's own preferred resolution
-    /// method (`DevExterSystem::ParseV2_0`, `DevExtderSystem.cpp:318-386`) — no
+    /// method (`ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`) — no
     /// `ams_extruder_map` inversion needed, since `snow` self-identifies both the AMS unit and
     /// slot directly. `None` when `device.extruder` telemetry hasn't been observed yet (common
     /// on single-nozzle models, which may not populate this sub-object at all) or the active

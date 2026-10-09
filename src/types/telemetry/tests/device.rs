@@ -184,7 +184,7 @@ fn test_ethernet_active_via_wifi_signal() {
 #[test]
 fn test_plate_idx_accepts_number_and_string() {
     // BambuStudio branches on is_number()/is_string() for this field
-    // (DeviceManager.cpp:2617-2626), so both forms are real. A bare Option<i32> would not
+    // (DeviceManager.cpp), so both forms are real. A bare Option<i32> would not
     // merely miss the string form — it would fail the whole frame, losing every other field
     // in that push to gain one.
     let as_number = r#"{ "print": { "plate_idx": 2, "layer_num": 516 } }"#;

@@ -59,7 +59,7 @@ To facilitate local lookup of error descriptions without querying remote wiki se
 #### Severity Scale & Module Identification
 The severity level of the diagnostic alert is extracted from the high 16 bits of the `code`
 parameter (BUG-108 — not `attr`; confirmed against BambuStudio's `parse_hms_info`,
-`DevHMS.cpp:7-25`, identical in OrcaSlicer, and pybambu's `get_HMS_severity`):
+`DevHMS.cpp`, identical in OrcaSlicer, and pybambu's `get_HMS_severity`):
 
 ```python
 severity = (code >> 16) & 0xFFFF
@@ -99,7 +99,7 @@ The failure mode is nasty for a client, because **queries keep answering while c
 
 The 8-character LCD short code collapses it to `0500_0007`, which appears in no published HMS catalog. Anyone triaging from the short code alone will find nothing and conclude the entry is spurious. Use the 16-character key — `decode_hms_alert` (`src/diagnostics/hms.rs`) produces both, and `DecodedHmsAlert` exposes the 16-character form alongside the 8.
 
-*(Verification source: bambuddy, `backend/app/services/bambu_mqtt.py:705` — the constant, with the attr/code split explained in the comment above it — and their scheduler's `_mqtt_commands_rejected`, which acts on it. Source issue: bambuddy #2732. **The firmware version boundary is theirs and has not been independently checked here**; record it as reported, not established.)*
+*(Verification source: bambuddy, `backend/app/services/bambu_mqtt.py` — the constant, with the attr/code split explained in the comment above it — and their scheduler's `_mqtt_commands_rejected`, which acts on it. Source issue: bambuddy #2732. **The firmware version boundary is theirs and has not been independently checked here**; record it as reported, not established.)*
 
 ---
 
@@ -251,7 +251,7 @@ On IDEX platforms (such as the `H2D`), the `"filaments"` array inside `"extrusio
 The `"setting_id"` parameter inside K-profile calibration payloads (`extrusion_cali_set` and `extrusion_cali_del`) must conform strictly to a 19-character numeric string format consisting of the `"PF"` header prefix followed by exactly 17 numeric digits (e.g., `"PF12345678901234567"`). Alphanumeric setting ID formats (such as `"PFUS9be9e18f81828a"`) are strictly reserved for slicer-side filament presets (`ams_filament_setting` / `tray_info_idx` mappings). Transmitting an alphanumeric setting ID inside K-profile operations will result in execution failure or local EEPROM table corruption.
 
 #### Delete a Calibration Profile
-The delete fields sit **flat in `print`** — there is no `filaments` array, unlike `extrusion_cali_set`. Every upstream client agrees on this: BambuStudio `MachineObject::command_delete_pa_calibration` (`DeviceManager.cpp:2012-2028`), bambuddy `delete_kprofile` (`bambu_mqtt.py:6932-6998`) and OrcaSlicer (`DeviceManager.cpp:1991-2000`). An earlier version of this section nested the fields in `filaments[]` and gave the IDEX form no field naming the profile (no `cali_idx`, no `filament_id`); both were wrong (#313). Not yet verified against a wire capture.
+The delete fields sit **flat in `print`** — there is no `filaments` array, unlike `extrusion_cali_set`. Every upstream client agrees on this: BambuStudio `MachineObject::command_delete_pa_calibration` (`DeviceManager.cpp`), bambuddy `delete_kprofile` (`bambu_mqtt.py`) and OrcaSlicer (`DeviceManager.cpp`). An earlier version of this section nested the fields in `filaments[]` and gave the IDEX form no field naming the profile (no `cali_idx`, no `filament_id`); both were wrong (#313). Not yet verified against a wire capture.
 
 The profile is identified by `cali_idx` + `filament_id` (plus `extruder_id`/`nozzle_id`/`nozzle_diameter`) on every model. BambuStudio sends no `setting_id`; bambuddy adds it on single-nozzle printers.
 

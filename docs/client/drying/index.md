@@ -148,7 +148,7 @@ client
   heaterless unit takes), or a cached [`AmsUnitModel`](../../types/telemetry/ams/index.md#amsunitmodel) whose
   [`supports_drying`](../../types/telemetry/ams/index.md#amsunitmodel) is `false`.
   These are two independent gates on purpose, matching the pair BambuStudio writes out
-  longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
+  longhand at `Widgets/AMSControl.cpp`: the printer must act on the command *and* the
   attached box must have a heater.
 
   [`Error::InvalidArgument`](../../error/index.md#error) for an `ams_id` outside the documented address space.
@@ -156,7 +156,7 @@ client
   [`Error::InvalidArgument`](../../error/index.md#error) when the temperature falls outside the unit's
   [`dry_temp_range`](../../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not
   clamped**: BambuStudio refuses a temperature below the floor exactly as it refuses one
-  above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a caller's value
+  above the ceiling (`AMSDryControl.cpp`), and silently rewriting a caller's value
   would start a heating cycle they did not ask for.
 
   The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never

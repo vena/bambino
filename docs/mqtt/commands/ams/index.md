@@ -183,9 +183,9 @@ Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units
 
 Field set and shapes rewritten to match the real wire protocol — confirmed
 against BambuStudio's `DevFilaSystem::CtrlAmsStartDryingHour`/`CtrlAmsStopDrying`
-(`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the
+(`DevFilaSystemCtrl.cpp`, the sole outbound `ams_filament_drying` constructor in the
 tree) and independently corroborated by bambuddy's `send_drying_command`
-(`bambu_mqtt.py:4141-4171`, whose own comment cites real-hardware silent-rejection
+(`bambu_mqtt.py`, whose own comment cites real-hardware silent-rejection
 incident #1447).
 
 #### Fields
@@ -297,7 +297,7 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
   the slot index.
   
   Computed by [`AmsFilamentSettingRequest::new`](#amsfilamentsettingrequest) rather than caller-supplied, matching
-  BambuStudio's `command_ams_filament_settings` (`DeviceManager.cpp:1707-1715`), so a
+  BambuStudio's `command_ams_filament_settings` (`DeviceManager.cpp`), so a
   caller cannot pair a `slot_id` with a `tray_id` that contradicts it.
 
 - **`tray_info_idx`**: `String`
@@ -314,7 +314,7 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
   this field).
   
   Both upstreams agree on the split: BambuStudio's `command_ams_filament_settings`
-  (`DeviceManager.cpp:1723-1724`) assigns `tray_info_idx = filament_id` and
+  (`DeviceManager.cpp`) assigns `tray_info_idx = filament_id` and
   `setting_id = setting_id` as two separate keys, and bambuddy's `ams_set_filament_setting`
   documents this parameter as "Filament ID short format (e.g. `GFL05`)" against its own
   distinct `setting_id`.

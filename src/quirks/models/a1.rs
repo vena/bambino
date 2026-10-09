@@ -27,7 +27,7 @@ pub const A1_MINI_BED_TEMP_MAX: u16 = 80;
 /// **Drying: never.** No known firmware path on the A1 series exposes a remote-dry command. Bambu
 /// Lab's *Filament drying guide for AMS 2 Pro and AMS HT* lists A1/A1 mini as "not supported yet"
 /// for both remote drying and simultaneous drying and printing, and bambuddy lists both in
-/// `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py:223`). **Not a hardware limit**: the A1
+/// `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py`). **Not a hardware limit**: the A1
 /// series takes AMS 2 Pro and AMS-HT units from a shared pool of 4 (`MODEL_MATRIX.csv`,
 /// `reference/05_materials_ams.md`). The A1 family sends no `fun2`, so the reported-bit stage
 /// never engages, but it is honored like every other model's.

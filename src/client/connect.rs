@@ -299,10 +299,10 @@ where
     /// Firmware broadcasts carry only *changed* fields [REF-MQTT-TELEMETRY], so a value that
     /// happens not to change across the reconnect may never be re-sent on its own — a full
     /// state dump is the only thing that reliably repopulates the cache. Every reference client
-    /// does this from its own connect handler: BambuStudio (`GUI_App.cpp:2166`, `:2209`,
+    /// does this from its own connect handler: BambuStudio (`GUI_App.cpp`, `:2209`,
     /// with `request_now = true` to bypass its own `REQUEST_PUSH_MIN_TIME` anti-burst floor),
-    /// ha-bambulab (`pybambu/bambu_client.py:536-539`), and bambuddy
-    /// (`services/bambu_mqtt.py:1711-1731`). None of them gates it on cache age, and none
+    /// ha-bambulab (`pybambu/bambu_client.py`), and bambuddy
+    /// (`services/bambu_mqtt.py`). None of them gates it on cache age, and none
     /// branches on model — don't route this through the quirks engine.
     ///
     /// Publishes through `publish_payload` rather than
@@ -346,7 +346,7 @@ where
     /// ([`ModelQuirks::ams_remote_drying_support`](crate::quirks::ModelQuirks::ams_remote_drying_support)
     /// and anything added beside it), and the version is connection-establishment data the same
     /// way the initial pushall is — bambuddy requests it from its own connect handler, next to
-    /// `_request_push_all()` (`bambu_mqtt.py:1727-1729`). Doing it here means a connected client
+    /// `_request_push_all()` (`bambu_mqtt.py`). Doing it here means a connected client
     /// can answer capability questions without the caller knowing to ask for a version first.
     ///
     /// **Deliberately non-fatal.** A printer that never answers `get_version` still has a

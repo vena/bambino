@@ -546,7 +546,7 @@ is `false` but the parsed bitmask is non-zero, this represents a valid offline s
 and is processed normally.
 
 **AMS-HT units (IDs 128-135) do participate in `tray_exist_bits`, at a fixed offset**
-— BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
+— BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp`, `GetTrayId`'s N3S
 branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed independently
 in OrcaSlicer with an equivalent formula. This reopens and reverses the earlier "AMS-HT
 doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's

@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn test_ams_filament_setting_external_spool_derives_tray_id() {
-        // BambuStudio's call sites pass slot_id 0 for a virtual tray (`DeviceManager.cpp:4853`,
+        // BambuStudio's call sites pass slot_id 0 for a virtual tray (`DeviceManager.cpp`,
         // `:4877` — `command_ams_filament_settings(vt_id, 0, ...)`) and the command derives
         // tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID for either external address, never 0. bambuddy
         // sends the same trio for a single external slot: ams 255, slot 0, tray 254.

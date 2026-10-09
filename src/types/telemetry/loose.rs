@@ -134,7 +134,7 @@ where
 /// A string sent as a JSON string or a bare number, rendered back to its decimal text.
 ///
 /// `mc_print_stage` is parsed with both an `is_string()` and an `is_number()` arm in
-/// BambuStudio's `DeviceManager.cpp:3071-3076`; binding such a field as a plain
+/// BambuStudio's `DeviceManager.cpp`; binding such a field as a plain
 /// `Option<String>` would fail the whole frame on the numeric form.
 pub(crate) fn deserialize_permissive_opt_string<'de, D>(
     deserializer: D,
@@ -162,8 +162,8 @@ where
 
 /// An `HmsEntry.attr`/`.code` word: a plain integer or a `0x`/`0X`-prefixed hex string.
 ///
-/// BambuStudio's `ParseHMSItems` (`DevHMS.cpp:42-61`) pushes a default-zeroed item on a
-/// malformed entry rather than aborting the whole message; bambuddy (`bambu_mqtt.py:2756-2761`)
+/// BambuStudio's `ParseHMSItems` (`DevHMS.cpp`) pushes a default-zeroed item on a
+/// malformed entry rather than aborting the whole message; bambuddy (`bambu_mqtt.py`)
 /// additionally tolerates hex-string values. Any other shape, including an unprefixed decimal
 /// string, reads `0`.
 pub(crate) fn deserialize_permissive_hms_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>

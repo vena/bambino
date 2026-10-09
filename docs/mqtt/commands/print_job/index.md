@@ -311,7 +311,7 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 - **`project_id`**: `String`
 
   Per-submission project tracking ID. Set equal to `subtask_id` — bambuddy's
-  `send_start_print_command` (`bambu_mqtt.py:3721-3781`) mints one fresh ID per
+  `send_start_print_command` (`bambu_mqtt.py`) mints one fresh ID per
   submission and reuses it for `subtask_id`/`project_id`/`task_id` alike; bambino's
   `subtask_id` already carries the same "fresh per submission" contract via its own doc
   comment, so reusing it here satisfies the same invariant bambuddy's fix relies on

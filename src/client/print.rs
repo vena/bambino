@@ -207,7 +207,7 @@ where
     ///
     /// [`Error::InvalidState`] unless the cached print state is `Running` or `Paused` (or not yet
     /// observed). This follows bambuddy, which gates on exactly those two
-    /// (`bambu_mqtt.py:7047`). Pausing to inspect a failed part, skipping it, then resuming is a
+    /// (`bambu_mqtt.py`). Pausing to inspect a failed part, skipping it, then resuming is a
     /// legitimate workflow, so `Paused` belongs alongside `Running`.
     ///
     /// Deliberately **not** gated on `xcam.allow_skip_parts`: that field reads `false` in every
@@ -277,8 +277,8 @@ where
     ///
     /// **Vibration compensation (bit 2) is kept on every model.** Both upstreams send the bit
     /// for any model: BambuStudio's calibration dialog offers Vibration Compensation with no
-    /// model gate (`Calibration.cpp:57`, gates at `:225-260`), and bambuddy's
-    /// `start_calibration` (`bambu_mqtt.py:6295-6345`) sets it unconditionally (#358). This is
+    /// model gate (`Calibration.cpp`, gates at `:225-260`), and bambuddy's
+    /// `start_calibration` (`bambu_mqtt.py`) sets it unconditionally (#358). This is
     /// separate from the print job's `vibration_cali` field, which
     /// [`start_print`](Self::start_print) sends as `false` by default on every model (#375).
     ///

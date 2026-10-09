@@ -75,7 +75,7 @@ impl VersionInfo {
     /// The `ota` module is the main controller firmware, which is what version-gated
     /// capabilities are expressed against; the other modules report their own independent
     /// versions (`mc`, `esp32`, per-AMS entries) and are not interchangeable with it. bambuddy
-    /// reads the same module for the same purpose (`bambu_mqtt.py:998`, "Firmware version info
+    /// reads the same module for the same purpose (`bambu_mqtt.py`, "Firmware version info
     /// (from info.module[name=\"ota\"].sw_ver)").
     ///
     /// `None` when no `ota` module is present in the response.

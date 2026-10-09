@@ -86,7 +86,7 @@ Both locations use the identical schema. Clients must merge data from both paths
 4.  **stat**: Hexadecimal bitmask string used on P2S, X2D, and H2 series models to track sensor states such as the enclosure door open sensor (bit 23). See §3.2.1 for door sensor routing details.
 5.  **lights_report**: Array of `{"node": "<strip_name>", "mode": "<on|off|flashing>"}` objects reporting the current state of chamber, work, and heatbed light strips.
 6.  **print_type**: Print source identifier string (`"cloud"`, `"local"`, `"idle"`, `"system"`).
-7.  **sdcard**: The top-level `sdcard` field is a permissive truthy check covering boolean, integer, or string (`HAS_SDCARD_NORMAL`) formats depending on firmware; it can't report a degraded card. BambuStudio reads three signals and the later one wins (`DeviceManager.cpp`): this flag (`DevStorage::ParseV1_0`, `:3089`), then `home_flag` bits 8–9 (`parse_home_flag`, `:1075`), then on "np" firmware `aux` bits 12–13 (`:4514`). bambino's `PrinterTelemetry::sdcard_status()` follows that precedence. bambuddy reads only this flag, stating that heartbeat pushes clear `home_flag` bits 8–9 with a card inserted (`bambu_mqtt.py:4915-4927`); BambuStudio, authoritative where the two disagree, reads the bits on every frame carrying `home_flag`, so that claim is recorded here as bambuddy's own observation, not confirmed.
+7.  **sdcard**: The top-level `sdcard` field is a permissive truthy check covering boolean, integer, or string (`HAS_SDCARD_NORMAL`) formats depending on firmware; it can't report a degraded card. BambuStudio reads three signals and the later one wins (`DeviceManager.cpp`): this flag (`DevStorage::ParseV1_0`, `:3089`), then `home_flag` bits 8–9 (`parse_home_flag`, `:1075`), then on "np" firmware `aux` bits 12–13 (`:4514`). bambino's `PrinterTelemetry::sdcard_status()` follows that precedence. bambuddy reads only this flag, stating that heartbeat pushes clear `home_flag` bits 8–9 with a card inserted (`bambu_mqtt.py`); BambuStudio, authoritative where the two disagree, reads the bits on every frame carrying `home_flag`, so that claim is recorded here as bambuddy's own observation, not confirmed.
 8.  **gcode_file Emission Anomaly**: The `gcode_file` property does not strictly guarantee a `.gcode` path. On certain firmwares (such as P1S `01.10.00.00`), the printer transmits the parent `.3mf` filename instead of the specific sliced plate `.gcode` path.
 9.  **total_layer_num**: Total layers within the sliced print pipeline. Some firmware versions send this as `total_layers` instead — clients should accept both keys.
 10.  **gcode_start_time**: Unix epoch string for when the current job started. Never observed in a complete local (`print_type: "local"`) print lifecycle capture on a P1S (FAILED→IDLE→PREPARE→RUNNING→FINISH, zero occurrences) — may be cloud-print-only or otherwise absent on LAN-dispatched jobs. Unconfirmed either way; treat its absence as expected on local prints.
@@ -115,7 +115,7 @@ The `home_flag` integer field is a packed bitmask encoding printer hardware stat
 | 4 | `0x00000010` | XCam auto-recovery step loss | XCam step-loss auto-recovery enabled |
 | 5 | `0x00000020` | Camera recording | Timelapse/recording is active |
 | 7 | `0x00000080` | AMS calibrate remaining | AMS remaining filament calibration enabled |
-| 8–9 | `0x00000300` | SD card state | 2-bit value (`get_flag_bits(flag, 8, 2)`): `0`=no card, `1`=normal, `2`=abnormal, `3`=read-only (BUG-123; confirmed against BambuStudio's `DeviceManager.cpp:1092` and pybambu's `const.py:265-266`/`models.py:3408-3412` — the top-level `sdcard` boolean can never report a degraded state, only this bitmask can) |
+| 8–9 | `0x00000300` | SD card state | 2-bit value (`get_flag_bits(flag, 8, 2)`): `0`=no card, `1`=normal, `2`=abnormal, `3`=read-only (BUG-123; confirmed against BambuStudio's `DeviceManager.cpp` and pybambu's `const.py`/`models.py` — the top-level `sdcard` boolean can never report a degraded state, only this bitmask can) |
 | 10 | `0x00000400` | AMS Filament Backup | Same setting as `cfg` bit 18 (auto-refill), and the only source for it on families that never send `cfg` — see the `cfg` table below |
 | 15 | `0x00008000` | Supports flow calibration | Hardware supports flow calibration (false on H2D despite firmware reporting — OrcaSlicer overrides) |
 | 16 | `0x00010000` | Supports PA calibration | Hardware supports pressure advance calibration (false on P1 series despite firmware reporting — OrcaSlicer overrides) |
@@ -131,14 +131,14 @@ The `home_flag` integer field is a packed bitmask encoding printer hardware stat
 | 26 | `0x04000000` | `installed_plus` | Purpose unknown — present in OrcaSlicer and pybambu (`INSTALLED_PLUS`) but not publicly documented. OrcaSlicer references it as `is_support_p1s_plus`, suggesting P1S-specific |
 | 27 | `0x08000000` | `supported_plus` | Purpose unknown — paired with bit 26 in OrcaSlicer and pybambu (`SUPPORTED_PLUS`) |
 | 28 | `0x10000000` | Non-visual air-printing detection enabled | Set by `print_option` `air_print_detect`. Not the camera spaghetti/air-printing detector: BambuStudio's UI calls it the *non-visual* detector (`PrintOptionsDialog.cpp`, `m_cb_non_visual_airprinting_detection`), and it ships on A1/A1 Mini, which have no AI camera (`air_print_detection_position: "ams_setting"` in `N1.json`/`N2S.json`) |
-| 29 | `0x20000000` | Supports non-visual air-printing detection | BambuStudio forces this false while the AMS runs its AMS2/AMS-HT firmware (`DeviceManager.cpp:1099-1103`) |
+| 29 | `0x20000000` | Supports non-visual air-printing detection | BambuStudio forces this false while the AMS runs its AMS2/AMS-HT firmware (`DeviceManager.cpp`) |
 
 The "supports" vs "enabled" bit pairs (e.g., 19/20, 25/24, 29/28) follow a pattern where the higher bit indicates hardware capability and the lower bit indicates user-toggled state. Detection features (tangle, blob, air print) are model-specific; air-printing detection is non-visual and needs no camera (bit 28 above). The `print_option` section below lists every setting's value and support bits. See `MODEL_MATRIX.md` for per-model capability availability.
 
 **Axis homing state (bits 0–2):** During a `G28` homing sequence, bits are set progressively as each axis completes. On a P1S the observed sequence is: all three bits clear (unhomed) → bits 0–1 set (X and Y homed, Z pending) → all three bits set (fully homed). The firmware does not reject motion gcode when axes are unhomed — the motion controller executes regardless. Clients must check bits 0–2 before dispatching motion commands and block or warn at the application layer (matching OrcaSlicer's behavior). See [REF-MOTO-GCODE] for homing safety constraints.
 
 #### Wired Ethernet Detection (`net.conf`) [REF-NET-CONF]
-The confirmed-authoritative source for wired-Ethernet state is bit 0 of `print.net.conf` — confirmed directly against BambuStudio source (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`; identical in OrcaSlicer):
+The confirmed-authoritative source for wired-Ethernet state is bit 0 of `print.net.conf` — confirmed directly against BambuStudio source (`DeviceManager.cpp`: `network_wired = (net.conf & 0x1) != 0`; identical in OrcaSlicer):
 
 ```json
 "net": { "conf": 1 }
@@ -253,7 +253,7 @@ Bit 18's "AMS Filament Backup" name is the feature's user-facing label: BambuStu
 
 **P1P, P1S, A1 and A1 Mini omit `cfg` entirely**, so an absent `cfg` is "unknown", never "every setting off". bambino's own full P1S dump (`tests/mocks/P1S.json`, 63 `print` keys) has no `cfg`. The only `cfg` a P1S capture shows is a `project_file` ack echoing the request's own `"cfg": "0"` back, which is not printer state.
 
-On those families Filament Backup is read from **`home_flag` bit 10** instead. BambuStudio's `parse_home_flag` sets `SetAutoRefillEnabled((flag >> 10) & 0x1)` for every family (`DeviceManager.cpp:1080`), and bambuddy's `parse_ams_filament_backup_from_home_flag` reads the same bit, recording that on printers sending both, the two bits agreed in every captured snapshot (bambuddy #3259). Two caveats from bambuddy: read it only from a full status report, since H2D also sends small heartbeat frames with a partial `home_flag`; and on a printer that sends `cfg`, keep reading `cfg` alone.
+On those families Filament Backup is read from **`home_flag` bit 10** instead. BambuStudio's `parse_home_flag` sets `SetAutoRefillEnabled((flag >> 10) & 0x1)` for every family (`DeviceManager.cpp`), and bambuddy's `parse_ams_filament_backup_from_home_flag` reads the same bit, recording that on printers sending both, the two bits agreed in every captured snapshot (bambuddy #3259). Two caveats from bambuddy: read it only from a full status report, since H2D also sends small heartbeat frames with a partial `home_flag`; and on a printer that sends `cfg`, keep reading `cfg` alone.
 
 #### Developer LAN Mode Bitmask Evaluation
 Developer LAN Mode is evaluated via the `fun` telemetry field bit `0x20000000` (which represents the `MQTT_SIGNATURE_REQUIRED` flag). The boolean evaluation is inverted:
@@ -264,13 +264,13 @@ Depending on the active firmware track and message type, the `"fun"` key drifts 
 
 #### The Second Capability Bitfield (`fun2`)
 
-`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp:4429-4479`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode, `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage, `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color.
+`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode, `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage, `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color.
 
 **Single-source.** Only BambuStudio reads `fun2`. bambuddy parses `fun` for the developer-mode bit alone and does not parse `fun2` in any form; ha-bambulab likewise. This does not meet this project's two-upstream confirmation bar, so treat the bit meanings above as BambuStudio's account rather than as settled.
 
 ##### Capability Bitfields Are Absent on P1 and A1
 
-**Neither `fun` nor `fun2` appears in P1/A1 telemetry at all** — the same omission the probing protocol below was built for, and it applies to every capability bit, not just Developer LAN Mode. Confirmed against `tests/mocks/P1S.json`, a `push_status` fixture with 63 `print` keys (a full state dump, not an incremental frame) carrying neither field, and against `tests/mocks/P1S_print_sequence.ndjson` (342 frames, same result). bambuddy documents the same family trait independently (`bambu_mqtt.py:1420`, "when the `fun` field is absent (A1/P1 printers)").
+**Neither `fun` nor `fun2` appears in P1/A1 telemetry at all** — the same omission the probing protocol below was built for, and it applies to every capability bit, not just Developer LAN Mode. Confirmed against `tests/mocks/P1S.json`, a `push_status` fixture with 63 `print` keys (a full state dump, not an incremental frame) carrying neither field, and against `tests/mocks/P1S_print_sequence.ndjson` (342 frames, same result). bambuddy documents the same family trait independently (`bambu_mqtt.py`, "when the `fun` field is absent (A1/P1 printers)").
 
 Consequence for any capability gate: on these families a consumer gets no reported answer and must fall back to a per-model default. A design that prefers the reported bit is correct but **inert** on P1/A1 — it cannot change the outcome there until firmware begins emitting the field. Do not describe such a gate as self-correcting on P1/A1 hardware without a capture showing the field present.
 
@@ -278,9 +278,9 @@ Consequence for any capability gate: on these families a consumer gets no report
 
 ##### Mains Voltage Is Reported Twice, and the Two Agree
 
-The 220V mains indicator appears in both fields: `home_flag` bit 3 and `fun` bit 2. BambuStudio reads both, `home_flag` bit 3 in `parse_home_flag` (`DeviceManager.cpp:1077`) and `fun` bit 2 later in the same update (`:4437`), so on a disagreement the `fun` value would win.
+The 220V mains indicator appears in both fields: `home_flag` bit 3 and `fun` bit 2. BambuStudio reads both, `home_flag` bit 3 in `parse_home_flag` (`DeviceManager.cpp`) and `fun` bit 2 later in the same update (`:4437`), so on a disagreement the `fun` value would win.
 
-**No disagreement has been observed.** Checked against ha-bambulab's full-dump `push_status` fixtures — `tests/pybambu/H2D.json` (H2D, firmware 01.01.02.07) reads `1` in both, and `tests/pybambu/2AMS1-1AMS2-1AMSHT.json` (X1-Carbon, 01.09.00.01) reads `0` in both, covering both directions rather than only the all-zero case. ha-bambulab itself reads **only** `home_flag` bit 3 (`pybambu/models.py:4058`, `Home_Flag_Values.VOLTAGE220 = 0x00000008`) and never consults `fun` bit 2; bambuddy derives mains voltage from neither.
+**No disagreement has been observed.** Checked against ha-bambulab's full-dump `push_status` fixtures — `tests/pybambu/H2D.json` (H2D, firmware 01.01.02.07) reads `1` in both, and `tests/pybambu/2AMS1-1AMS2-1AMSHT.json` (X1-Carbon, 01.09.00.01) reads `0` in both, covering both directions rather than only the all-zero case. ha-bambulab itself reads **only** `home_flag` bit 3 (`pybambu/models.py`, `Home_Flag_Values.VOLTAGE220 = 0x00000008`) and never consults `fun` bit 2; bambuddy derives mains voltage from neither.
 
 This crate reads `home_flag` bit 3, matching ha-bambulab. That single source is sufficient on current evidence. If a capture ever shows the two bits disagreeing, prefer `fun` bit 2 to match BambuStudio's write order — and note that `fun` is absent on P1/A1 entirely, so those families can only ever answer from `home_flag`.
 
@@ -327,32 +327,32 @@ Triggers the printer to emit a complete `"pushall"` state dump on the report top
 
 **Recommendation (unchanged):** on ESP32-based RTOS hardware lines (P1P, P1S, A1, A1 Mini), do not issue `pushall` more often than once every 5 minutes. Send it once at connection establishment and rely on the incremental partial-update stream for ongoing state tracking. That design is right for delta-based telemetry on its own merits, whatever the status of the 5-minute figure below.
 
-**Source, in full:** OpenBambuAPI, `mqtt.md:143-144` — "As a rule of thumb, refrain from executing this command at intervals less than 5 minutes on the P1P, as it may cause lag due to its hardware limitations." That is the *sole* basis, it is self-hedged ("rule of thumb", "may cause lag"), OpenBambuAPI is a community protocol doc rather than one of the three tracked upstreams, and **no hardware measurement in this repo has verified it**. Treat the number as folklore-grade until a capture says otherwise; do not restate it as an established hardware characteristic.
+**Source, in full:** OpenBambuAPI, `mqtt.md` — "As a rule of thumb, refrain from executing this command at intervals less than 5 minutes on the P1P, as it may cause lag due to its hardware limitations." That is the *sole* basis, it is self-hedged ("rule of thumb", "may cause lag"), OpenBambuAPI is a community protocol doc rather than one of the three tracked upstreams, and **no hardware measurement in this repo has verified it**. Treat the number as folklore-grade until a capture says otherwise; do not restate it as an established hardware characteristic.
 
-**Do not cite `TIMEOUT_FOR_KEEPALIVE` as corroboration.** BambuStudio has a 5-minute pushall constant (`src/slic3r/GUI/DeviceManager.hpp:38`), but `DeviceManager::keep_alive()` (`DeviceCore/DevManager.cpp:75-100`) uses it as a **minimum-refresh** timer — neither of its branches ever suppresses a pushall, both send one — which is the opposite direction from a maximum-frequency limit. Same number, opposite meaning; it has already caused two wrong turns in this repo (see issue #254's design discussion). The vendor's sustained cadence never running faster than 5 minutes is *compatible* with the caution, not evidence for it.
+**Do not cite `TIMEOUT_FOR_KEEPALIVE` as corroboration.** BambuStudio has a 5-minute pushall constant (`src/slic3r/GUI/DeviceManager.hpp`), but `DeviceManager::keep_alive()` (`DeviceCore/DevManager.cpp`) uses it as a **minimum-refresh** timer — neither of its branches ever suppresses a pushall, both send one — which is the opposite direction from a maximum-frequency limit. Same number, opposite meaning; it has already caused two wrong turns in this repo (see issue #254's design discussion). The vendor's sustained cadence never running faster than 5 minutes is *compatible* with the caution, not evidence for it.
 
-**Model coverage is an extrapolation.** OpenBambuAPI says P1P only. Extending to P1S/A1/A1 Mini is a same-processor-class inference: per `MODEL_MATRIX.csv`, the P1P and P1S carry the same ESP32-WROOM-32 and the A1/A1 Mini an ESP32-S3. It is conservative rather than contested — BambuStudio applies its own constants with no model branch at all, and `check_pushing()` (`DevManager.cpp:102-118`) calls `keep_alive()` unconditionally. (The `!obj->is_support_mqtt_alive` gate a few lines below governs `command_pushing("start")`, a different command — not the pushall keepalive.) **Do not extend this to the A2L on family-name grounds:** `MODEL_MATRIX.csv` records it as a single-core Cortex-M7, the same processor as the H2S, not an ESP32.
+**Model coverage is an extrapolation.** OpenBambuAPI says P1P only. Extending to P1S/A1/A1 Mini is a same-processor-class inference: per `MODEL_MATRIX.csv`, the P1P and P1S carry the same ESP32-WROOM-32 and the A1/A1 Mini an ESP32-S3. It is conservative rather than contested — BambuStudio applies its own constants with no model branch at all, and `check_pushing()` (`DevManager.cpp`) calls `keep_alive()` unconditionally. (The `!obj->is_support_mqtt_alive` gate a few lines below governs `command_pushing("start")`, a different command — not the pushall keepalive.) **Do not extend this to the A2L on family-name grounds:** `MODEL_MATRIX.csv` records it as a single-core Cortex-M7, the same processor as the H2S, not an ESP32.
 
 **Deployment evidence points the other way.** Neither bambuddy nor ha-bambulab throttles `pushall` at all — bambuddy's `_request_push_all` (`backend/app/services/bambu_mqtt.py`) is a bare publish with no time or model check, and it deliberately issues two within seconds at print start when the first frame carries no `total_layer_num`. Both are widely deployed in LAN mode with large P1/A1 user bases, and bambuddy's MQTT service is densely annotated with issue-numbered firmware workarounds — none of them about `pushall` lag. Absence of a workaround in code that would have hit the problem is meaningful negative evidence, though not proof.
 
 ##### The Vendor's Two Complementary Constants
 
-BambuStudio governs `pushall` with two constants, adjacent at `src/slic3r/GUI/DeviceManager.hpp:38-39`. They are complementary, not alternatives, and conflating them is the specific mistake to avoid:
+BambuStudio governs `pushall` with two constants, adjacent at `src/slic3r/GUI/DeviceManager.hpp`. They are complementary, not alternatives, and conflating them is the specific mistake to avoid:
 
 *   `TIMEOUT_FOR_KEEPALIVE` (**5 minutes**) — the *sustained cadence*. `keep_alive()` issues a routine pushall once this elapses. A minimum-refresh timer; it never declines.
-*   `REQUEST_PUSH_MIN_TIME` (**3 seconds**) — an *anti-burst floor* on event-driven requests between keepalives. `MachineObject::command_request_push_all(bool request_now = false)` (`DeviceManager.cpp:1330-1355`) returns `-1` without publishing when this has not elapsed. This is the only BambuStudio constant that actually suppresses a pushall.
+*   `REQUEST_PUSH_MIN_TIME` (**3 seconds**) — an *anti-burst floor* on event-driven requests between keepalives. `MachineObject::command_request_push_all(bool request_now = false)` (`DeviceManager.cpp`) returns `-1` without publishing when this has not elapsed. This is the only BambuStudio constant that actually suppresses a pushall.
 
 **Connection establishment bypasses the floor.** `request_now == true` overrides `REQUEST_PUSH_MIN_TIME`, and the vendor uses it exactly where freshness is mandatory:
 
 | Site | `request_now` | Context |
 | --- | --- | --- |
-| `GUI_App.cpp:2166`, `:2209` | `true` | connection / login established |
-| `DeviceWeb/ViewModels/FilamentManager/FilamentManagerVM.cpp:567` | `true` | explicit user action |
-| `DeviceCore/DevManager.cpp:90`, `:96` | default | `keep_alive` periodic |
-| `DeviceManager.cpp:2588` | default | diff-merge recovery |
-| `SelectMachine.cpp:3869`, `SendToPrinter.cpp:1226` | default | dialog selection changed |
+| `GUI_App.cpp`, `:2209` | `true` | connection / login established |
+| `DeviceWeb/ViewModels/FilamentManager/FilamentManagerVM.cpp` | `true` | explicit user action |
+| `DeviceCore/DevManager.cpp`, `:96` | default | `keep_alive` periodic |
+| `DeviceManager.cpp` | default | diff-merge recovery |
+| `SelectMachine.cpp`, `SendToPrinter.cpp` | default | dialog selection changed |
 
-So connect is not merely *when* a client should pushall — it is an operation the vendor considers important enough to exempt from its own rate limiting. ha-bambulab (`pybambu/bambu_client.py:536-539`) and bambuddy (`services/bambu_mqtt.py`, its `on_connect` handler) both pushall on connect too; neither models a floor.
+So connect is not merely *when* a client should pushall — it is an operation the vendor considers important enough to exempt from its own rate limiting. ha-bambulab (`pybambu/bambu_client.py`) and bambuddy (`services/bambu_mqtt.py`, its `on_connect` handler) both pushall on connect too; neither models a floor.
 
 ##### Telemetry Update Granularity
 The behavior of the report topic stream differs by hardware family:
@@ -542,8 +542,8 @@ If a capture ever *does* become available, check these three first and update th
 ###### Default (`vibration_cali`)
 `vibration_cali` defaults to `false` on every model. A caller may still opt in; no model forces it off.
 
-*   **BambuStudio sends `false` for every print job, for every model.** `SelectMachine.cpp` passes a literal `false` into the `vabration_cali` parameter of `PrintJob::set_print_config` (`Jobs/PrintJob.hpp:106`), which becomes `params.task_vibration_cali` (`PrintJob.cpp:258`); `SendMultiMachinePage.cpp:511` sets `params.task_vibration_cali = false` directly. No checkbox feeds it and no model is exempt. OrcaSlicer does the same. ha-bambulab's `print_project_file` service also defaults it to `false` (`coordinator.py:716`).
-*   bambuddy defaults it to `true` and forces `false` on P2S only (`bambu_mqtt.py:6029-6033`, from commit `be18ebb3`, "Fix P2S printer support - disable vibration_cali and fix FTP SSL"). That commit fixed an FTPS failure in the same change and has no capture isolating `vibration_cali`; the reported error `0300_400C` is the generic "task was canceled".
+*   **BambuStudio sends `false` for every print job, for every model.** `SelectMachine.cpp` passes a literal `false` into the `vabration_cali` parameter of `PrintJob::set_print_config` (`Jobs/PrintJob.hpp`), which becomes `params.task_vibration_cali` (`PrintJob.cpp`); `SendMultiMachinePage.cpp` sets `params.task_vibration_cali = false` directly. No checkbox feeds it and no model is exempt. OrcaSlicer does the same. ha-bambulab's `print_project_file` service also defaults it to `false` (`coordinator.py`).
+*   bambuddy defaults it to `true` and forces `false` on P2S only (`bambu_mqtt.py`, from commit `be18ebb3`, "Fix P2S printer support - disable vibration_cali and fix FTP SSL"). That commit fixed an FTPS failure in the same change and has no capture isolating `vibration_cali`; the reported error `0300_400C` is the generic "task was canceled".
 *   Per this repo's evidence rule, BambuStudio is authoritative where the two disagree, so the crate follows it. The earlier P2S-only quirk (issue #133) was removed (issue #375).
 *   Caveat: BambuStudio hands `task_vibration_cali` to the closed-source `bambu_networking` plugin (see the note above), so the exact wire value is inferred from the parameter, not observed.
 *   Standalone `calibration` (bit 2 of `option`) is unaffected: both upstreams send it for any model (see "Calibration" below).
@@ -680,7 +680,7 @@ One command sets eight persistent printer settings. Each request carries `comman
 
 "BambuStudio only" is single-source, but BambuStudio is the vendor's client and the sender itself, so the wire shape is not in doubt. bambuddy's `_set_print_option` (`backend/app/services/bambu_mqtt.py`) sends only `auto_recovery` and `auto_switch_filament`.
 
-**`auto_recovery` sends two fields.** BambuStudio sends `"option": (int)auto_recovery << PRINT_OP_AUTO_RECOVERY` (`PRINT_OP_AUTO_RECOVERY = 0`, `DeviceManager.hpp:185`) alongside `"auto_recovery": bool`; bambuddy sends only `auto_recovery`. bambino follows BambuStudio.
+**`auto_recovery` sends two fields.** BambuStudio sends `"option": (int)auto_recovery << PRINT_OP_AUTO_RECOVERY` (`PRINT_OP_AUTO_RECOVERY = 0`, `DeviceManager.hpp`) alongside `"auto_recovery": bool`; bambuddy sends only `auto_recovery`. bambino follows BambuStudio.
 
 **Air purification here is unrelated to `close_air_filt`**, the error dialog's one-shot "stop purifying now".
 
@@ -695,8 +695,8 @@ Three more settings read back from `cfg` like the `print_option` ones, each with
 
 | Setting | Request | Value in `cfg` | Support |
 | --- | --- | --- | --- |
-| Door-open check | `{"system": {"command": "set_door_stat", "config": 0\|1\|2}}`: disabled, warn, pause print (`MachineObject::command_set_door_open_check`) | bits 20-21, same codes | `fun` bit 12 (`DeviceManager.cpp:4470`); bambino falls back to the model having a door sensor |
-| Idle heating protection | `{"print": {"command": "set_against_continued_heating_mode", "enable": bool}}` (`DevPrintOptions::command_set_against_continued_heating_mode`) | bits 32-33: `0` off, `1` on, `2` unavailable while heating maintenance runs (meaning from `SafetyOptionsDialog.cpp` UI text) | `fun` bit 62 (`DevPrintOptions.cpp:243`) |
+| Door-open check | `{"system": {"command": "set_door_stat", "config": 0\|1\|2}}`: disabled, warn, pause print (`MachineObject::command_set_door_open_check`) | bits 20-21, same codes | `fun` bit 12 (`DeviceManager.cpp`); bambino falls back to the model having a door sensor |
+| Idle heating protection | `{"print": {"command": "set_against_continued_heating_mode", "enable": bool}}` (`DevPrintOptions::command_set_against_continued_heating_mode`) | bits 32-33: `0` off, `1` on, `2` unavailable while heating maintenance runs (meaning from `SafetyOptionsDialog.cpp` UI text) | `fun` bit 62 (`DevPrintOptions.cpp`) |
 | Store sent files on external storage | `{"system": {"command": "print_cache_set", "config": bool}}` (`MachineObject::command_set_save_remote_print_file_to_storage`) | bit 19 | none reported; per-model `support_save_remote_print_file_to_storage`: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C |
 
 BambuStudio shows the door-open check in its Safety Options dialog on models with `support_safety_options: true` (X2D, P2S) and in Print Options elsewhere. Both send the same command.
@@ -776,7 +776,7 @@ The directory parameters inside `"ams_filament_setting"` behave polymorphically 
 *   **Standard AMS Units (`0` to `3`)**: `tray_id` strictly represents the local slot index (`0` to `3`) within the designated unit.
 *   **Virtual External Spool (`255` / `254`)**:
     *   **Single-Nozzle Printers (X1, P1, A1 series)**: When targeting the virtual external spool, `ams_id` must be set to `255` and `tray_id` must be set to `254`. Transmitting a local slot index (such as `0`) alongside an `ams_id` of `255` causes the printer's local broker (most notably on the `P1S` track) to reject the payload and return a failure response (`result: "fail"`).
-    *   **Dual-Nozzle IDEX Printers (H2D, X2D, H2C series)**: The external spools are mapped as independent virtual units. Both the left external spool (Ext-L, `ams_id: 254`) and the right external spool (Ext-R, `ams_id: 255`) must be configured with `tray_id: 254` (BUG-117; confirmed against BambuStudio's `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id` `254` or `255` both map to `tag_tray_id = 254`, never `0`).
+    *   **Dual-Nozzle IDEX Printers (H2D, X2D, H2C series)**: The external spools are mapped as independent virtual units. Both the left external spool (Ext-L, `ams_id: 254`) and the right external spool (Ext-R, `ams_id: 255`) must be configured with `tray_id: 254` (BUG-117; confirmed against BambuStudio's `command_ams_filament_settings`, `DeviceManager.cpp` — `tag_ams_id` `254` or `255` both map to `tag_tray_id = 254`, never `0`).
 
 ##### AMS Physical Control (ams_control)
 Resumes, pauses, or resets material changes and active physical operations inside the expansion bus feed system.
@@ -1037,11 +1037,11 @@ BambuStudio and bambuddy agree on how an echo says a command was refused. bambin
 
 | Field | Meaning | Source |
 | :--- | :--- | :--- |
-| `result` | `"success"`, or a refusal spelled `"fail"` (BambuStudio `DeviceCore/DevCalib.cpp:216,252,308`; bambuddy `await_cali_ack`) or `"failed"` (signature-verify refusal, §3.2). The inbound `project_file` push spells success `"SUCCESS"`, so compare case-insensitively. | both |
+| `result` | `"success"`, or a refusal spelled `"fail"` (BambuStudio `DeviceCore/DevCalib.cpp`; bambuddy `await_cali_ack`) or `"failed"` (signature-verify refusal, §3.2). The inbound `project_file` push spells success `"SUCCESS"`, so compare case-insensitively. | both |
 | `result` absent | Receipt with no verdict. P1S firmware 01.10.00.00 answers `ams_filament_setting` with a bare `{command, sequence_id}` while refusing it through HMS (bambuddy #2732). Not success. | bambuddy `_handle_dev_mode_probe_response` |
 | `reason` | Free text, e.g. `"mqtt message verify failed"`. `"success"` on accepted commands. | both |
-| `err_code` | Integer device error code; `0` means none. BambuStudio raises its error dialog for any non-zero value regardless of `result`, through the same `DeviceErrorDialog::show_error_code` as the `print_error` register, so it decodes as `MMMM_CCCC` the same way. | BambuStudio `DeviceManager.cpp:3044-3049`, `StatusPanel.cpp:3573` |
-| `errno` | Per-command integer. `ams_change_filament`: `-2` chamber too hot, `-4` AMS too hot to load without softening the filament; `soft_temp` (°C) gives the limit when present. `set_ctt`: `-2` low-temperature filament loaded, `-4` target below 40 °C so control will not activate. | BambuStudio `DeviceManager.cpp:2993-3036` |
+| `err_code` | Integer device error code; `0` means none. BambuStudio raises its error dialog for any non-zero value regardless of `result`, through the same `DeviceErrorDialog::show_error_code` as the `print_error` register, so it decodes as `MMMM_CCCC` the same way. | BambuStudio `DeviceManager.cpp`, `StatusPanel.cpp` |
+| `errno` | Per-command integer. `ams_change_filament`: `-2` chamber too hot, `-4` AMS too hot to load without softening the filament; `soft_temp` (°C) gives the limit when present. `set_ctt`: `-2` low-temperature filament loaded, `-4` target below 40 °C so control will not activate. | BambuStudio `DeviceManager.cpp` |
 
 ###### Effect Signals: Did the Command Do Anything?
 

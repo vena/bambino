@@ -82,7 +82,7 @@ pub(crate) fn is_wired_wifi_signal(wifi_signal: &str) -> bool {
 
 /// `fun` bit 29: MQTT signature required — clear means Developer LAN Mode is on [REF-MQTT-ENV §3.2.1].
 pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED_BIT: u32 = 29;
-/// `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp:4469`).
+/// `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp`).
 pub const FUN2_REMOTE_DRY_BIT: u32 = 5;
 /// `flag3` bit 9, BambuStudio's `is_enable_ams_np`.
 pub(crate) const FLAG3_AMS_NEW_PROTOCOL: u32 = 1 << 9;
@@ -91,11 +91,11 @@ pub(crate) const FLAG3_AMS_NEW_PROTOCOL: u32 = 1 << 9;
 // `xcam.cfg`
 // ---------------------------------------------------------------------------
 
-/// Bit positions within `xcam.cfg`, per BambuStudio `DeviceCore/DevPrintOptions.cpp:41-85`.
+/// Bit positions within `xcam.cfg`, per BambuStudio `DeviceCore/DevPrintOptions.cpp`.
 ///
 /// The four AI failure detectors sit on a stride-3 layout: an enable bit, then a two-bit
 /// sensitivity field immediately *above* it. bambuddy places the sensitivity pair *below* the
-/// enable bit instead (`bambu_mqtt.py:2636`, `decode_detector(5)`) — a pure phase difference.
+/// enable bit instead (`bambu_mqtt.py`, `decode_detector(5)`) — a pure phase difference.
 /// BambuStudio is followed here; see `src/types/telemetry/CLAUDE.md` before "fixing" it back.
 pub(crate) mod xcam_cfg {
     /// Spaghetti-detection enable bit; sensitivity in bits 8-9.
@@ -180,12 +180,12 @@ pub(crate) const AIR_PRINT_DETECT: SettingBits = SettingBits {
     cfg: None,
     home_flag: Some(28),
 };
-/// Store sent files on external storage; `print.cfg` only (`DeviceManager.cpp:4434-4436`).
+/// Store sent files on external storage; `print.cfg` only (`DeviceManager.cpp`).
 pub(crate) const STORE_SENT_FILES: SettingBits = SettingBits {
     cfg: Some(19),
     home_flag: None,
 };
-/// Low bit of `print.cfg`'s two-bit door-open check mode (bits 20-21, `DeviceManager.cpp:4438-4440`).
+/// Low bit of `print.cfg`'s two-bit door-open check mode (bits 20-21, `DeviceManager.cpp`).
 pub(crate) const CFG_DOOR_OPEN_CHECK: u32 = 20;
 /// Low bit of `print.cfg`'s two-bit idle heating protection state (bits 32-33).
 pub(crate) const CFG_IDLE_HEATING_PROTECTION: u32 = 32;
@@ -200,7 +200,7 @@ pub(crate) const HOME_FLAG_PROMPT_SOUND_SUPPORTED_BIT: u32 = 18;
 pub(crate) const HOME_FLAG_TANGLE_DETECT_SUPPORTED_BIT: u32 = 19;
 /// `home_flag` bit 25: nozzle blob detection (v1) supported.
 pub(crate) const HOME_FLAG_NOZZLE_BLOB_DETECT_SUPPORTED_BIT: u32 = 25;
-/// `home_flag` bit 29: non-visual air-printing detection supported (`DeviceManager.cpp:1099`).
+/// `home_flag` bit 29: non-visual air-printing detection supported (`DeviceManager.cpp`).
 pub(crate) const HOME_FLAG_AIR_PRINT_DETECT_SUPPORTED_BIT: u32 = 29;
 /// `fun` bit 8: prompt sound supported.
 pub(crate) const FUN_PROMPT_SOUND_BIT: u32 = 8;
@@ -208,9 +208,9 @@ pub(crate) const FUN_PROMPT_SOUND_BIT: u32 = 8;
 pub(crate) const FUN_TANGLE_DETECT_BIT: u32 = 9;
 /// `fun` bit 13: nozzle blob detection (v1) supported.
 pub(crate) const FUN_NOZZLE_BLOB_DETECT_BIT: u32 = 13;
-/// `fun` bit 12: door-open check supported (`DeviceManager.cpp:4470`).
+/// `fun` bit 12: door-open check supported (`DeviceManager.cpp`).
 pub(crate) const FUN_DOOR_OPEN_CHECK_BIT: u32 = 12;
-/// `fun` bit 62: idle heating protection supported (`DevPrintOptions.cpp:243`).
+/// `fun` bit 62: idle heating protection supported (`DevPrintOptions.cpp`).
 pub(crate) const FUN_IDLE_HEATING_PROTECTION_BIT: u32 = 62;
 /// `fun` bit 42: camera spaghetti detection supported.
 pub(crate) const FUN_SPAGHETTI_BIT: u32 = 42;
@@ -263,12 +263,12 @@ pub(crate) fn hex_u64(s: &str) -> Option<u64> {
 
 /// Reads one bit of an unbounded-length hex capability string (`fun`, `fun2`), LSB-first from the right.
 ///
-/// `fun2` "may have infinite length" per BambuStudio's own comment (`DeviceManager.cpp:4464`),
+/// `fun2` "may have infinite length" per BambuStudio's own comment (`DeviceManager.cpp`),
 /// which is why this walks hex digits from the right instead of parsing into an integer — a
 /// string longer than 16 digits would fail that parse outright and report every capability as
 /// absent.
 ///
-/// Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): whitespace, a `0x`/`0X`
+/// Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp`): whitespace, a `0x`/`0X`
 /// prefix and any non-hex characters are ignored, and an index past the end of the string reads
 /// `false` rather than failing. Returns `None` only when no hex digits remain after filtering.
 #[must_use]

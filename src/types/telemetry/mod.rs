@@ -84,7 +84,7 @@ pub struct TelemetryReport {
     ///
     /// Accepted at the top level as well as inside `print` on the same first-found-wins terms as
     /// `fun`. BambuStudio itself reads only `print.fun2`
-    /// (`DeviceManager.cpp:4459`); the top-level slot mirrors `fun`'s documented drift rather
+    /// (`DeviceManager.cpp`); the top-level slot mirrors `fun`'s documented drift rather
     /// than a location observed carrying `fun2`.
     #[serde(default)]
     pub(crate) fun2: Option<String>,
@@ -190,9 +190,9 @@ impl TelemetryReport {
     /// `None` only when `fun2` is absent or carries no hex digits at all — "the printer didn't
     /// say", which is distinct from a bit that is present and clear. A bit index past the end of
     /// the string reads `false`, matching BambuStudio's extractor, which returns `0` rather than
-    /// failing (`DevUtil.cpp:53`).
+    /// failing (`DevUtil.cpp`).
     ///
-    /// Known bits (`DeviceManager.cpp:4466-4477`): `0` print with eMMC, `3` PA mode,
+    /// Known bits (`DeviceManager.cpp`): `0` print with eMMC, `3` PA mode,
     /// **`5` remote dry supported** (see [`supports_remote_dry`](Self::supports_remote_dry)),
     /// `6` update-remain hide display, `7` print TPU from left extruder (model-gated),
     /// `8` active arc fitting, `17` model internal storage, `19` check track-switch matches
@@ -206,7 +206,7 @@ impl TelemetryReport {
     ///
     /// This is the printer-side half of the drying gate; the attached unit's heater is the other
     /// half (see [`AmsUnitModel::supports_drying`]). BambuStudio requires both
-    /// (`Widgets/AMSControl.cpp:348`).
+    /// (`Widgets/AMSControl.cpp`).
     ///
     /// `None` means the printer never reported `fun2`, which is not the same as reporting `0` —
     /// older firmware omits the field entirely, and treating that as "unsupported" would refuse

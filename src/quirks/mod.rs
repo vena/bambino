@@ -725,9 +725,9 @@ impl ModelQuirks {
 
     /// Returns whether the printer has non-visual air-printing detection, with its provenance.
     ///
-    /// Reported by `home_flag` bit 29 (`DeviceManager.cpp:1099`). No model rule exists, so
+    /// Reported by `home_flag` bit 29 (`DeviceManager.cpp`). No model rule exists, so
     /// nothing reported means `Assumed(false)`. BambuStudio also forces it off while the AMS
-    /// runs its AMS2/AMS-HT firmware (`DeviceManager.cpp:1100-1103`); this crate doesn't decode
+    /// runs its AMS2/AMS-HT firmware (`DeviceManager.cpp`); this crate doesn't decode
     /// which AMS firmware runs, so that override isn't applied.
     #[must_use]
     pub fn air_print_detect_support(&self, ctx: &QuirkContext) -> Support {
@@ -755,7 +755,7 @@ impl ModelQuirks {
 
     /// Returns whether the printer can warn or pause when its door opens mid-print, with its provenance.
     ///
-    /// Reported by `fun` bit 12 (`DeviceManager.cpp:4470`). Otherwise inferred from the model's
+    /// Reported by `fun` bit 12 (`DeviceManager.cpp`). Otherwise inferred from the model's
     /// door sensor: a printer without one can't check its door.
     #[must_use]
     pub fn door_open_check_support(&self, ctx: &QuirkContext) -> Support {
@@ -769,7 +769,7 @@ impl ModelQuirks {
 
     /// Returns whether the printer has idle heating protection, with its provenance.
     ///
-    /// Reported by `fun` bit 62 (`DevPrintOptions.cpp:243`). No model rule exists, so nothing
+    /// Reported by `fun` bit 62 (`DevPrintOptions.cpp`). No model rule exists, so nothing
     /// reported means `Assumed(false)` — always the case on P1 and A1, which send no `fun`.
     #[must_use]
     pub fn idle_heating_protection_support(&self, ctx: &QuirkContext) -> Support {
@@ -858,7 +858,7 @@ impl ModelQuirks {
     /// silently discards the command.
     ///
     /// Resolved in two stages. First, `ctx.fun2` bit 5 — the printer's own answer
-    /// (`DeviceManager.cpp:4469`) — wins where it is present, in both directions, since a
+    /// (`DeviceManager.cpp`) — wins where it is present, in both directions, since a
     /// per-model rule is a claim about every unit of that model while `fun2` is the machine in
     /// front of you speaking. Second, when `fun2` is absent, the model's rule decides.
     ///

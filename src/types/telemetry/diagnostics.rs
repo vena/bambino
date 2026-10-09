@@ -51,7 +51,7 @@ impl CtcInfo {
     /// The chamber controller's temperatures: `temp` unpacked, with `target` overriding the packed target when present.
     ///
     /// `target` is the authoritative target on new-gen models (bambuddy reads it separately,
-    /// `bambu_mqtt.py:2652`); BambuStudio derives both halves from the packed `temp`. `None` when
+    /// `bambu_mqtt.py`); BambuStudio derives both halves from the packed `temp`. `None` when
     /// `temp` is absent.
     #[must_use]
     pub fn temperatures(&self) -> Option<HeaterTemps> {
@@ -67,7 +67,7 @@ impl Mergeable for CtcInfo {
     /// Merges a freshly-parsed `CtcInfo` into `self` field-by-field.
     ///
     /// `target` is a real, independently-arriving wire key — `bambuddy`
-    /// (`bambu_mqtt.py:2652`, `if "target" in ctc_info:`) explicitly guards it separately
+    /// (`bambu_mqtt.py`, `if "target" in ctc_info:`) explicitly guards it separately
     /// from `temp`. BambuStudio's `DevChamber.cpp` never reads `target` at all (it derives
     /// both actual and target from the single bit-packed `temp` value instead), so it offers
     /// no counter-evidence, but doesn't need to: `self.info` was previously cloned wholesale
@@ -141,7 +141,7 @@ impl Mergeable for IpcamTelemetry {
     /// Merges a freshly-parsed `IpcamTelemetry` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
-    /// BambuStudio's `parse_json` (`DeviceManager.cpp:3338-3399`) gates every
+    /// BambuStudio's `parse_json` (`DeviceManager.cpp`) gates every
     /// `ipcam` field behind its own `.contains()` check, same preserve-on-absence pattern
     /// as `CtcTelemetry`/`BedTelemetry`/`ExtToolTelemetry`.
     fn merge_from(&mut self, incoming: &Self) {

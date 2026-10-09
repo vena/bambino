@@ -153,7 +153,7 @@ The wire `tray_id` is the global tray from
 `resolve_global_tray_id`: `ams_id * 4 + slot` on a
 standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1` example is
 unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's `GetTrayIndexMap`,
-`DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT (slot 0 only) or an external
+`DevFilaSystem.cpp`), the `ams_id` itself on an AMS-HT (slot 0 only) or an external
 holder (slot ignored) — which gives the cheat-sheet pairs on [`ExtrusionCaliSelRequest::new`](kprofile/index.md#extrusioncaliselrequest).
 `slot_id` is the unit-local slot BambuStudio and bambuddy send beside it (#315): the caller's
 slot on a four-slot unit, `0` on an AMS-HT or external holder. `ams_id` is the wire form (an
@@ -307,7 +307,7 @@ struct KProfileEntry {
 Structured representation of a Linear Advance calibration profile entry on the printer.
 
 Every field is optional on the read side, defaulting as BambuStudio's
-`from_json(PACalibResult)` does (`DevCalib.cpp:56-72`): one entry missing a key must not fail
+`from_json(PACalibResult)` does (`DevCalib.cpp`): one entry missing a key must not fail
 the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out as a timeout
 (#314).
 
@@ -411,7 +411,7 @@ the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out
 
 - <span id="kprofileentry-default"></span>`fn default() -> Self`
 
-  The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp:56-72`):
+  The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp`):
   `cali_idx` `-1` (a fresh write), `k_value` `"0"`, everything else empty.
 
 ##### `impl Deserialize<'de> for KProfileEntry`
@@ -540,7 +540,7 @@ Numerical classification of the severity level of an HMS diagnostic alert.
   Extracts the severity level from the high 16 bits of the 32-bit `code` value.
 
   Bit representation: `(code >> 16) & 0xFFFF` [REF-DIAG-HMS]. Confirmed against
-  BambuStudio's `parse_hms_info` (`DevHMS.cpp:7-25`, identical in OrcaSlicer) and
+  BambuStudio's `parse_hms_info` (`DevHMS.cpp`, identical in OrcaSlicer) and
   pybambu's `get_HMS_severity`, both of which derive severity from `code >> 16`.
 
 #### Trait Implementations
