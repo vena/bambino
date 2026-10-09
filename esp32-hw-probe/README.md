@@ -65,5 +65,5 @@ To retarget a different chip, edit `.cargo/config.toml`'s `[build] target` and
 `sdkconfig.defaults` holds task/stack-size overrides only and does not need
 touching for a retarget.
 
-See [`CLAUDE.md`](CLAUDE.md) in this directory for the same details in the form
-the agent tooling consumes.
+[`CLAUDE.md`](CLAUDE.md) in this directory holds the rules for agents changing
+the probe.

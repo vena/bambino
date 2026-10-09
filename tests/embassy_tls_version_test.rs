@@ -20,8 +20,7 @@
 //! **What this covers and what it does not.** It covers the accessor and both arms of the
 //! `mbedtls_rs::TlsVersion` -> `io::TlsVersion` mapping against real handshakes, which is what
 //! #289 changed. It does not exercise embassy-net, esp-hal, or any printer; the backend's
-//! hardware verification is the `embassy-hw-probe` run against a P1S recorded in
-//! `src/io/CLAUDE.md` (#292).
+//! hardware verification is the `embassy-hw-probe` run against a P1S recorded in #292.
 #![cfg(all(feature = "embassy", feature = "std"))]
 
 use std::io::{Read as _, Write as _};

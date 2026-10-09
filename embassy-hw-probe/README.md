@@ -105,7 +105,7 @@ which the bare-metal sysroot does not provide — a link-time failure that
 
 `mbedtls-rs` allocates 16 KiB in + 16 KiB out per TLS session by default, and a
 C6 at the heap sizes in `src/main.rs` fits two live sessions, not three
-(measured; see `src/io/CLAUDE.md`). Memory, not CPU, is the first thing to run
+(measured; see the `mbedtls-rs` comment in the root `Cargo.toml`). Memory, not CPU, is the first thing to run
 out. `src/main.rs`'s heap sizes are the knob; the
 `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features on `mbedtls-rs` are
 the other. Numbers measured here belong back in the `mbedtls-rs` dependency
@@ -119,5 +119,5 @@ comments there before upgrading any of them. Hardware-accelerated crypto
 (`mbedtls-rs`'s `esp32c6` feature) is deliberately off because enabling it
 forces a prerelease esp-radio; timing measured here is a software-crypto floor.
 
-See [`CLAUDE.md`](CLAUDE.md) in this directory for the same details in the form
-the agent tooling consumes.
+[`CLAUDE.md`](CLAUDE.md) in this directory holds the rules for agents changing
+the probe, including chip retargeting.

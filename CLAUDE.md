@@ -59,7 +59,7 @@ This section was kept separate from the raw command list above so the CI-live tr
 Non-obvious type decisions and behavioral invariants live close to the code they govern, not here — these aren't Key Invariants themselves, this is a routing note for where to find them:
 
 - Cross-cutting invariants (span multiple non-adjacent `src/` paths) → `.claude/rules/*.md`, each scoped with a `paths:` frontmatter glob.
-- Single-directory invariants → a nested `CLAUDE.md` in that directory (currently: `src/types/telemetry/`, `src/camera/`, `src/ftps/`, `src/io/`, `src/mqtt/client/`).
+- Single-directory invariants → a nested `CLAUDE.md` in that directory (currently: `src/types/telemetry/`, `src/camera/`, `src/ftps/`, `src/io/`, plus the two hardware probes).
 - Only truly global content (Key Invariants above, build/test commands, verification gate, architecture overview) stays here.
 
 ## Key Conventions

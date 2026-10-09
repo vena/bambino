@@ -99,8 +99,8 @@ esp-println = { version = "0.17.0", features = ["esp32c6", "log-04"] }
 # 1.0.0-beta, i.e. a prerelease radio driver underneath a probe whose entire purpose is to
 # establish a baseline. Revisit once esp-radio 1.0 ships. Until then, treat any handshake
 # timing from this probe as a software-crypto floor, not as what the chip can do — the
-# ESP-IDF probe's ~435ms local-compute figure (`src/io/CLAUDE.md`) is accelerated and is not
-# comparable.
+# ESP-IDF probe's ~400ms client-side crypto figure (`reference/01_network_discovery.md`) is
+# accelerated and is not comparable.
 mbedtls-rs = { version = "0.3", default-features = false, features = ["tls"] }
 
 # Supplies the one C-library symbol MbedTLS's X.509 code needs and the bare-metal sysroot

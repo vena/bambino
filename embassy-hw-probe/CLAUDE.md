@@ -1,17 +1,10 @@
 # embassy-hw-probe
 
-Flashable harness for hardware questions about `src/io/embassy.rs`, the backend
-that had never run on real hardware until this probe's first run (GitHub issue
-#292). Excluded from
-`bambino`'s published crate via the root `Cargo.toml` `exclude` entry; never a
-dependency of `bambino` itself.
-
-**This is not `esp32-hw-probe` retargeted, and must not become that.** The two
-cannot be one package: `esp32-hw-probe` builds for `riscv32imac-esp-espidf`
-against `bambino`'s `esp-idf` feature (std, ESP-IDF SDK), this one builds for
-`riscv32imac-unknown-none-elf` against the `embassy` feature (no_std, esp-hal +
-esp-radio + embassy-net). Different target triple, different runtime, mutually
-exclusive feature sets. Same board though — one ESP32-C6 runs both.
+Flashable harness for hardware questions about `src/io/embassy.rs`. `README.md`
+covers why it exists, how to run it, and its memory limits; this file holds
+what an agent changing it needs. **It must never be merged with
+`esp32-hw-probe`**: different target triple, runtime, and mutually exclusive
+`bambino` features (README, "Why not reuse `esp32-hw-probe`").
 
 **To reuse for a new investigation:** replace the investigation-specific part
 of `src/main.rs`, keeping the bring-up (heap, `esp_rtos::start`, Wi-Fi,
@@ -35,8 +28,8 @@ anything.
 `mbedtls-rs`'s `esp32c6` feature (hardware-accelerated crypto) is deliberately
 **off**: it pulls `esp-hal ~1.2`, which forces esp-rtos 0.4 + esp-radio
 1.0.0-beta. Any handshake timing measured here is therefore a software-crypto
-floor and is *not* comparable to the ESP-IDF probe's accelerated figures in
-`src/io/CLAUDE.md`. Revisit when esp-radio 1.0 ships.
+floor and is *not* comparable to the ESP-IDF figures in
+`reference/01_network_discovery.md`. Revisit when esp-radio 1.0 ships.
 
 **Build gate:** `make check-embassy-probe` (from the repo root) builds this for
 the bare-metal target with placeholder credentials. It needs
@@ -53,12 +46,6 @@ routinely reach MQTT/FTPS authentication. `build.rs` also emits
 `PROBE_BUILD_ID` (changes whenever `src/` does) for probes that keep state
 across resets. The serial and access code are credentials —
 never paste a run's log into the repo without scrubbing them.
-
-**Flash and run:** `cd embassy-hw-probe && cargo run --release` (the target's
-`runner` is `espflash flash --monitor`), or `cargo espflash flash --release
---monitor 2>&1 | tee run.log`. The probe loops forever after its last stage, so
-the monitor won't exit on its own; Ctrl-C detaches it without resetting the
-board.
 
 **Retargeting chips:** edit `.cargo/config.toml`'s `[build] target` and swap the
 `esp32c6` feature on `esp-hal`, `esp-rtos`, `esp-radio`, `esp-backtrace`,

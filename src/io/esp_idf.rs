@@ -799,12 +799,12 @@ fn build_tls_config<'a>(
 /// `crt_bundle_attach` hook that disables mbedTLS server-certificate verification outright,
 /// used by `build_unverified_tls_cfg` for `EspIdfTlsConnector::unverified()`.
 ///
-/// `esp_idf_svc::tls::Config` (0.53.0) has no field for ESP-IDF's own `skip_server_cert_verify`
-/// flag, and that flag only exists in the generated `esp_tls_cfg` at all when the consuming
-/// app's sdkconfig sets `CONFIG_ESP_TLS_INSECURE` (off by default) -- a build-time condition
-/// bambino cannot see or require (GitHub issue #168). `crt_bundle_attach` has neither
-/// limitation: confirmed against ESP-IDF v5.2.3's `esp_tls_mbedtls.c` `set_client_config`, it is
-/// checked *before* `cacert_buf`/`use_global_ca_store`/`skip_server_cert_verify`, gated only by
+/// ESP-IDF v5.5.5's only built-in way to skip verification is the build-time
+/// `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY`, which depends on `CONFIG_ESP_TLS_INSECURE` (off by
+/// default) -- an app sdkconfig choice bambino cannot see or require, with no field for it in
+/// `esp_idf_svc::tls::Config` (0.53.0) (GitHub issue #168). `crt_bundle_attach` has neither
+/// limitation: confirmed against ESP-IDF v5.5.5's `esp_tls_mbedtls.c` `set_client_config`, it is
+/// checked *before* `use_global_ca_store`/`cacert_buf` and the no-verification fallback, gated only by
 /// `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` (on by ESP-IDF default), and `set_client_config` sets
 /// `MBEDTLS_SSL_VERIFY_REQUIRED` immediately *before* invoking this hook -- so overriding it
 /// back to `MBEDTLS_SSL_VERIFY_NONE` here is what actually takes effect. `conf` is the
