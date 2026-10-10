@@ -235,6 +235,12 @@ pub(crate) const FIRST_LAYER_INSPECT: SettingBits = SettingBits {
 pub(crate) const FUN2_AIR_PURIFICATION_BIT: u32 = 4;
 /// `fun2` bit 15: smart nozzle blob detection (v2) supported.
 pub(crate) const FUN2_SMART_NOZZLE_BLOB_DETECT_BIT: u32 = 15;
+/// `fun2` bit 3: the per-job PA profile mode is supported (BambuStudio `is_support_pa_mode`, `DeviceManager.cpp`).
+pub(crate) const FUN2_PA_MODE_BIT: u32 = 3;
+/// `fun` bit 7: per-job flow dynamics calibration supported (BambuStudio `is_support_pa_calibration`).
+pub(crate) const FUN_PA_CALIBRATION_BIT: u32 = 7;
+/// `home_flag` bit 16: per-job flow dynamics calibration supported (`parse_home_flag`).
+pub(crate) const HOME_FLAG_PA_CALIBRATION_SUPPORTED_BIT: u32 = 16;
 
 /// Whether `bit` is set in `home_flag`.
 pub(crate) fn home_flag_bit(home_flag: u32, bit: u32) -> bool {

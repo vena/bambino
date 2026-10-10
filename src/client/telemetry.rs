@@ -114,6 +114,10 @@ pub(crate) struct TelemetryCache {
     // `Some(true)` is sticky: a partial frame lacking the probe fields must not downgrade it.
     // `Some(false)` is set only from a `push_status` frame while nothing better is known.
     pub(crate) last_np_format: Option<bool>,
+    // `print.support_flow_calibration` and `print.cali_version`, cached like `fun2` for
+    // `quirk_context()`: neither is on every incremental frame.
+    pub(crate) last_support_flow_calibration: Option<bool>,
+    pub(crate) last_cali_version: Option<i32>,
 }
 
 impl<
@@ -400,6 +404,11 @@ where
         keep_new(&mut self.core.cache.last_nozzle_type, &print.nozzle_type);
         keep_new(&mut self.core.cache.last_sdcard, &print.sdcard_status());
         keep_new(&mut self.core.cache.last_hms, &print.hms);
+        keep_new(
+            &mut self.core.cache.last_support_flow_calibration,
+            &print.support_flow_calibration,
+        );
+        keep_new(&mut self.core.cache.last_cali_version, &print.cali_version);
         if print.reports_np_format() {
             self.core.cache.last_np_format = Some(true);
         } else if self.core.cache.last_np_format.is_none()

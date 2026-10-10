@@ -118,7 +118,7 @@ The `home_flag` integer field is a packed bitmask encoding printer hardware stat
 | 8–9 | `0x00000300` | SD card state | 2-bit value (`get_flag_bits(flag, 8, 2)`): `0`=no card, `1`=normal, `2`=abnormal, `3`=read-only (BUG-123; confirmed against BambuStudio's `DeviceManager.cpp` and pybambu's `const.py`/`models.py` — the top-level `sdcard` boolean can never report a degraded state, only this bitmask can) |
 | 10 | `0x00000400` | AMS Filament Backup | Same setting as `cfg` bit 18 (auto-refill), and the only source for it on families that never send `cfg` — see the `cfg` table below |
 | 15 | `0x00008000` | Supports flow calibration | Hardware supports flow calibration (false on H2D despite firmware reporting — OrcaSlicer overrides) |
-| 16 | `0x00010000` | Supports PA calibration | Hardware supports pressure advance calibration (false on P1 series despite firmware reporting — OrcaSlicer overrides) |
+| 16 | `0x00010000` | Supports PA calibration | Per-job flow dynamics (pressure advance) calibration supported. BambuStudio forces it false on `series_p1p` (P1P/P1S), which push it set (`tests/mocks/P1S.json`); `fun` bit 7 and `print.support_flow_calibration` report the same capability. Read via `ModelQuirks::pa_calibration_support` |
 | 17 | `0x00020000` | XCam prompt sound enabled | XCam prompt sound is currently enabled |
 | 18 | `0x00040000` | Supports prompt sound | Hardware supports prompt sound configuration. Note: pybambu incorrectly labels this as "wired network" |
 | 19 | `0x00080000` | Supports filament tangle detect | Hardware supports tangle detection (model-specific: requires XCam AI engine) |
@@ -264,7 +264,7 @@ Depending on the active firmware track and message type, the `"fun"` key drifts 
 
 #### The Second Capability Bitfield (`fun2`)
 
-`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode, `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage, `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color.
+`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode (`is_support_pa_mode`: shows the per-job PA profile switch sent as `extrude_cali_manual_mode`, see "PA Profile Switch" below; read via `ModelQuirks::pa_mode_support`), `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage, `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color.
 
 **Single-source.** Only BambuStudio reads `fun2`. bambuddy parses `fun` for the developer-mode bit alone and does not parse `fun2` in any form; ha-bambulab likewise. This does not meet this project's two-upstream confirmation bar, so treat the bit meanings above as BambuStudio's account rather than as settled.
 
@@ -529,15 +529,22 @@ Passing an extruder index where a physical ID belongs is silently wrong rather t
 
 **Verification source:** bambuddy's hardware-measured constants (`3954d3a7`, `45dc139c`, `dfeac792`, `ec26cba9`), cross-checked against their `ams_extruder_map` telemetry and native BambuStudio dispatch captures on the maintainer's H2C. **Not verified here — no H2C is available.** bambino implements this in `resolve_rack_nozzle_mapping`, gated by `ModelQuirks::has_nozzle_rack()`.
 
-###### Deliberately Omitted Fields (`md5`, `cfg`, `extrude_cali_manual_mode`)
-Upstream bambuddy sends three fields in `project_file` that bambino does not, all as fixed defaults: `"md5": ""`, `"cfg": "0"`, and `"extrude_cali_manual_mode": 0`. **The omission is deliberate, not an oversight — do not "fix" it without new evidence.**
+###### Deliberately Omitted Fields (`md5`, `cfg`)
+Upstream bambuddy has sent two fields in `project_file` that bambino does not, both as fixed defaults: `"md5": ""` and `"cfg": "0"` (bambuddy has since dropped `cfg`). **The omission is deliberate, not an oversight — do not "fix" it without new evidence.**
 
 *   Prints submitted by bambino succeed on a P1S without them, which is the only direct evidence available about whether firmware requires them. It does not.
-*   All three are constants in upstream, never varying with job configuration. Nothing computes an actual MD5; the field is sent empty.
+*   Both are constants in upstream, never varying with job configuration. Nothing computes an actual MD5; the field is sent empty.
 *   BambuStudio's own payload cannot be consulted. `project_file` is assembled inside the closed-source `bambu_networking` library — the open tree only marshals values into `BBL::PrintParams` (`slic3r/Utils/bambu_networking.hpp`, `GUI/Jobs/PrintJob.cpp`) and hands them over. Reading BambuStudio's source cannot answer which fields it puts on the wire.
-*   Observing BambuStudio's traffic was investigated and ruled out as disproportionate: the `request` topic is not subscribable (see "Topic Access Control" below), BambuStudio's own logs are encrypted (`*_enc.log`), and it verifies the printer's TLS certificate — so a capture requires installing a custom CA into the slicer's trust store plus a TLS-terminating relay. That is a reasonable thing to build for general protocol capture, but not to confirm three inert constants.
+*   Observing BambuStudio's traffic was investigated and ruled out as disproportionate: the `request` topic is not subscribable (see "Topic Access Control" below), BambuStudio's own logs are encrypted (`*_enc.log`), and it verifies the printer's TLS certificate — so a capture requires installing a custom CA into the slicer's trust store plus a TLS-terminating relay. That is a reasonable thing to build for general protocol capture, but not to confirm inert constants.
 
-If a capture ever *does* become available, check these three first and update this note.
+If a capture ever *does* become available, check these two and `extrude_cali_manual_mode` first and update this note.
+
+###### PA Profile Switch (`extrude_cali_manual_mode`)
+Sent only when the caller sets `PrintJobConfig::pa_profile_sharing`, and refused by `start_print` unless the printer reports `fun2` bit 3. This was a deliberately omitted field until #620; a job that doesn't set it still omits it.
+
+*   **Meaning, from BambuStudio's Send dialog only.** The switch is labelled "Nozzles and filaments of the same type share the same PA profile"; on sends `0`, off sends `1` (`SelectMachineDialog`, `m_pa_value_switch`, passed to `PrintJob::set_print_config` as `extruder_cali_manual_mode`, default `-1`). The dialog shows it only when the printer reports `fun2` bit 3 and flow dynamics calibration is off. No source says what the printer does differently for each value.
+*   **Wire name, from two sources.** BambuStudio sends `print.extrude_cali_manual_mode` in its nozzle-mapping request (`DevNozzleMappingCtrl::CtrlGetAutoNozzleMappingV0`), and bambuddy sends the same key as a constant `0` in every `project_file` (`bambu_mqtt.py`). BambuStudio's own `project_file` is built by the closed-source plugin, so the name there is inferred, not observed.
+*   **Not hardware-verified.** The only printer available here (P1S) reports no `fun2`, so `start_print` refuses the field on it.
 
 ###### Default (`vibration_cali`)
 `vibration_cali` defaults to `false` on every model. A caller may still opt in; no model forces it off.

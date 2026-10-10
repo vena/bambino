@@ -22,7 +22,16 @@ pub const P1_BED_TEMP_MAX: u16 = 100;
 /// drying and drying while printing. Also the P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS`
 /// citing its #2533, and direct hardware testing on a P1S. The P1 family sends no `fun2`
 /// (`reference/03_mqtt_telemetry.md`), so the reported-bit stage never engages in practice.
-pub(crate) const P1S: ModelQuirks = ModelQuirks::new(
+///
+/// **Flow dynamics calibration: never.** The P1S pushes `home_flag` bit 16 set, but
+/// BambuStudio forces `is_support_pa_calibration` false on `series_p1p` ("incorrect machine
+/// push message for P", `DeviceManager.cpp`), so the bit is not trusted here.
+pub(crate) const P1S: ModelQuirks = ModelQuirks {
+    pa_calibration_bits_trusted: false,
+    ..P1S_BASE
+};
+
+const P1S_BASE: ModelQuirks = ModelQuirks::new(
     SafetyLimits {
         volume: BuildVolume::cube(P1_Z_MAX),
         nozzle_temp_max: P1_NOZZLE_TEMP_MAX,

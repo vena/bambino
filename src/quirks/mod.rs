@@ -367,6 +367,7 @@ pub struct ModelQuirks {
     ai_monitoring: bool,
     first_layer_inspect: bool,
     buzzer: bool,
+    pa_calibration_bits_trusted: bool,
 }
 
 impl ModelQuirks {
@@ -407,6 +408,7 @@ impl ModelQuirks {
             ai_monitoring: false,
             first_layer_inspect: false,
             buzzer: false,
+            pa_calibration_bits_trusted: true,
         }
     }
 
@@ -836,6 +838,69 @@ impl ModelQuirks {
             XcamModule::FodCheck => reported(None, Some(bits::FUN2_FOD_CHECK_BIT)),
             XcamModule::ModelMovementCheck => reported(None, Some(bits::FUN2_DISPLACEMENT_BIT)),
         }
+    }
+
+    /// Returns whether the printer can run flow dynamics (pressure advance) calibration as part of a print job, with its provenance.
+    ///
+    /// This gates [`PrintJobConfig::flow_calibration`](crate::mqtt::PrintJobConfig::flow_calibration),
+    /// the printer-side automatic PA calibration; BambuStudio's Send dialog hides that control
+    /// without it (`SelectMachine.cpp`, `update_option_opts`). Resolved as BambuStudio's
+    /// `is_support_pa_calibration` (`DeviceManager.cpp`):
+    ///
+    /// * `print.support_flow_calibration`, a plain boolean, wins when present. BambuStudio lets
+    ///   whichever source arrived last overwrite the others; bambino ranks the explicit boolean
+    ///   first, since it is the one source BambuStudio never overrides per model.
+    /// * Otherwise `fun` bit 7, else `home_flag` bit 16. **P1P and P1S ignore both bits**:
+    ///   BambuStudio forces the result false on `series_p1p` because those printers push the
+    ///   bit set without supporting the calibration (the P1S fixture's `home_flag` has bit 16
+    ///   set), so the answer there is `Inferred(false)`.
+    /// * Nothing reported means `Assumed(false)`, BambuStudio's initializer.
+    #[must_use]
+    pub fn pa_calibration_support(&self, ctx: &QuirkContext) -> Support {
+        if let Some(reported) = ctx.support_flow_calibration {
+            return Support::Reported(reported);
+        }
+        if !self.pa_calibration_bits_trusted {
+            return Support::Inferred(false);
+        }
+        SupportBits {
+            fun: Some(bits::FUN_PA_CALIBRATION_BIT),
+            fun2: None,
+            home_flag: Some(bits::HOME_FLAG_PA_CALIBRATION_SUPPORTED_BIT),
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer accepts the per-job PA profile mode, with its provenance.
+    ///
+    /// This gates [`PrintJobConfig::pa_profile_shared_by_type`](crate::mqtt::PrintJobConfig::pa_profile_shared_by_type).
+    /// Reported by `fun2` bit 3 only, BambuStudio's `is_support_pa_mode`; its only use upstream
+    /// is to show that option in the Send dialog (`SelectMachine.cpp`). No model rule exists,
+    /// so nothing reported means `Assumed(false)`, always the case on P1 and A1, which send no
+    /// `fun2`.
+    #[must_use]
+    pub fn pa_mode_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: Some(bits::FUN2_PA_MODE_BIT),
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether a loaded filament's PA (K-value) can be set by choosing a stored PA profile, with its provenance.
+    ///
+    /// Reported by `print.cali_version`: BambuStudio's AMS slot editor shows its PA profile
+    /// picker when the printer has reported a version above `-1` (`DevCalib::IsVersionInited`,
+    /// `AMSMaterialsSetting::Popup`). Select a profile with
+    /// [`select_k_profile`](crate::client::PrinterClient::select_k_profile). Without it
+    /// BambuStudio offers a raw K input instead, so `false` means "no stored-profile picker", not
+    /// "no per-filament PA". Nothing reported means `Assumed(false)`.
+    #[must_use]
+    pub fn k_profile_selection_support(&self, ctx: &QuirkContext) -> Support {
+        ctx.cali_version.map_or(Support::Assumed(false), |version| {
+            Support::Reported(version > -1)
+        })
     }
 
     /// The shared auto-recovery and Filament Backup model rule.
@@ -1346,6 +1411,72 @@ mod tests {
             p1s.smart_nozzle_blob_detect_support(&ctx),
             Support::Reported(false)
         );
+    }
+
+    #[test]
+    fn test_pressure_advance_support() {
+        let empty = QuirkContext::empty();
+        let x1c = PrinterModel::X1C.quirks();
+        // The P1S fixture's home_flag (6374672) has bit 16 set.
+        let p1s_home_flag = QuirkContext::empty().with_home_flag(Some(6_374_672));
+
+        // Flow dynamics calibration: nothing reported is BambuStudio's `false` initializer.
+        assert_eq!(x1c.pa_calibration_support(&empty), Support::Assumed(false));
+        assert_eq!(
+            x1c.pa_calibration_support(&p1s_home_flag),
+            Support::Reported(true)
+        );
+        // `fun` bit 7 overrides home_flag bit 16.
+        let ctx = p1s_home_flag.with_fun(Some("0"));
+        assert_eq!(x1c.pa_calibration_support(&ctx), Support::Reported(false));
+        let ctx = QuirkContext::empty().with_fun(Some("80"));
+        assert_eq!(x1c.pa_calibration_support(&ctx), Support::Reported(true));
+        // P1P and P1S ignore both bits, as BambuStudio does for `series_p1p`.
+        for model in [PrinterModel::P1S, PrinterModel::P1P] {
+            let quirks = model.quirks();
+            assert_eq!(
+                quirks.pa_calibration_support(&p1s_home_flag),
+                Support::Inferred(false),
+                "{model:?}"
+            );
+            assert_eq!(
+                quirks.pa_calibration_support(&ctx),
+                Support::Inferred(false),
+                "{model:?}"
+            );
+        }
+        // The explicit boolean wins over the bits, and over the P1 rule.
+        let explicit = ctx.with_support_flow_calibration(Some(false));
+        assert_eq!(
+            x1c.pa_calibration_support(&explicit),
+            Support::Reported(false)
+        );
+        let explicit = p1s_home_flag.with_support_flow_calibration(Some(true));
+        assert_eq!(
+            PrinterModel::P1S.quirks().pa_calibration_support(&explicit),
+            Support::Reported(true)
+        );
+
+        // PA mode: `fun2` bit 3 only.
+        assert_eq!(x1c.pa_mode_support(&empty), Support::Assumed(false));
+        let ctx = QuirkContext::empty().with_fun2(Some("8"));
+        assert_eq!(x1c.pa_mode_support(&ctx), Support::Reported(true));
+        let ctx = QuirkContext::empty().with_fun2(Some("20"));
+        assert_eq!(x1c.pa_mode_support(&ctx), Support::Reported(false));
+
+        // K-profile selection: any `cali_version` above -1.
+        assert_eq!(
+            x1c.k_profile_selection_support(&empty),
+            Support::Assumed(false)
+        );
+        for (version, supported) in [(-1, false), (0, true), (7, true)] {
+            let ctx = QuirkContext::empty().with_cali_version(Some(version));
+            assert_eq!(
+                x1c.k_profile_selection_support(&ctx),
+                Support::Reported(supported),
+                "cali_version {version}"
+            );
+        }
     }
 
     #[test]

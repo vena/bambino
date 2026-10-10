@@ -223,6 +223,11 @@ pub struct PrintJobConfig {
     ///
     /// [`has_nozzle_rack`]: crate::quirks::ModelQuirks::has_nozzle_rack
     pub nozzle_rack: Option<NozzleRack>,
+    /// BambuStudio's per-job "Nozzles and filaments of the same type share the same PA profile" switch; `None` sends nothing.
+    ///
+    /// Set it with [`pa_profile_sharing`](Self::pa_profile_sharing), which describes the wire
+    /// encoding and its sources.
+    pub pa_profile_shared_by_type: Option<bool>,
 }
 
 impl PrintJobConfig {
@@ -250,6 +255,7 @@ impl PrintJobConfig {
             nozzle_offset_cali: None,
             ams: None,
             nozzle_rack: None,
+            pa_profile_shared_by_type: None,
         }
     }
 
@@ -293,6 +299,10 @@ impl PrintJobConfig {
     }
 
     /// Enables or disables flow calibration for this job.
+    ///
+    /// This is the printer's automatic flow dynamics (pressure advance) calibration. Whether the
+    /// printer runs it is [`Capabilities::pa_calibration_support`](crate::client::Capabilities::pa_calibration_support);
+    /// the field is sent either way, as before that answer existed.
     #[must_use]
     pub fn flow_calibration(mut self, mode: impl Into<CalibrationMode>) -> Self {
         self.run_flow_calibration = mode.into();
@@ -352,6 +362,28 @@ impl PrintJobConfig {
             rack_nozzle_id,
         });
         Ok(self)
+    }
+
+    /// Sets BambuStudio's per-job PA profile switch, sent as `extrude_cali_manual_mode`.
+    ///
+    /// BambuStudio's Send dialog labels the switch "Nozzles and filaments of the same type share
+    /// the same PA profile" and sends `0` when it is on, `1` when it is off
+    /// (`SelectMachineDialog`, `m_pa_value_switch`); it shows the switch only when
+    /// flow dynamics calibration is off and the printer reports `fun2` bit 3. Upstream says no
+    /// more about what the printer does with either value.
+    ///
+    /// The key is `extrude_cali_manual_mode`: BambuStudio puts it under that name in a `print`
+    /// command (`DevNozzleMappingCtrl::CtrlGetAutoNozzleMappingV0`) and bambuddy sends it in
+    /// every `project_file` as a constant `0` (`bambu_mqtt.py`). BambuStudio's own
+    /// `project_file` is assembled by its closed-source plugin, so its name there is inferred.
+    ///
+    /// [`PrinterClient::start_print`](crate::client::PrinterClient::start_print) refuses a job
+    /// that sets this unless
+    /// [`pa_mode_support`](crate::client::Capabilities::pa_mode_support) allows it.
+    #[must_use]
+    pub fn pa_profile_sharing(mut self, shared_by_type: bool) -> Self {
+        self.pa_profile_shared_by_type = Some(shared_by_type);
+        self
     }
 
     /// Overrides the model's default nozzle-offset-calibration behavior for this job.
@@ -457,6 +489,11 @@ pub struct ProjectFilePayload {
     /// Structured sub-mappings for advanced material and multi-AMS routing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ams_mapping2: Option<Vec<AmsMapping2Entry>>,
+    /// PA profile switch: `0` = same-type nozzles and filaments share one PA profile, `1` = they don't.
+    ///
+    /// Omitted unless [`PrintJobConfig::pa_profile_sharing`] set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extrude_cali_manual_mode: Option<i32>,
 }
 
 /// Submits a `.3mf` print job from the SD card for execution.
@@ -597,6 +634,9 @@ impl ProjectFileRequest {
                 // `ams_mapping2` array) — see [REF-MQTT-LIFECYCLE] for the firmware error
                 // (`0700_8012`) this shape causes.
                 ams_mapping2: mapping2.filter(|_| use_ams),
+                extrude_cali_manual_mode: config
+                    .pa_profile_shared_by_type
+                    .map(|shared| if shared { 0 } else { 1 }),
             },
         }
     }

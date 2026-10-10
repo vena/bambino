@@ -178,6 +178,24 @@ impl<'a> Capabilities<'a> {
         self.quirks.idle_heating_protection_support(&self.context)
     }
 
+    /// Per-job flow dynamics (pressure advance) calibration support — see [`ModelQuirks::pa_calibration_support`].
+    #[must_use]
+    pub fn pa_calibration_support(&self) -> Support {
+        self.quirks.pa_calibration_support(&self.context)
+    }
+
+    /// Per-job PA profile mode support — see [`ModelQuirks::pa_mode_support`].
+    #[must_use]
+    pub fn pa_mode_support(&self) -> Support {
+        self.quirks.pa_mode_support(&self.context)
+    }
+
+    /// Stored PA (K-value) profile selection for a loaded filament — see [`ModelQuirks::k_profile_selection_support`].
+    #[must_use]
+    pub fn k_profile_selection_support(&self) -> Support {
+        self.quirks.k_profile_selection_support(&self.context)
+    }
+
     /// Camera detector support — see [`ModelQuirks::xcam_module_support`].
     #[must_use]
     pub fn xcam_module_support(&self, module: XcamModule) -> Support {

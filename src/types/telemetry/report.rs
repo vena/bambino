@@ -499,9 +499,22 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub gcode_start_time: Option<String>,
 
-    /// Calibration version identifier.
+    /// Version of the printer's stored PA (K-value) profiles; `-1` means not initialized.
+    ///
+    /// BambuStudio offers its stored-profile picker for a loaded filament only once this reads
+    /// above `-1` (`DevCalib::IsVersionInited`) — see
+    /// [`ModelQuirks::k_profile_selection_support`](crate::quirks::ModelQuirks::k_profile_selection_support).
     #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub cali_version: Option<i32>,
+
+    /// Whether the printer runs flow dynamics calibration as part of a print job.
+    ///
+    /// BambuStudio reads it from any `print` message into the same `is_support_pa_calibration`
+    /// the `fun` and `home_flag` bits set (`DeviceManager.cpp`) — see
+    /// [`ModelQuirks::pa_calibration_support`](crate::quirks::ModelQuirks::pa_calibration_support).
+    /// No capture in this repo carries it.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_bool")]
+    pub support_flow_calibration: Option<bool>,
 
     /// Error string field.
     #[serde(default)]

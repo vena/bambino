@@ -325,7 +325,23 @@ where
     /// The model's quirks engine gates `nozzle_offset_cali`: it resolves the default when the
     /// config left it `None`, and forces it off on a single-nozzle model even if the caller set
     /// it explicitly.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when the config sets
+    /// [`pa_profile_shared_by_type`](PrintJobConfig::pa_profile_shared_by_type) and
+    /// [`Capabilities::pa_mode_support`](crate::client::Capabilities::pa_mode_support) does not
+    /// allow it. BambuStudio offers the switch only on a printer reporting that support.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error> {
+        if config.pa_profile_shared_by_type.is_some() {
+            let support = self.capabilities().pa_mode_support();
+            if !support.is_supported() {
+                return Err(Error::ModelMismatch(
+                    format!("PA profile sharing not available on this printer ({support:?})")
+                        .into(),
+                ));
+            }
+        }
         let model = self.core.identity.model;
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))
             .await

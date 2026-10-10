@@ -682,6 +682,8 @@ where
             .with_fun(self.core.cache.last_fun.as_deref())
             .with_home_flag(self.settings_home_flag_this_connection())
             .with_xcam_cfg(self.core.cache.last_xcam.as_ref().and_then(|xcam| xcam.cfg))
+            .with_support_flow_calibration(self.core.cache.last_support_flow_calibration)
+            .with_cali_version(self.core.cache.last_cali_version)
     }
 
     /// Returns the `home_flag` trusted for capability bits, if observed on the current MQTT connection.

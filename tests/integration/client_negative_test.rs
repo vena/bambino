@@ -6,6 +6,7 @@ use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus, SEQUENCE_ID_FL
 use bambino::error::Error;
 use bambino::models::PrinterModel;
 use bambino::mqtt::PrintJobConfig;
+use bambino::quirks::Support;
 use bambino::types::DryingMaterial;
 use bambino::types::telemetry::AmsUnitModel;
 
@@ -142,6 +143,8 @@ async fn test_start_print_wire_payload() {
             let subtask_id = json["print"]["subtask_id"].clone();
             assert_eq!(json["print"]["project_id"], subtask_id);
             assert_eq!(json["print"]["task_id"], subtask_id);
+            // Unset PA profile switch: the key is left off, as before #620.
+            assert!(json["print"].get("extrude_cali_manual_mode").is_none());
         })
         .await;
 
@@ -156,6 +159,81 @@ async fn test_start_print_wire_payload() {
         .start_print(&config)
         .await
         .expect("start_print failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// A P1S sends no `fun2`, so the per-job PA profile switch is refused before anything is sent.
+#[tokio::test]
+async fn test_start_print_refuses_pa_profile_sharing_without_support() {
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
+    let config = PrintJobConfig::new(
+        "job.3mf",
+        "Metadata/plate_1.gcode",
+        "Test Print",
+        12345,
+        "textured",
+    )
+    .pa_profile_sharing(true);
+    assert!(matches!(
+        client.start_print(&config).await,
+        Err(Error::ModelMismatch(_))
+    ));
+    broker_task.await.expect("P1S broker task panicked");
+}
+
+/// The PA capability answers follow the printer's report, and a supported switch reaches the wire.
+///
+/// **Synthetic report:** no capture in this repo carries `support_flow_calibration` or a set
+/// `fun2` bit 3. `fun2` `"8"` sets bit 3 only.
+#[tokio::test]
+async fn test_pa_capabilities_follow_report_and_gate_the_job_field() {
+    let (mut client, broker_task) = with_broker(
+        "094000000000000",
+        PrinterModel::H2D,
+        |mut server_stream| async move {
+            let mut reports = ReportPublisher::new("094000000000000");
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"fun2":"8","cali_version":3,"support_flow_calibration":true}}"#,
+                )
+                .await;
+
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "project_file");
+            assert_eq!(json["print"]["extrude_cali_manual_mode"], 1);
+        },
+    )
+    .await;
+    let caps = client.capabilities();
+    assert_eq!(caps.pa_mode_support(), Support::Assumed(false));
+    assert_eq!(caps.pa_calibration_support(), Support::Assumed(false));
+    assert_eq!(caps.k_profile_selection_support(), Support::Assumed(false));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    let caps = client.capabilities();
+    assert_eq!(caps.pa_mode_support(), Support::Reported(true));
+    assert_eq!(caps.pa_calibration_support(), Support::Reported(true));
+    assert_eq!(caps.k_profile_selection_support(), Support::Reported(true));
+
+    let config = PrintJobConfig::new(
+        "job.3mf",
+        "Metadata/plate_1.gcode",
+        "Test Print",
+        12345,
+        "textured",
+    )
+    .pa_profile_sharing(false);
+    client
+        .start_print(&config)
+        .await
+        .expect("a printer reporting fun2 bit 3 must accept the PA profile switch");
 
     broker_task.await.expect("Broker task panicked");
 }
