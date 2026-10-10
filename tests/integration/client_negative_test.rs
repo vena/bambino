@@ -5,7 +5,7 @@
 use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus, SEQUENCE_ID_FLOOR};
 use bambino::error::Error;
 use bambino::models::PrinterModel;
-use bambino::mqtt::PrintJobConfig;
+use bambino::mqtt::{CalibrationMode, PrintJobConfig};
 use bambino::quirks::Support;
 use bambino::types::DryingMaterial;
 use bambino::types::telemetry::AmsUnitModel;
@@ -179,6 +179,19 @@ async fn test_start_print_refuses_pa_profile_sharing_without_support() {
         client.start_print(&config).await,
         Err(Error::ModelMismatch(_))
     ));
+    // P1 has no flow dynamics calibration option, so Auto is refused too.
+    let config = PrintJobConfig::new(
+        "job.3mf",
+        "Metadata/plate_1.gcode",
+        "Test Print",
+        12345,
+        "textured",
+    )
+    .flow_calibration(CalibrationMode::Auto);
+    assert!(matches!(
+        client.start_print(&config).await,
+        Err(Error::ModelMismatch(_))
+    ));
     broker_task.await.expect("P1S broker task panicked");
 }
 
@@ -204,6 +217,7 @@ async fn test_pa_capabilities_follow_report_and_gate_the_job_field() {
             let json = read_publish_payload(&mut server_stream).await;
             assert_eq!(json["print"]["command"], "project_file");
             assert_eq!(json["print"]["extrude_cali_manual_mode"], 1);
+            assert_eq!(json["print"]["extrude_cali_flag"], 2);
         },
     )
     .await;
@@ -221,6 +235,7 @@ async fn test_pa_capabilities_follow_report_and_gate_the_job_field() {
     assert_eq!(caps.pa_mode_support(), Support::Reported(true));
     assert_eq!(caps.pa_calibration_support(), Support::Reported(true));
     assert_eq!(caps.k_profile_selection_support(), Support::Reported(true));
+    assert_eq!(caps.pa_calibration_auto_support(), Support::Inferred(true));
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -229,6 +244,7 @@ async fn test_pa_capabilities_follow_report_and_gate_the_job_field() {
         12345,
         "textured",
     )
+    .flow_calibration(CalibrationMode::Auto)
     .pa_profile_sharing(false);
     client
         .start_print(&config)

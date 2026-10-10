@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use super::{CommandHandle, PrinterClient};
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::mqtt::commands::CalibrationMode;
 use crate::mqtt::commands::{IdleIgnoreScope, StandardCommand};
 use crate::mqtt::{PrintJobConfig, StandardControlRequest};
 use crate::types::control::{CalibrationOption, PrintSpeed, PrintStatus};
@@ -332,7 +333,22 @@ where
     /// [`pa_profile_shared_by_type`](PrintJobConfig::pa_profile_shared_by_type) and
     /// [`Capabilities::pa_mode_support`](crate::client::Capabilities::pa_mode_support) does not
     /// allow it. BambuStudio offers the switch only on a printer reporting that support.
+    ///
+    /// [`Error::ModelMismatch`] when flow calibration is `CalibrationMode::Auto` and
+    /// [`Capabilities::pa_calibration_auto_support`](crate::client::Capabilities::pa_calibration_auto_support)
+    /// does not allow it. BambuStudio offers Auto only where it does.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error> {
+        if config.run_flow_calibration == CalibrationMode::Auto {
+            let support = self.capabilities().pa_calibration_auto_support();
+            if !support.is_supported() {
+                return Err(Error::ModelMismatch(
+                    format!(
+                        "Auto flow dynamics calibration not available on this printer ({support:?})"
+                    )
+                    .into(),
+                ));
+            }
+        }
         if config.pa_profile_shared_by_type.is_some() {
             let support = self.capabilities().pa_mode_support();
             if !support.is_supported() {

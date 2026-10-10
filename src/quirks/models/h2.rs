@@ -84,6 +84,7 @@ const fn h2(
         ai_monitoring: true,
         buzzer: true,
         chamber_exhaust_fan: true,
+        auto_flow_calibration: true,
         ..ModelQuirks::new(
             SafetyLimits {
                 volume,

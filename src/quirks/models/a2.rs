@@ -27,6 +27,7 @@ pub const A2L_BED_TEMP_MAX: u16 = 80;
 pub(crate) const A2L: ModelQuirks = ModelQuirks {
     prompt_sound: true,
     auxiliary_left_fan: false,
+    auto_flow_calibration: true,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume {

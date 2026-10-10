@@ -368,6 +368,7 @@ pub struct ModelQuirks {
     first_layer_inspect: bool,
     buzzer: bool,
     pa_calibration_bits_trusted: bool,
+    auto_flow_calibration: bool,
 }
 
 impl ModelQuirks {
@@ -409,6 +410,7 @@ impl ModelQuirks {
             first_layer_inspect: false,
             buzzer: false,
             pa_calibration_bits_trusted: true,
+            auto_flow_calibration: false,
         }
     }
 
@@ -871,6 +873,29 @@ impl ModelQuirks {
         .resolve(ctx, Support::Assumed(false))
     }
 
+    /// Returns whether per-job flow dynamics calibration can be set to Auto, with its provenance.
+    ///
+    /// Auto calibrates only when the filament or nozzle changed since the last calibration
+    /// (Bambu Lab wiki, *Flow Dynamics Calibration*). It needs
+    /// [`pa_calibration_support`](Self::pa_calibration_support) first, whose answer is returned
+    /// unchanged when it denies. Otherwise the model rule: BambuStudio's per-model
+    /// `support_auto_flow_calibration` (`resources/printers/*.json`), true on H2S, H2D, H2D Pro,
+    /// H2C, P2S, X2D and A2L. The wiki lists the same models, less the A2L, as offering
+    /// Auto/On/Off; X1 and A1 offer On/Off only.
+    ///
+    /// BambuStudio also refuses Auto for filaments in a model's `auto_cali_not_support_filaments`,
+    /// but every model with that list (`GFU03`, `GFU04`) lacks Auto anyway, so this doesn't check
+    /// filaments.
+    #[must_use]
+    pub fn pa_calibration_auto_support(&self, ctx: &QuirkContext) -> Support {
+        let calibration = self.pa_calibration_support(ctx);
+        if calibration.is_supported() {
+            Support::Inferred(self.auto_flow_calibration)
+        } else {
+            calibration
+        }
+    }
+
     /// Returns whether the printer accepts the per-job PA profile mode, with its provenance.
     ///
     /// This gates [`PrintJobConfig::pa_profile_shared_by_type`](crate::mqtt::PrintJobConfig::pa_profile_shared_by_type).
@@ -896,6 +921,12 @@ impl ModelQuirks {
     /// [`select_k_profile`](crate::client::PrinterClient::select_k_profile). Without it
     /// BambuStudio offers a raw K input instead, so `false` means "no stored-profile picker", not
     /// "no per-filament PA". Nothing reported means `Assumed(false)`.
+    ///
+    /// **A slot's K-value applies only to a job sent with flow dynamics calibration Off.** With
+    /// it On or Auto the printer uses the calibrated value instead; the Bambu Lab wiki
+    /// (*Flow Dynamics Calibration*) says a selected profile's K "will still be displayed, but
+    /// will only be effective in the 'Off' position". A slot with no profile uses the printer's
+    /// default compensation.
     #[must_use]
     pub fn k_profile_selection_support(&self, ctx: &QuirkContext) -> Support {
         ctx.cali_version.map_or(Support::Assumed(false), |version| {
@@ -1455,6 +1486,50 @@ mod tests {
         assert_eq!(
             PrinterModel::P1S.quirks().pa_calibration_support(&explicit),
             Support::Reported(true)
+        );
+
+        // Auto: the model's `support_auto_flow_calibration`, once calibration itself is allowed.
+        let reported = QuirkContext::empty().with_support_flow_calibration(Some(true));
+        for model in [
+            PrinterModel::H2S,
+            PrinterModel::H2D,
+            PrinterModel::H2DPro,
+            PrinterModel::H2C,
+            PrinterModel::P2S,
+            PrinterModel::X2D,
+            PrinterModel::A2L,
+        ] {
+            assert_eq!(
+                model.quirks().pa_calibration_auto_support(&reported),
+                Support::Inferred(true),
+                "{model:?}"
+            );
+        }
+        for model in [
+            PrinterModel::X1,
+            PrinterModel::X1C,
+            PrinterModel::X1E,
+            PrinterModel::A1,
+            PrinterModel::A1Mini,
+            PrinterModel::P1S,
+        ] {
+            assert_eq!(
+                model.quirks().pa_calibration_auto_support(&reported),
+                Support::Inferred(false),
+                "{model:?}"
+            );
+        }
+        // Calibration denied: its answer, with its provenance, not the model rule's.
+        let h2d = PrinterModel::H2D.quirks();
+        assert_eq!(
+            h2d.pa_calibration_auto_support(&empty),
+            Support::Assumed(false)
+        );
+        assert_eq!(
+            PrinterModel::P1S
+                .quirks()
+                .pa_calibration_auto_support(&p1s_home_flag),
+            Support::Inferred(false)
         );
 
         // PA mode: `fun2` bit 3 only.
