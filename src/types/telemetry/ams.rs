@@ -347,7 +347,7 @@ impl Mergeable for AmsUnit {
         keep_new(&mut self.humidity, humidity);
         keep_new(&mut self.humidity_raw, humidity_raw);
         keep_new(&mut self.dry_time, dry_time);
-        merge_opt(&mut self.dry_setting, dry_setting);
+        merge_opt(&mut self.dry_setting, dry_setting.as_ref());
         if let Some(incoming_trays) = tray {
             let cached_trays = self.tray.get_or_insert_with(Vec::new);
             merge_keyed(cached_trays, incoming_trays, |t| t.id.clone());

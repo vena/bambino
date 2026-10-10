@@ -24,6 +24,8 @@ mod temps;
 pub mod xcam;
 
 #[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -65,14 +67,14 @@ use crate::types::control::{FanTarget, PrintStatus};
 pub struct TelemetryReport {
     /// Telemetry parameters representing the physical printer state machine.
     #[serde(default)]
-    pub print: Option<PrinterTelemetry>,
+    pub print: Option<Box<PrinterTelemetry>>,
 
     /// Network and hardware board capability descriptors, when sent at the top level.
     ///
     /// Crate-private: pushall frames on H2/P2/X2 nest it inside `print` instead, so reading this
     /// field misses exactly the frames carrying the most data. Use [`device()`](Self::device).
     #[serde(default)]
-    pub(crate) device: Option<DeviceTelemetry>,
+    pub(crate) device: Option<Box<DeviceTelemetry>>,
 
     /// Developer LAN Mode bitmask field (hex string), when sent at the top level.
     /// Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1];
@@ -151,9 +153,11 @@ impl TelemetryReport {
     /// present. Use this instead of manually checking both locations for
     /// nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
     pub fn device(&self) -> Option<&DeviceTelemetry> {
-        self.device
-            .as_ref()
-            .or_else(|| self.print.as_ref().and_then(|print| print.device.as_ref()))
+        self.device.as_deref().or_else(|| {
+            self.print
+                .as_ref()
+                .and_then(|print| print.device.as_deref())
+        })
     }
 
     /// Returns the `fun` Developer LAN Mode bitmask, checking both wire locations it can

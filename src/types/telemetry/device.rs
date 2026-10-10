@@ -88,12 +88,12 @@ impl Mergeable for DeviceTelemetry {
             fire_ext,
             bed_temp,
         } = incoming;
-        merge_opt(&mut self.nozzle, nozzle);
-        merge_opt(&mut self.extruder, extruder);
-        merge_opt(&mut self.airduct, airduct);
-        merge_opt(&mut self.ctc, ctc);
-        merge_opt(&mut self.bed, bed);
-        merge_opt(&mut self.ext_tool, ext_tool);
+        merge_opt(&mut self.nozzle, nozzle.as_ref());
+        merge_opt(&mut self.extruder, extruder.as_ref());
+        merge_opt(&mut self.airduct, airduct.as_ref());
+        merge_opt(&mut self.ctc, ctc.as_ref());
+        merge_opt(&mut self.bed, bed.as_ref());
+        merge_opt(&mut self.ext_tool, ext_tool.as_ref());
         keep_new(&mut self.fire_ext, fire_ext);
         keep_new(&mut self.bed_temp, bed_temp);
     }

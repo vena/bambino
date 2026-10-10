@@ -8,7 +8,7 @@ fn parse_report(json: &str) -> TelemetryReport {
 
 /// Parses a fixture into its `print` object.
 fn parse_print(json: &str) -> PrinterTelemetry {
-    parse_report(json)
+    *parse_report(json)
         .print
         .expect("fixture has a print object")
 }

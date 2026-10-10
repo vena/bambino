@@ -13,7 +13,10 @@ pub(crate) trait Mergeable: Clone {
 }
 
 /// Merges a nested struct: recurse when both sides have one, take `incoming` when only it does.
-pub(crate) fn merge_opt<T: Mergeable>(cached: &mut Option<T>, incoming: &Option<T>) {
+///
+/// `incoming` is borrowed as `Option<&T>` so a boxed wire field (`Option<Box<T>>`, via
+/// `as_deref()`) merges into an unboxed cache the same way an inline one (`as_ref()`) does.
+pub(crate) fn merge_opt<T: Mergeable>(cached: &mut Option<T>, incoming: Option<&T>) {
     match (cached.as_mut(), incoming) {
         (Some(cached), Some(new)) => cached.merge_from(new),
         (None, Some(new)) => *cached = Some(new.clone()),

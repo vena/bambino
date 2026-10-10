@@ -358,7 +358,7 @@ where
     fn update_telemetry_cache(&mut self, report: &TelemetryReport) {
         // Merge field-by-field rather than replacing wholesale — see `DeviceTelemetry`'s
         // `Mergeable` impl.
-        merge_opt(&mut self.core.cache.last_device, &report.device().cloned());
+        merge_opt(&mut self.core.cache.last_device, report.device());
         // Read before the `print` early-return: both accessors check the top level too.
         if let Some(fun2) = report.fun2() {
             self.core.cache.last_fun2 = Some(fun2.to_string());
@@ -452,8 +452,8 @@ where
         // (confirmed via wire capture) can carry only a few fields with the unit/tray array
         // omitted entirely, and a partial id-only `vt_tray` push must not wipe cached
         // tray_type/tray_color/etc.
-        merge_opt(&mut cache.last_ams, &print.ams);
-        merge_opt(&mut cache.last_vt_tray, &print.vt_tray);
+        merge_opt(&mut cache.last_ams, print.ams.as_deref());
+        merge_opt(&mut cache.last_vt_tray, print.vt_tray.as_deref());
         // Per element by id, so a partial array carrying only one IDEX extruder's entry doesn't
         // drop the other cached entry.
         if let Some(incoming) = &print.vir_slot {
@@ -485,11 +485,11 @@ where
     }
 
     fn update_ipcam_cache(&mut self, print: &PrinterTelemetry) {
-        merge_opt(&mut self.core.cache.last_ipcam, &print.ipcam);
+        merge_opt(&mut self.core.cache.last_ipcam, print.ipcam.as_deref());
     }
 
     fn update_xcam_cache(&mut self, print: &PrinterTelemetry) {
-        merge_opt(&mut self.core.cache.last_xcam, &print.xcam);
+        merge_opt(&mut self.core.cache.last_xcam, print.xcam.as_deref());
     }
 
     /// Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

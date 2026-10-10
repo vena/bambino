@@ -30,7 +30,7 @@ impl Mergeable for CtcTelemetry {
     /// because a push carries `ctc.state` without repeating `ctc.info`.
     fn merge_from(&mut self, incoming: &Self) {
         let Self { info, state } = incoming;
-        merge_opt(&mut self.info, info);
+        merge_opt(&mut self.info, info.as_ref());
         keep_new(&mut self.state, state);
     }
 }

@@ -810,7 +810,7 @@ fn test_p1s_print_sequence_ams_merge_never_regresses() {
 
         match &mut merged {
             Some(cached) => cached.merge_from(&ams),
-            None => merged = Some(ams),
+            None => merged = Some(*ams),
         }
 
         let unit_count = merged.as_ref().unwrap().ams.len();

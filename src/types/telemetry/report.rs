@@ -1,6 +1,8 @@
 //! Top-level telemetry report envelope (`print` and `device` wire locations).
 
 #[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -310,16 +312,16 @@ pub struct PrinterTelemetry {
     pub chamber_temper: Option<f64>,
 
     /// Camera and recording telemetry. Nested as `print.ipcam` on the wire.
-    pub ipcam: Option<IpcamTelemetry>,
+    pub ipcam: Option<Box<IpcamTelemetry>>,
 
     /// AI detection settings (spaghetti detection, first-layer inspection, etc.).
     ///
     /// Appears to be pushall-only — no incremental `msg: 1` frame in this repo's captures
     /// carries it. Prefer [`crate::client::PrinterClient::xcam`], which caches and merges it.
-    pub xcam: Option<XcamTelemetry>,
+    pub xcam: Option<Box<XcamTelemetry>>,
 
     /// AMS expansion bus status container [REF-AMS-DECODE].
-    pub ams: Option<AmsStatusReport>,
+    pub ams: Option<Box<AmsStatusReport>>,
 
     /// Schedule of pauses the firmware plans for the running job. Nested as `print.p_list`.
     ///
@@ -337,7 +339,7 @@ pub struct PrinterTelemetry {
 
     /// Virtual/external spool holder state on single-nozzle platforms (P1S, P1P, A1, X1C, H2S).
     /// Dual-nozzle IDEX platforms (H2D, H2D Pro, X2D) report `vir_slot` instead [REF-AMS-DECODE].
-    pub vt_tray: Option<VirtualTray>,
+    pub vt_tray: Option<Box<VirtualTray>>,
 
     /// IDEX external spool holder array. Each entry uses the same schema as `VirtualTray`.
     #[serde(default)]
@@ -345,7 +347,7 @@ pub struct PrinterTelemetry {
 
     /// Device sub-object nested inside pushall `print` envelope on H2/P2/X2 models.
     /// Contains CTC, nozzle, and airduct telemetry for enclosed printers.
-    pub device: Option<DeviceTelemetry>,
+    pub device: Option<Box<DeviceTelemetry>>,
 
     /// Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
     pub fun: Option<String>,
