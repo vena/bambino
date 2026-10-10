@@ -2037,15 +2037,15 @@ struct PrinterTelemetry {
     pub bed_temper: Option<f64>,
     pub bed_target_temper: Option<f64>,
     pub chamber_temper: Option<f64>,
-    pub ipcam: Option<super::diagnostics::IpcamTelemetry>,
-    pub xcam: Option<super::xcam::XcamTelemetry>,
-    pub ams: Option<super::ams::AmsStatusReport>,
+    pub ipcam: Option<Box<super::diagnostics::IpcamTelemetry>>,
+    pub xcam: Option<Box<super::xcam::XcamTelemetry>>,
+    pub ams: Option<Box<super::ams::AmsStatusReport>>,
     pub p_list: Option<PrintPauseList>,
     pub ams_status: Option<i32>,
     pub ams_mapping: Vec<i32>,
-    pub vt_tray: Option<super::ams::VirtualTray>,
+    pub vt_tray: Option<Box<super::ams::VirtualTray>>,
     pub vir_slot: Option<Vec<super::ams::VirtualTray>>,
-    pub device: Option<super::device::DeviceTelemetry>,
+    pub device: Option<Box<super::device::DeviceTelemetry>>,
     pub fun: Option<String>,
     pub fun2: Option<String>,
     pub print_type: Option<String>,
@@ -2068,6 +2068,7 @@ struct PrinterTelemetry {
     pub mapping: Option<Vec<i32>>,
     pub gcode_start_time: Option<String>,
     pub cali_version: Option<i32>,
+    pub support_flow_calibration: Option<bool>,
     pub err: Option<String>,
     pub fail_reason: Option<String>,
     pub canvas_id: Option<String>,
@@ -2270,18 +2271,18 @@ raw field and re-implementing the decode:
 
   Active chamber heater or sensor telemetry (actual, target, or composite packed).
 
-- **`ipcam`**: `Option<super::diagnostics::IpcamTelemetry>`
+- **`ipcam`**: `Option<Box<super::diagnostics::IpcamTelemetry>>`
 
   Camera and recording telemetry. Nested as `print.ipcam` on the wire.
 
-- **`xcam`**: `Option<super::xcam::XcamTelemetry>`
+- **`xcam`**: `Option<Box<super::xcam::XcamTelemetry>>`
 
   AI detection settings (spaghetti detection, first-layer inspection, etc.).
   
   Appears to be pushall-only — no incremental `msg: 1` frame in this repo's captures
   carries it. Prefer [`xcam`](xcam/index.md), which caches and merges it.
 
-- **`ams`**: `Option<super::ams::AmsStatusReport>`
+- **`ams`**: `Option<Box<super::ams::AmsStatusReport>>`
 
   AMS expansion bus status container [REF-AMS-DECODE].
 
@@ -2300,7 +2301,7 @@ raw field and re-implementing the decode:
 
   Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
 
-- **`vt_tray`**: `Option<super::ams::VirtualTray>`
+- **`vt_tray`**: `Option<Box<super::ams::VirtualTray>>`
 
   Virtual/external spool holder state on single-nozzle platforms (P1S, P1P, A1, X1C, H2S).
   Dual-nozzle IDEX platforms (H2D, H2D Pro, X2D) report `vir_slot` instead [REF-AMS-DECODE].
@@ -2309,7 +2310,7 @@ raw field and re-implementing the decode:
 
   IDEX external spool holder array. Each entry uses the same schema as `VirtualTray`.
 
-- **`device`**: `Option<super::device::DeviceTelemetry>`
+- **`device`**: `Option<Box<super::device::DeviceTelemetry>>`
 
   Device sub-object nested inside pushall `print` envelope on H2/P2/X2 models.
   Contains CTC, nozzle, and airduct telemetry for enclosed printers.
@@ -2467,7 +2468,20 @@ raw field and re-implementing the decode:
 
 - **`cali_version`**: `Option<i32>`
 
-  Calibration version identifier.
+  Version of the printer's stored PA (K-value) profiles; `-1` means not initialized.
+  
+  BambuStudio offers its stored-profile picker for a loaded filament only once this reads
+  above `-1` (`DevCalib::IsVersionInited`) — see
+  [`ModelQuirks::k_profile_selection_support`](../../quirks/index.md#modelquirks).
+
+- **`support_flow_calibration`**: `Option<bool>`
+
+  Whether the printer runs flow dynamics calibration as part of a print job.
+  
+  BambuStudio reads it from any `print` message into the same `is_support_pa_calibration`
+  the `fun` and `home_flag` bits set (`DeviceManager.cpp`) — see
+  [`ModelQuirks::pa_calibration_support`](../../quirks/index.md#modelquirks).
+  No capture in this repo carries it.
 
 - **`err`**: `Option<String>`
 
@@ -2959,7 +2973,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
 ```rust
 struct TelemetryReport {
-    pub print: Option<PrinterTelemetry>,
+    pub print: Option<Box<PrinterTelemetry>>,
     // [REDACTED: Private Fields]
 }
 ```
@@ -2971,7 +2985,7 @@ top-level domains depending on which micro-system published the frame.
 
 #### Fields
 
-- **`print`**: `Option<PrinterTelemetry>`
+- **`print`**: `Option<Box<PrinterTelemetry>>`
 
   Telemetry parameters representing the physical printer state machine.
 

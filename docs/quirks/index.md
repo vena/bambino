@@ -71,6 +71,8 @@ struct QuirkContext<'a> {
     pub fun: Option<&'a str>,
     pub home_flag: Option<u32>,
     pub xcam_cfg: Option<u32>,
+    pub support_flow_calibration: Option<bool>,
+    pub cali_version: Option<i32>,
 }
 ```
 
@@ -123,6 +125,20 @@ site.
   Its presence is BambuStudio's AI-monitoring support signal (`ParseDetectionV1_0`). Absence
   means "not seen yet" as often as "unsupported", since `xcam` arrives only in full reports.
 
+- **`support_flow_calibration`**: `Option<bool>`
+
+  `print.support_flow_calibration`, if the printer reported it.
+  
+  A plain boolean for the same flow-dynamics-calibration capability as `fun` bit 7 and
+  `home_flag` bit 16. BambuStudio applies no per-model override to it, unlike the bits.
+
+- **`cali_version`**: `Option<i32>`
+
+  `print.cali_version`, if the printer reported it.
+  
+  `-1` (or below) means the printer's stored PA profiles aren't initialized; BambuStudio
+  reads any version above it as "profiles available" (`DevCalib::IsVersionInited`).
+
 #### Implementations
 
 - <span id="quirkcontext-empty"></span>`fn empty() -> Self`
@@ -151,6 +167,14 @@ site.
 - <span id="quirkcontext-with-xcam-cfg"></span>`fn with_xcam_cfg(self, xcam_cfg: Option<u32>) -> Self`
 
   Sets the `print.xcam.cfg` bitmask.
+
+- <span id="quirkcontext-with-support-flow-calibration"></span>`fn with_support_flow_calibration(self, supported: Option<bool>) -> Self`
+
+  Sets `print.support_flow_calibration`.
+
+- <span id="quirkcontext-with-cali-version"></span>`fn with_cali_version(self, cali_version: Option<i32>) -> Self`
+
+  Sets `print.cali_version`.
 
 #### Trait Implementations
 
@@ -541,6 +565,45 @@ must adapt to.
   `support_build_plate_marker_detect`, true on X1, X1C, X1E, X2D, P2S and the H2 family, and
   on X1/X1C only from the release in [`auto_recovery_support`](#modelquirks).
   P1 and A1 profiles mark every camera detector unsupported.
+
+- <span id="modelquirks-pa-calibration-support"></span>`fn pa_calibration_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer can run flow dynamics (pressure advance) calibration as part of a print job, with its provenance.
+
+  This gates [`PrintJobConfig::flow_calibration`](../mqtt/index.md),
+  the printer-side automatic PA calibration; BambuStudio's Send dialog hides that control
+  without it (`SelectMachine.cpp`, `update_option_opts`). Resolved as BambuStudio's
+  `is_support_pa_calibration` (`DeviceManager.cpp`):
+
+  * `print.support_flow_calibration`, a plain boolean, wins when present. BambuStudio lets
+    whichever source arrived last overwrite the others; bambino ranks the explicit boolean
+    first, since it is the one source BambuStudio never overrides per model.
+  * Otherwise `fun` bit 7, else `home_flag` bit 16. **P1P and P1S ignore both bits**:
+    BambuStudio forces the result false on `series_p1p` because those printers push the
+    bit set without supporting the calibration (the P1S fixture's `home_flag` has bit 16
+    set), so the answer there is `Inferred(false)`.
+  * Nothing reported means `Assumed(false)`, BambuStudio's initializer.
+
+- <span id="modelquirks-pa-mode-support"></span>`fn pa_mode_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer accepts the per-job PA profile mode, with its provenance.
+
+  This gates [`PrintJobConfig::pa_profile_shared_by_type`](../mqtt/index.md).
+  Reported by `fun2` bit 3 only, BambuStudio's `is_support_pa_mode`; its only use upstream
+  is to show that option in the Send dialog (`SelectMachine.cpp`). No model rule exists,
+  so nothing reported means `Assumed(false)`, always the case on P1 and A1, which send no
+  `fun2`.
+
+- <span id="modelquirks-k-profile-selection-support"></span>`fn k_profile_selection_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether a loaded filament's PA (K-value) can be set by choosing a stored PA profile, with its provenance.
+
+  Reported by `print.cali_version`: BambuStudio's AMS slot editor shows its PA profile
+  picker when the printer has reported a version above `-1` (`DevCalib::IsVersionInited`,
+  `AMSMaterialsSetting::Popup`). Select a profile with
+  [`select_k_profile`](../client/index.md#printerclient). Without it
+  BambuStudio offers a raw K input instead, so `false` means "no stored-profile picker", not
+  "no per-filament PA". Nothing reported means `Assumed(false)`.
 
 - <span id="modelquirks-has-buzzer"></span>`fn has_buzzer(&self) -> bool`
 

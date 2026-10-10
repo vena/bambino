@@ -355,6 +355,18 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
 
   Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`](../quirks/index.md#modelquirks).
 
+- <span id="capabilities-pa-calibration-support"></span>`fn pa_calibration_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Per-job flow dynamics (pressure advance) calibration support — see [`ModelQuirks::pa_calibration_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-pa-mode-support"></span>`fn pa_mode_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Per-job PA profile mode support — see [`ModelQuirks::pa_mode_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-k-profile-selection-support"></span>`fn k_profile_selection_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Stored PA (K-value) profile selection for a loaded filament — see [`ModelQuirks::k_profile_selection_support`](../quirks/index.md#modelquirks).
+
 - <span id="capabilities-xcam-module-support"></span>`fn xcam_module_support(&self, module: XcamModule) -> Support` — [`XcamModule`](../types/control/index.md#xcammodule), [`Support`](../quirks/index.md#support)
 
   Camera detector support — see [`ModelQuirks::xcam_module_support`](../quirks/index.md#modelquirks).
@@ -1658,6 +1670,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The model's quirks engine gates `nozzle_offset_cali`: it resolves the default when the
   config left it `None`, and forces it off on a single-nozzle model even if the caller set
   it explicitly.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when the config sets
+  [`pa_profile_shared_by_type`](../mqtt/commands/print_job/index.md#printjobconfig) and
+  `Capabilities::pa_mode_support` does not
+  allow it. BambuStudio offers the switch only on a printer reporting that support.
 
 - <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 

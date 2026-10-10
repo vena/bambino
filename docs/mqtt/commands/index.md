@@ -352,6 +352,7 @@ struct PrintJobConfig {
     pub nozzle_offset_cali: Option<CalibrationMode>,
     pub ams: Option<AmsSource>,
     pub nozzle_rack: Option<NozzleRack>,
+    pub pa_profile_shared_by_type: Option<bool>,
 }
 ```
 
@@ -420,6 +421,13 @@ defaults for calibration flags.
   
   Only consulted on a model whose quirks report `has_nozzle_rack`.
 
+- **`pa_profile_shared_by_type`**: `Option<bool>`
+
+  BambuStudio's per-job "Nozzles and filaments of the same type share the same PA profile" switch; `None` sends nothing.
+  
+  Set it with [`pa_profile_sharing`](print_job/index.md#printjobconfig), which describes the wire
+  encoding and its sources.
+
 #### Implementations
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
@@ -462,6 +470,10 @@ defaults for calibration flags.
 
   Enables or disables flow calibration for this job.
 
+  This is the printer's automatic flow dynamics (pressure advance) calibration. Whether the
+  printer runs it is `Capabilities::pa_calibration_support`;
+  the field is sent either way, as before that answer existed.
+
 - <span id="printjobconfig-vibration-compensation"></span>`fn vibration_compensation(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](print_job/index.md#calibrationmode)
 
   Enables or disables vibration compensation calibration for this job. No tri-state
@@ -489,6 +501,25 @@ defaults for calibration flags.
 
   [`Error::InvalidArgument`](../../error/index.md#error) when `rack_nozzle_id` is outside the rack's physical IDs
   (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
+
+- <span id="printjobconfig-pa-profile-sharing"></span>`fn pa_profile_sharing(self, shared_by_type: bool) -> Self`
+
+  Sets BambuStudio's per-job PA profile switch, sent as `extrude_cali_manual_mode`.
+
+  BambuStudio's Send dialog labels the switch "Nozzles and filaments of the same type share
+  the same PA profile" and sends `0` when it is on, `1` when it is off
+  (`SelectMachineDialog`, `m_pa_value_switch`); it shows the switch only when
+  flow dynamics calibration is off and the printer reports `fun2` bit 3. Upstream says no
+  more about what the printer does with either value.
+
+  The key is `extrude_cali_manual_mode`: BambuStudio puts it under that name in a `print`
+  command (`DevNozzleMappingCtrl::CtrlGetAutoNozzleMappingV0`) and bambuddy sends it in
+  every `project_file` as a constant `0` (`bambu_mqtt.py`). BambuStudio's own
+  `project_file` is assembled by its closed-source plugin, so its name there is inferred.
+
+  [`PrinterClient::start_print`](../../client/index.md#printerclient) refuses a job
+  that sets this unless
+  `pa_mode_support` allows it.
 
 - <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](print_job/index.md#calibrationmode)
 

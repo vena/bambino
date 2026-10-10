@@ -152,6 +152,18 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
 
   Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`](../../quirks/index.md#modelquirks).
 
+- <span id="capabilities-pa-calibration-support"></span>`fn pa_calibration_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Per-job flow dynamics (pressure advance) calibration support — see [`ModelQuirks::pa_calibration_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-pa-mode-support"></span>`fn pa_mode_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Per-job PA profile mode support — see [`ModelQuirks::pa_mode_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-k-profile-selection-support"></span>`fn k_profile_selection_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Stored PA (K-value) profile selection for a loaded filament — see [`ModelQuirks::k_profile_selection_support`](../../quirks/index.md#modelquirks).
+
 - <span id="capabilities-xcam-module-support"></span>`fn xcam_module_support(&self, module: XcamModule) -> Support` — [`XcamModule`](../../types/control/index.md#xcammodule), [`Support`](../../quirks/index.md#support)
 
   Camera detector support — see [`ModelQuirks::xcam_module_support`](../../quirks/index.md#modelquirks).

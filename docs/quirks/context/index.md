@@ -51,6 +51,8 @@ struct QuirkContext<'a> {
     pub fun: Option<&'a str>,
     pub home_flag: Option<u32>,
     pub xcam_cfg: Option<u32>,
+    pub support_flow_calibration: Option<bool>,
+    pub cali_version: Option<i32>,
 }
 ```
 
@@ -103,6 +105,20 @@ site.
   Its presence is BambuStudio's AI-monitoring support signal (`ParseDetectionV1_0`). Absence
   means "not seen yet" as often as "unsupported", since `xcam` arrives only in full reports.
 
+- **`support_flow_calibration`**: `Option<bool>`
+
+  `print.support_flow_calibration`, if the printer reported it.
+  
+  A plain boolean for the same flow-dynamics-calibration capability as `fun` bit 7 and
+  `home_flag` bit 16. BambuStudio applies no per-model override to it, unlike the bits.
+
+- **`cali_version`**: `Option<i32>`
+
+  `print.cali_version`, if the printer reported it.
+  
+  `-1` (or below) means the printer's stored PA profiles aren't initialized; BambuStudio
+  reads any version above it as "profiles available" (`DevCalib::IsVersionInited`).
+
 #### Implementations
 
 - <span id="quirkcontext-empty"></span>`fn empty() -> Self`
@@ -131,6 +147,14 @@ site.
 - <span id="quirkcontext-with-xcam-cfg"></span>`fn with_xcam_cfg(self, xcam_cfg: Option<u32>) -> Self`
 
   Sets the `print.xcam.cfg` bitmask.
+
+- <span id="quirkcontext-with-support-flow-calibration"></span>`fn with_support_flow_calibration(self, supported: Option<bool>) -> Self`
+
+  Sets `print.support_flow_calibration`.
+
+- <span id="quirkcontext-with-cali-version"></span>`fn with_cali_version(self, cali_version: Option<i32>) -> Self`
+
+  Sets `print.cali_version`.
 
 #### Trait Implementations
 
