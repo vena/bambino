@@ -156,6 +156,10 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
 
   Per-job flow dynamics (pressure advance) calibration support — see [`ModelQuirks::pa_calibration_support`](../../quirks/index.md#modelquirks).
 
+- <span id="capabilities-pa-calibration-auto-support"></span>`fn pa_calibration_auto_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Auto mode for per-job flow dynamics calibration — see [`ModelQuirks::pa_calibration_auto_support`](../../quirks/index.md#modelquirks).
+
 - <span id="capabilities-pa-mode-support"></span>`fn pa_mode_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 
   Per-job PA profile mode support — see [`ModelQuirks::pa_mode_support`](../../quirks/index.md#modelquirks).

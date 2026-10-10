@@ -359,6 +359,10 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
 
   Per-job flow dynamics (pressure advance) calibration support — see [`ModelQuirks::pa_calibration_support`](../quirks/index.md#modelquirks).
 
+- <span id="capabilities-pa-calibration-auto-support"></span>`fn pa_calibration_auto_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Auto mode for per-job flow dynamics calibration — see [`ModelQuirks::pa_calibration_auto_support`](../quirks/index.md#modelquirks).
+
 - <span id="capabilities-pa-mode-support"></span>`fn pa_mode_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
   Per-job PA profile mode support — see [`ModelQuirks::pa_mode_support`](../quirks/index.md#modelquirks).
@@ -1677,6 +1681,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`pa_profile_shared_by_type`](../mqtt/commands/print_job/index.md#printjobconfig) and
   `Capabilities::pa_mode_support` does not
   allow it. BambuStudio offers the switch only on a printer reporting that support.
+
+  [`Error::ModelMismatch`](../error/index.md#error) when flow calibration is `CalibrationMode::Auto` and
+  `Capabilities::pa_calibration_auto_support`
+  does not allow it. BambuStudio offers Auto only where it does.
 
 - <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 

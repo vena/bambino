@@ -211,7 +211,13 @@ defaults for calibration flags.
 
   This is the printer's automatic flow dynamics (pressure advance) calibration. Whether the
   printer runs it is `Capabilities::pa_calibration_support`;
-  the field is sent either way, as before that answer existed.
+  the field is sent either way, as before that answer existed. `CalibrationMode::Auto` is
+  narrower: [`PrinterClient::start_print`](../../../client/index.md#printerclient) refuses
+  it unless `Capabilities::pa_calibration_auto_support`
+  allows it.
+
+  With calibration Off, each slot's manually set K-value (PA profile) applies instead; see
+  [`pa_profile_sharing`](#printjobconfig) for which ones.
 
 - <span id="printjobconfig-vibration-compensation"></span>`fn vibration_compensation(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](#calibrationmode)
 
@@ -245,11 +251,18 @@ defaults for calibration flags.
 
   Sets BambuStudio's per-job PA profile switch, sent as `extrude_cali_manual_mode`.
 
-  BambuStudio's Send dialog labels the switch "Nozzles and filaments of the same type share
-  the same PA profile" and sends `0` when it is on, `1` when it is off
-  (`SelectMachineDialog`, `m_pa_value_switch`); it shows the switch only when
-  flow dynamics calibration is off and the printer reports `fun2` bit 3. Upstream says no
-  more about what the printer does with either value.
+  It decides which manually set K-values apply when flow dynamics calibration is Off
+  (Bambu Lab wiki, *Flow Dynamics Calibration*, the H2C section):
+
+  * `true` (the switch on, BambuStudio's default): a slot's K-value applies when the slot's
+    filament *type* and the bound nozzle *type* match its PA profile.
+  * `false`: only when the filament and nozzle are exactly the ones in the profile.
+
+  The wiki introduces it for the H2C's multi-nozzle rack, where the nozzle a slot prints
+  with isn't known when its profile is chosen. BambuStudio's Send dialog labels it
+  "Nozzles and filaments of the same type share the same PA profile", sends `0` when on and
+  `1` when off (`SelectMachineDialog`, `m_pa_value_switch`), and shows it only when flow
+  dynamics calibration is off and the printer reports `fun2` bit 3.
 
   The key is `extrude_cali_manual_mode`: BambuStudio puts it under that name in a `print`
   command (`DevNozzleMappingCtrl::CtrlGetAutoNozzleMappingV0`) and bambuddy sends it in

@@ -584,6 +584,22 @@ must adapt to.
     set), so the answer there is `Inferred(false)`.
   * Nothing reported means `Assumed(false)`, BambuStudio's initializer.
 
+- <span id="modelquirks-pa-calibration-auto-support"></span>`fn pa_calibration_auto_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether per-job flow dynamics calibration can be set to Auto, with its provenance.
+
+  Auto calibrates only when the filament or nozzle changed since the last calibration
+  (Bambu Lab wiki, *Flow Dynamics Calibration*). It needs
+  [`pa_calibration_support`](#modelquirks) first, whose answer is returned
+  unchanged when it denies. Otherwise the model rule: BambuStudio's per-model
+  `support_auto_flow_calibration` (`resources/printers/*.json`), true on H2S, H2D, H2D Pro,
+  H2C, P2S, X2D and A2L. The wiki lists the same models, less the A2L, as offering
+  Auto/On/Off; X1 and A1 offer On/Off only.
+
+  BambuStudio also refuses Auto for filaments in a model's `auto_cali_not_support_filaments`,
+  but every model with that list (`GFU03`, `GFU04`) lacks Auto anyway, so this doesn't check
+  filaments.
+
 - <span id="modelquirks-pa-mode-support"></span>`fn pa_mode_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
 
   Returns whether the printer accepts the per-job PA profile mode, with its provenance.
@@ -604,6 +620,12 @@ must adapt to.
   [`select_k_profile`](../client/index.md#printerclient). Without it
   BambuStudio offers a raw K input instead, so `false` means "no stored-profile picker", not
   "no per-filament PA". Nothing reported means `Assumed(false)`.
+
+  **A slot's K-value applies only to a job sent with flow dynamics calibration Off.** With
+  it On or Auto the printer uses the calibrated value instead; the Bambu Lab wiki
+  (*Flow Dynamics Calibration*) says a selected profile's K "will still be displayed, but
+  will only be effective in the 'Off' position". A slot with no profile uses the printer's
+  default compensation.
 
 - <span id="modelquirks-has-buzzer"></span>`fn has_buzzer(&self) -> bool`
 
