@@ -10,8 +10,12 @@ use alloc::string::String;
 use crate::error::Error;
 use crate::models::{PrinterModel, resolve_model};
 
-/// Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field.
-pub const ACCESS_CODE_MAX_LEN: usize = 32;
+/// Length of every printer-issued LAN access code.
+///
+/// BambuStudio's connect-by-IP dialog (`InputIpAddressDialog::on_text` in
+/// `src/slic3r/GUI/ReleaseNote.cpp`) enables its OK button only for exactly this many ASCII
+/// letters or digits.
+pub const ACCESS_CODE_LEN: usize = 8;
 
 /// The fixed username every Bambu LAN protocol logs in with (MQTT, FTPS, the binary camera); the access code is the password.
 pub(crate) const LAN_USERNAME: &str = "bblp";
@@ -19,18 +23,19 @@ pub(crate) const LAN_USERNAME: &str = "bblp";
 /// Longest serial number accepted. Current Bambu serials are 15 characters.
 pub const SERIAL_MAX_LEN: usize = 20;
 
-/// Checks that `access_code` is 1 to [`ACCESS_CODE_MAX_LEN`] ASCII letters or digits.
+/// Checks that `access_code` is exactly [`ACCESS_CODE_LEN`] ASCII letters or digits.
 ///
 /// Printer-issued LAN access codes are 8 case-sensitive alphanumerics, so a rejection almost
-/// always means a copy-paste mistake (whitespace, a trailing newline). The alphanumeric rule
-/// is also what keeps the code safe to interpolate into an RTSPS URL's userinfo.
+/// always means a copy-paste mistake (whitespace, a trailing newline, a truncated code). A
+/// wrong-length code would otherwise surface only at connect, as an MQTT refusal a powered-off
+/// printer also produces. The alphanumeric rule is also what keeps the code safe to
+/// interpolate into an RTSPS URL's userinfo.
 pub fn validate_access_code(access_code: &str) -> Result<(), Error> {
-    if access_code.is_empty()
-        || access_code.len() > ACCESS_CODE_MAX_LEN
+    if access_code.len() != ACCESS_CODE_LEN
         || !access_code.bytes().all(|b| b.is_ascii_alphanumeric())
     {
         return Err(Error::InvalidArgument(
-            "access code must be 1-32 ASCII letters or digits".into(),
+            "access code must be exactly 8 ASCII letters or digits".into(),
         ));
     }
     Ok(())
@@ -149,5 +154,24 @@ mod tests {
         assert!(rendered.contains("<redacted>"));
         assert!(rendered.contains("192.168.1.50"));
         assert!(rendered.contains("00M00A000000000"));
+    }
+
+    #[test]
+    fn access_code_must_be_exactly_eight_alphanumerics() {
+        assert!(validate_access_code("aB3dE6g8").is_ok());
+        for code in [
+            "",
+            "aB3dE6g",
+            "aB3dE6g89",
+            "aB3dE6g8\n",
+            " aB3dE6g",
+            "aB3d-6g8",
+            "aB3dé6g",
+        ] {
+            assert!(
+                matches!(validate_access_code(code), Err(Error::InvalidArgument(_))),
+                "accepted {code:?}"
+            );
+        }
     }
 }

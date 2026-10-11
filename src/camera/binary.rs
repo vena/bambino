@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 
 use crate::client::dummy::DummyTimer;
 use crate::error::Error;
-use crate::identity::{ACCESS_CODE_MAX_LEN, validate_access_code};
+use crate::identity::{ACCESS_CODE_LEN, validate_access_code};
 use crate::io::{AsyncIo, TimerProvider, map_embedded_io_error_kind, read_chunk, with_deadline};
 
 pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
@@ -33,8 +33,9 @@ pub(crate) const CAMERA_HANDSHAKE_MAGIC: u32 = 64;
 pub(crate) const CAMERA_HANDSHAKE_COMMAND_ID: u32 = 12288;
 pub(crate) const CAMERA_USERNAME_OFFSET: usize = 16;
 pub(crate) const CAMERA_PASSWORD_OFFSET: usize = 48;
-// The password field runs to the end of the packet; `ACCESS_CODE_MAX_LEN` must fit it exactly.
-const _: () = assert!(CAMERA_HANDSHAKE_SIZE - CAMERA_PASSWORD_OFFSET == ACCESS_CODE_MAX_LEN);
+/// Width of the handshake's NUL-padded password field, which runs to the end of the packet.
+pub(crate) const CAMERA_PASSWORD_FIELD_LEN: usize = CAMERA_HANDSHAKE_SIZE - CAMERA_PASSWORD_OFFSET;
+const _: () = assert!(ACCESS_CODE_LEN <= CAMERA_PASSWORD_FIELD_LEN);
 pub(crate) const CAMERA_FRAME_HEADER_SIZE: usize = 16;
 pub(crate) const CAMERA_FRAME_MAX_SIZE: usize = 10 * 1024 * 1024;
 /// JPEG start-of-image marker every frame payload must begin with.
@@ -363,20 +364,28 @@ mod tests {
     }
 
     #[test]
-    fn test_handshake_max_length_access_code() {
-        let code = "A".repeat(ACCESS_CODE_MAX_LEN);
-        let packet = build_handshake_packet(&code).unwrap();
-        assert_eq!(
-            &packet[CAMERA_PASSWORD_OFFSET..CAMERA_PASSWORD_OFFSET + 32],
-            code.as_bytes()
+    fn test_handshake_pads_the_rest_of_the_password_field() {
+        let packet = build_handshake_packet("ABCDEF12").unwrap();
+        assert!(
+            packet[CAMERA_PASSWORD_OFFSET + ACCESS_CODE_LEN..]
+                .iter()
+                .all(|&b| b == 0)
         );
     }
 
     #[test]
-    fn test_handshake_oversized_access_code() {
-        let code = "A".repeat(ACCESS_CODE_MAX_LEN + 1);
-        let result = build_handshake_packet(&code);
-        assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    fn test_handshake_rejects_wrong_length_access_code() {
+        for len in [
+            ACCESS_CODE_LEN - 1,
+            ACCESS_CODE_LEN + 1,
+            CAMERA_PASSWORD_FIELD_LEN,
+        ] {
+            let result = build_handshake_packet(&"A".repeat(len));
+            assert!(
+                matches!(result, Err(Error::InvalidArgument(_))),
+                "len {len}"
+            );
+        }
     }
 
     #[test]
