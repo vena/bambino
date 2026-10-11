@@ -231,6 +231,13 @@ pub(crate) const FIRST_LAYER_INSPECT: SettingBits = SettingBits {
     cfg: Some(12),
     home_flag: None,
 };
+/// `print.cfg` bit 15: AI monitoring enabled.
+pub(crate) const AI_MONITORING: SettingBits = SettingBits {
+    cfg: Some(15),
+    home_flag: None,
+};
+/// Low bit of `print.cfg`'s two-bit AI monitoring sensitivity (bits 13-14).
+pub(crate) const CFG_AI_MONITORING_SENSITIVITY: u32 = 13;
 /// `fun2` bit 4: air purification at print end supported.
 pub(crate) const FUN2_AIR_PURIFICATION_BIT: u32 = 4;
 /// `fun2` bit 15: smart nozzle blob detection (v2) supported.

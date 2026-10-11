@@ -350,6 +350,46 @@ wire_enum!(XcamHaltSensitivity {
     High => "high",
 });
 
+impl XcamHaltSensitivity {
+    /// Decodes `print.cfg`'s two-bit AI-monitoring sensitivity field (bits 13-14).
+    ///
+    /// Unlike a per-detector field, all four codes are assigned: `0` is never-halt
+    /// (BambuStudio `DevPrintOptionsParser::ParseDetectionV1_0`).
+    #[must_use]
+    pub(crate) const fn from_ai_monitoring_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(XcamHaltSensitivity::NeverHalt),
+            1 => Some(XcamHaltSensitivity::Low),
+            2 => Some(XcamHaltSensitivity::Medium),
+            3 => Some(XcamHaltSensitivity::High),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::types::XcamSensitivity> for XcamHaltSensitivity {
+    fn from(level: crate::types::XcamSensitivity) -> Self {
+        match level {
+            crate::types::XcamSensitivity::Low => XcamHaltSensitivity::Low,
+            crate::types::XcamSensitivity::Medium => XcamHaltSensitivity::Medium,
+            crate::types::XcamSensitivity::High => XcamHaltSensitivity::High,
+        }
+    }
+}
+
+/// One camera detector's last reported state, as [`PrinterClient::xcam_detector_state`](crate::client::PrinterClient::xcam_detector_state) answers it.
+///
+/// Either field is `None` when no report has carried it yet, when the module's source never
+/// carries it on this printer's generation, or (for `sensitivity`) when the module takes none
+/// ([`XcamModule::takes_sensitivity`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct XcamDetectorState {
+    /// Whether the detector is on.
+    pub enabled: Option<bool>,
+    /// How eagerly it halts the print. Only AI monitoring reports [`XcamHaltSensitivity::NeverHalt`].
+    pub sensitivity: Option<XcamHaltSensitivity>,
+}
+
 /// Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]

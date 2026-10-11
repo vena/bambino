@@ -6,7 +6,7 @@
 use bambino::client::HeaterTemps;
 use bambino::client::{
     AirPurificationMode, DoorOpenCheck, IdleHeatingProtection, NozzleBlobDetectMode,
-    XcamHaltSensitivity, XcamModule,
+    XcamDetectorState, XcamHaltSensitivity, XcamModule,
 };
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
@@ -1448,6 +1448,124 @@ async fn test_xcam_detector_setter_and_first_layer_getter() {
         .await
         .expect("spaghetti detector send");
     broker_task.await.expect("Broker task panicked");
+}
+
+/// Asserts `xcam_detector_state` for each `(module, enabled, sensitivity)` after one report.
+async fn assert_detector_states(
+    model: PrinterModel,
+    report: &'static [u8],
+    expected: &[(XcamModule, Option<bool>, Option<XcamHaltSensitivity>)],
+) {
+    let (mut client, broker_task) = with_broker(SERIAL, model, |mut server_stream| async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        ReportPublisher::new(SERIAL)
+            .publish(&mut server_stream, report)
+            .await;
+    })
+    .await;
+    client.poll_telemetry().await.expect("report");
+    for &(module, enabled, sensitivity) in expected {
+        assert_eq!(
+            client.xcam_detector_state(module),
+            XcamDetectorState {
+                enabled,
+                sensitivity
+            },
+            "{module}"
+        );
+    }
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// New generation: AI monitoring reads `print.cfg` (bit 15 on, bits 13-14 = 0, never-halt) over
+/// every `xcam` key, and first-layer inspection reads `print.cfg` bit 12 (off) over
+/// `xcam.first_layer_inspector`. `xcam.cfg` 0x200A80: spaghetti on (7) high (8-9 = 2), pileup
+/// off medium (11-12 = 1), clumping off low, FOD check on (21).
+#[tokio::test]
+async fn test_xcam_detector_state_new_gen() {
+    use XcamHaltSensitivity::*;
+    assert_detector_states(
+        PrinterModel::H2D,
+        br#"{"print":{"cfg":"8000","xcam":{"cfg":2099840,"printing_monitor":false,"halt_print_sensitivity":"high","first_layer_inspector":true,"buildplate_marker_detector":true}}}"#,
+        &[
+            (XcamModule::PrintingMonitor, Some(true), Some(NeverHalt)),
+            (XcamModule::SpaghettiDetector, Some(true), Some(High)),
+            (XcamModule::PileupDetector, Some(false), Some(Medium)),
+            (XcamModule::ClumpDetector, Some(false), Some(Low)),
+            (XcamModule::AirprintDetector, Some(false), Some(Low)),
+            (XcamModule::FirstLayerInspector, Some(false), None),
+            (XcamModule::BuildplateMarkerDetector, Some(true), None),
+            (XcamModule::PlateOffsetSwitch, Some(false), None),
+            (XcamModule::FodCheck, Some(true), None),
+            (XcamModule::ModelMovementCheck, Some(false), None),
+        ],
+    )
+    .await;
+}
+
+/// `xcam.cfg` without `print.cfg`: BambuStudio reads AI monitoring's switch from neither
+/// generation's `xcam` key, but still takes `halt_print_sensitivity`.
+#[tokio::test]
+async fn test_xcam_detector_state_xcam_cfg_without_print_cfg() {
+    assert_detector_states(
+        PrinterModel::H2D,
+        br#"{"print":{"xcam":{"cfg":128,"printing_monitor":true,"halt_print_sensitivity":"never_halt"}}}"#,
+        &[
+            (
+                XcamModule::PrintingMonitor,
+                None,
+                Some(XcamHaltSensitivity::NeverHalt),
+            ),
+            (
+                XcamModule::SpaghettiDetector,
+                Some(true),
+                Some(XcamHaltSensitivity::Low),
+            ),
+        ],
+    )
+    .await;
+}
+
+/// Mid generation (no `cfg` of either kind): `printing_monitor` wins over `spaghetti_detector`,
+/// sensitivity comes from `halt_print_sensitivity`, and `cfg`-only detectors report nothing.
+#[tokio::test]
+async fn test_xcam_detector_state_mid_gen() {
+    assert_detector_states(
+        PrinterModel::P1S,
+        br#"{"print":{"xcam":{"printing_monitor":true,"spaghetti_detector":false,"print_halt":true,"halt_print_sensitivity":"low","first_layer_inspector":true}}}"#,
+        &[
+            (
+                XcamModule::PrintingMonitor,
+                Some(true),
+                Some(XcamHaltSensitivity::Low),
+            ),
+            (XcamModule::SpaghettiDetector, None, None),
+            (XcamModule::FodCheck, None, None),
+            (XcamModule::FirstLayerInspector, Some(true), None),
+        ],
+    )
+    .await;
+}
+
+/// Oldest generation: `spaghetti_detector` is the switch, and `print_halt: true` reads as medium.
+#[tokio::test]
+async fn test_xcam_detector_state_old_gen() {
+    assert_detector_states(
+        PrinterModel::X1C,
+        br#"{"print":{"xcam":{"spaghetti_detector":true,"print_halt":true}}}"#,
+        &[(
+            XcamModule::PrintingMonitor,
+            Some(true),
+            Some(XcamHaltSensitivity::Medium),
+        )],
+    )
+    .await;
+    assert_detector_states(
+        PrinterModel::X1C,
+        br#"{"print":{"xcam":{"spaghetti_detector":false,"print_halt":false}}}"#,
+        &[(XcamModule::PrintingMonitor, Some(false), None)],
+    )
+    .await;
 }
 
 // Issue #254: connection-scoped telemetry must not survive an MQTT reconnect.

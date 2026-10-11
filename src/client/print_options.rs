@@ -32,10 +32,11 @@ use crate::mqtt::commands::{
 use crate::quirks::Support;
 use crate::types::control::{
     AirPurificationMode, DoorOpenCheck, IdleHeatingProtection, NozzleBlobDetectMode,
-    XcamHaltSensitivity, XcamModule,
+    XcamDetectorState, XcamHaltSensitivity, XcamModule,
 };
 use crate::types::telemetry::bits::{self, SettingBits};
 use crate::types::telemetry::{deserialize_permissive_opt_bool, deserialize_permissive_opt_int};
+use crate::types::{XcamDetector, XcamTelemetry};
 use serde::Deserialize;
 
 use super::hardware::require;
@@ -315,10 +316,8 @@ where
 
     /// Turns one camera detector on or off, optionally setting how eagerly it halts the print.
     ///
-    /// Read the result back through [`xcam()`](Self::xcam) (the detector accessors on
-    /// [`XcamTelemetry`](crate::types::XcamTelemetry)) or, for first-layer inspection,
-    /// [`first_layer_inspection_enabled()`](Self::first_layer_inspection_enabled), after the
-    /// settle window described in the module docs. `xcam` arrives only in full status reports.
+    /// Read the result back through [`xcam_detector_state()`](Self::xcam_detector_state), after
+    /// the settle window described in the module docs. `xcam` arrives only in full status reports.
     /// bambuddy notes the firmware links spaghetti and pile-up sensitivity, so setting one may
     /// change both; that is unconfirmed.
     ///
@@ -464,6 +463,60 @@ where
             .or_else(|| self.core.cache.last_xcam.as_ref()?.first_layer_inspector)
     }
 
+    /// One camera detector's last reported state: the read-side counterpart of [`set_xcam_detector`](Self::set_xcam_detector).
+    ///
+    /// Routes each module to the field that reports it on this printer's generation, following
+    /// BambuStudio's `DevPrintOptionsParser::ParseDetectionV1_0`:
+    ///
+    /// - [`PrintingMonitor`](XcamModule::PrintingMonitor) (AI monitoring) reads `print.cfg` bit
+    ///   15 and bits 13-14 when `print.cfg` has been seen. Otherwise it reads `xcam.printing_monitor`,
+    ///   else `xcam.spaghetti_detector` (neither when `xcam.cfg` is present), with sensitivity from
+    ///   `xcam.halt_print_sensitivity`, else medium when the oldest generation reports
+    ///   `print_halt: true`. bambuddy calls `halt_print_sensitivity` always stale (`bambu_mqtt.py`);
+    ///   BambuStudio reads it anyway, and so does this.
+    /// - The four AI failure detectors read their `xcam.cfg` triple. AI monitoring is a separate
+    ///   switch from [`SpaghettiDetector`](XcamModule::SpaghettiDetector).
+    /// - [`FirstLayerInspector`](XcamModule::FirstLayerInspector) is
+    ///   [`first_layer_inspection_enabled()`](Self::first_layer_inspection_enabled).
+    /// - [`BuildplateMarkerDetector`](XcamModule::BuildplateMarkerDetector) reads
+    ///   `xcam.buildplate_marker_detector`; the other three read their `xcam.cfg` bit.
+    ///
+    /// `xcam` arrives only in full status reports. Says nothing about support; ask
+    /// [`Capabilities::xcam_module_support`](super::Capabilities::xcam_module_support) for that.
+    #[must_use]
+    pub fn xcam_detector_state(&self, module: XcamModule) -> XcamDetectorState {
+        let xcam = self.core.cache.last_xcam.as_ref();
+        let switch = |enabled| XcamDetectorState {
+            enabled,
+            sensitivity: None,
+        };
+        let detector = |read: fn(&XcamTelemetry) -> Option<XcamDetector>| {
+            let state = xcam.and_then(read);
+            XcamDetectorState {
+                enabled: state.map(|d| d.enabled),
+                sensitivity: state.and_then(|d| d.sensitivity).map(Into::into),
+            }
+        };
+        match module {
+            XcamModule::PrintingMonitor => self.ai_monitoring_state(),
+            XcamModule::SpaghettiDetector => detector(XcamTelemetry::spaghetti_detection),
+            XcamModule::PileupDetector => detector(XcamTelemetry::purge_chute_pileup_detection),
+            XcamModule::ClumpDetector => detector(XcamTelemetry::nozzle_clumping_detection),
+            XcamModule::AirprintDetector => detector(XcamTelemetry::air_printing_detection),
+            XcamModule::FirstLayerInspector => switch(self.first_layer_inspection_enabled()),
+            XcamModule::BuildplateMarkerDetector => {
+                switch(xcam.and_then(|x| x.buildplate_marker_detector))
+            }
+            XcamModule::PlateOffsetSwitch => {
+                switch(xcam.and_then(XcamTelemetry::buildplate_align_detection))
+            }
+            XcamModule::FodCheck => switch(xcam.and_then(XcamTelemetry::fod_check)),
+            XcamModule::ModelMovementCheck => {
+                switch(xcam.and_then(XcamTelemetry::displacement_detection))
+            }
+        }
+    }
+
     /// Whether sent files are kept on external storage, as last reported (`print.cfg` bit 19).
     #[must_use]
     pub fn store_sent_files_enabled(&self) -> Option<bool> {
@@ -533,6 +586,39 @@ where
     /// Reads a two-bit mode field from the cached `cfg`.
     fn cfg_field(&self, low: u32) -> Option<u32> {
         bits::hex_field(self.core.cache.last_cfg.as_deref()?, low, 2)
+    }
+
+    /// AI monitoring's state, in the source order [`xcam_detector_state`](Self::xcam_detector_state) documents.
+    fn ai_monitoring_state(&self) -> XcamDetectorState {
+        if self.core.cache.last_cfg.is_some() {
+            return XcamDetectorState {
+                enabled: self.setting(bits::AI_MONITORING),
+                sensitivity: self
+                    .cfg_field(bits::CFG_AI_MONITORING_SENSITIVITY)
+                    .and_then(XcamHaltSensitivity::from_ai_monitoring_code),
+            };
+        }
+        let Some(xcam) = self.core.cache.last_xcam.as_ref() else {
+            return XcamDetectorState::default();
+        };
+        let enabled = if xcam.cfg.is_some() {
+            None
+        } else {
+            xcam.printing_monitor.or(xcam.spaghetti_detector)
+        };
+        let oldest_gen_halts = xcam.cfg.is_none()
+            && xcam.printing_monitor.is_none()
+            && xcam.spaghetti_detector.is_some()
+            && xcam.print_halt == Some(true);
+        let sensitivity = xcam
+            .halt_print_sensitivity
+            .as_deref()
+            .and_then(|level| level.parse().ok())
+            .or(oldest_gen_halts.then_some(XcamHaltSensitivity::Medium));
+        XcamDetectorState {
+            enabled,
+            sensitivity,
+        }
     }
 }
 

@@ -37,7 +37,7 @@ pub use crate::quirks::Axis;
 pub use crate::types::control::{
     AirPurificationMode, BuzzerMode, CalibrationOption, DoorOpenCheck, FanTarget,
     IdleHeatingProtection, LedNode, LightMode, NozzleBlobDetectMode, PrintSpeed, PrintStatus,
-    XcamHaltSensitivity, XcamModule,
+    XcamDetectorState, XcamHaltSensitivity, XcamModule,
 };
 #[doc(inline)]
 pub use crate::types::telemetry::{HeaterTemps, NozzleTemps};
