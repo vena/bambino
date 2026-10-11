@@ -100,7 +100,12 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
 - **`printing_monitor`**: `Option<bool>`
 
-  Mid-generation AI-monitoring master switch, superseded by `cfg`.
+  Mid-generation AI-monitoring master switch.
+  
+  AI monitoring is its own switch, not `cfg`'s spaghetti detector, and newer firmware
+  reports it in the top-level `print.cfg` (bit 15) instead. Read it through
+  [`PrinterClient::xcam_detector_state`](../../../client/index.md#printerclient),
+  which sees both containers.
 
 - **`spaghetti_detector`**: `Option<bool>`
 
@@ -114,8 +119,10 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   AI-monitoring sensitivity as a bare string (`"low"`/`"medium"`/`"high"`).
   
-  Old-gen only, and bambuddy reports it as reliably stale (`bambu_mqtt.py`, "it's always
-  stale"). Prefer the per-detector sensitivity off `cfg` whenever `cfg` is present.
+  bambuddy reports it as reliably stale (`bambu_mqtt.py`, "it's always stale"). No `cfg`
+  detector stands in for it; the top-level `print.cfg` bits 13-14 do, and
+  [`PrinterClient::xcam_detector_state`](../../../client/index.md#printerclient)
+  prefers them.
 
 - **`first_layer_inspector`**: `Option<bool>`
 
@@ -158,14 +165,6 @@ and model-dependent, so round-tripping a report must not silently drop what it c
   Returns whether this printer supports on-device AI failure monitoring.
 
   Presence of `cfg` is the signal, matching BambuStudio's `is_support_detect` assignment.
-
-- <span id="xcamtelemetry-ai-monitoring-enabled"></span>`fn ai_monitoring_enabled(&self) -> Option<bool>`
-
-  Returns whether AI print monitoring is enabled, across all three protocol generations.
-
-  Checks `cfg`'s spaghetti-detection bit first, then `printing_monitor`, then
-  `spaghetti_detector` — the same precedence BambuStudio applies. `None` means no
-  generation's key was present.
 
 - <span id="xcamtelemetry-spaghetti-detection"></span>`fn spaghetti_detection(&self) -> Option<XcamDetector>` — [`XcamDetector`](#xcamdetector)
 

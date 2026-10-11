@@ -16,9 +16,9 @@ against a specific printer, instead of passing them as three adjacent same-typed
 | Item | Kind | Description |
 |------|------|-------------|
 | [`PrinterIdentity`](#printeridentity) | struct | Address, serial number, and access code identifying one printer on the LAN. |
-| [`validate_access_code`](#validate-access-code) | fn | Checks that `access_code` is 1 to [`ACCESS_CODE_MAX_LEN`](#access-code-max-len) ASCII letters or digits. |
+| [`validate_access_code`](#validate-access-code) | fn | Checks that `access_code` is exactly [`ACCESS_CODE_LEN`](#access-code-len) ASCII letters or digits. |
 | [`validate_serial`](#validate-serial) | fn | Checks that `serial` is 1 to [`SERIAL_MAX_LEN`](#serial-max-len) ASCII letters or digits. |
-| [`ACCESS_CODE_MAX_LEN`](#access-code-max-len) | const | Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field. |
+| [`ACCESS_CODE_LEN`](#access-code-len) | const | Length of every printer-issued LAN access code. |
 | [`SERIAL_MAX_LEN`](#serial-max-len) | const | Longest serial number accepted. |
 
 ## Types
@@ -111,11 +111,13 @@ fn validate_access_code(access_code: &str) -> Result<(), crate::error::Error>
 
 **Types:** [`Error`](../error/index.md#error)
 
-Checks that `access_code` is 1 to [`ACCESS_CODE_MAX_LEN`](#access-code-max-len) ASCII letters or digits.
+Checks that `access_code` is exactly [`ACCESS_CODE_LEN`](#access-code-len) ASCII letters or digits.
 
 Printer-issued LAN access codes are 8 case-sensitive alphanumerics, so a rejection almost
-always means a copy-paste mistake (whitespace, a trailing newline). The alphanumeric rule
-is also what keeps the code safe to interpolate into an RTSPS URL's userinfo.
+always means a copy-paste mistake (whitespace, a trailing newline, a truncated code). A
+wrong-length code would otherwise surface only at connect, as an MQTT refusal a powered-off
+printer also produces. The alphanumeric rule is also what keeps the code safe to
+interpolate into an RTSPS URL's userinfo.
 
 ### `validate_serial`
 
@@ -135,12 +137,16 @@ reach the wire malformed.
 
 ## Constants
 
-### `ACCESS_CODE_MAX_LEN`
+### `ACCESS_CODE_LEN`
 ```rust
-const ACCESS_CODE_MAX_LEN: usize = 32usize;
+const ACCESS_CODE_LEN: usize = 8usize;
 ```
 
-Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field.
+Length of every printer-issued LAN access code.
+
+BambuStudio's connect-by-IP dialog (`InputIpAddressDialog::on_text` in
+`src/slic3r/GUI/ReleaseNote.cpp`) enables its OK button only for exactly this many ASCII
+letters or digits.
 
 ### `SERIAL_MAX_LEN`
 ```rust

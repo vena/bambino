@@ -14,6 +14,7 @@ the client. `crate::client` re-exports every one of them.
 
 - [Types](#types)
   - [`CalibrationOption`](#calibrationoption)
+  - [`XcamDetectorState`](#xcamdetectorstate)
   - [`AirPurificationMode`](#airpurificationmode)
   - [`BuzzerMode`](#buzzermode)
   - [`DoorOpenCheck`](#dooropencheck)
@@ -32,6 +33,7 @@ the client. `crate::client` re-exports every one of them.
 | Item | Kind | Description |
 |------|------|-------------|
 | [`CalibrationOption`](#calibrationoption) | struct | Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE]. |
+| [`XcamDetectorState`](#xcamdetectorstate) | struct | One camera detector's last reported state, as [`PrinterClient::xcam_detector_state`](../../client/index.md#printerclient) answers it. |
 | [`AirPurificationMode`](#airpurificationmode) | enum | Where the chamber air is purified at the end of a print, `print_option`'s `air_purification` and `print.cfg` bits 36-37 [REF-MQTT-TELEMETRY]. |
 | [`BuzzerMode`](#buzzermode) | enum | Buzzer alarm/attention chime mode [REF-MQTT-LIFECYCLE]; supported on models with a physical fire alarm buzzer (H2 series). |
 | [`DoorOpenCheck`](#dooropencheck) | enum | What the printer does when its door opens mid-print, `set_door_stat`'s `config` and `print.cfg` bits 20-21 [REF-MQTT-TELEMETRY]. |
@@ -126,6 +128,57 @@ named constants can be built, so a value never carries bits no routine owns.
 ##### `impl PartialEq for CalibrationOption`
 
 - <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](#calibrationoption)
+
+### `XcamDetectorState`
+
+```rust
+struct XcamDetectorState {
+    pub enabled: Option<bool>,
+    pub sensitivity: Option<XcamHaltSensitivity>,
+}
+```
+
+One camera detector's last reported state, as [`PrinterClient::xcam_detector_state`](../../client/index.md#printerclient) answers it.
+
+Either field is `None` when no report has carried it yet, when the module's source never
+carries it on this printer's generation, or (for `sensitivity`) when the module takes none
+([`XcamModule::takes_sensitivity`](#xcammodule)).
+
+#### Fields
+
+- **`enabled`**: `Option<bool>`
+
+  Whether the detector is on.
+
+- **`sensitivity`**: `Option<XcamHaltSensitivity>`
+
+  How eagerly it halts the print. Only AI monitoring reports [`XcamHaltSensitivity::NeverHalt`](#xcamhaltsensitivity).
+
+#### Trait Implementations
+
+##### `impl Clone for XcamDetectorState`
+
+- <span id="xcamdetectorstate-clone"></span>`fn clone(&self) -> XcamDetectorState` — [`XcamDetectorState`](#xcamdetectorstate)
+
+##### `impl Copy for XcamDetectorState`
+
+##### `impl Debug for XcamDetectorState`
+
+- <span id="xcamdetectorstate-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for XcamDetectorState`
+
+- <span id="xcamdetectorstate-default"></span>`fn default() -> XcamDetectorState` — [`XcamDetectorState`](#xcamdetectorstate)
+
+##### `impl Eq for XcamDetectorState`
+
+##### `impl Hash for XcamDetectorState`
+
+- <span id="xcamdetectorstate-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for XcamDetectorState`
+
+- <span id="xcamdetectorstate-partialeq-eq"></span>`fn eq(&self, other: &XcamDetectorState) -> bool` — [`XcamDetectorState`](#xcamdetectorstate)
 
 ### `AirPurificationMode`
 

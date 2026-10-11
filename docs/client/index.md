@@ -145,6 +145,57 @@ named constants can be built, so a value never carries bits no routine owns.
 
 - <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](../types/control/index.md#calibrationoption)
 
+### `XcamDetectorState`
+
+```rust
+struct XcamDetectorState {
+    pub enabled: Option<bool>,
+    pub sensitivity: Option<XcamHaltSensitivity>,
+}
+```
+
+One camera detector's last reported state, as [`PrinterClient::xcam_detector_state`](#printerclient) answers it.
+
+Either field is `None` when no report has carried it yet, when the module's source never
+carries it on this printer's generation, or (for `sensitivity`) when the module takes none
+([`XcamModule::takes_sensitivity`](../types/control/index.md#xcammodule)).
+
+#### Fields
+
+- **`enabled`**: `Option<bool>`
+
+  Whether the detector is on.
+
+- **`sensitivity`**: `Option<XcamHaltSensitivity>`
+
+  How eagerly it halts the print. Only AI monitoring reports [`XcamHaltSensitivity::NeverHalt`](../types/control/index.md#xcamhaltsensitivity).
+
+#### Trait Implementations
+
+##### `impl Clone for XcamDetectorState`
+
+- <span id="xcamdetectorstate-clone"></span>`fn clone(&self) -> XcamDetectorState` — [`XcamDetectorState`](../types/control/index.md#xcamdetectorstate)
+
+##### `impl Copy for XcamDetectorState`
+
+##### `impl Debug for XcamDetectorState`
+
+- <span id="xcamdetectorstate-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for XcamDetectorState`
+
+- <span id="xcamdetectorstate-default"></span>`fn default() -> XcamDetectorState` — [`XcamDetectorState`](../types/control/index.md#xcamdetectorstate)
+
+##### `impl Eq for XcamDetectorState`
+
+##### `impl Hash for XcamDetectorState`
+
+- <span id="xcamdetectorstate-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for XcamDetectorState`
+
+- <span id="xcamdetectorstate-partialeq-eq"></span>`fn eq(&self, other: &XcamDetectorState) -> bool` — [`XcamDetectorState`](../types/control/index.md#xcamdetectorstate)
+
 ### `HeaterTemps`
 
 ```rust
@@ -1846,10 +1897,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Turns one camera detector on or off, optionally setting how eagerly it halts the print.
 
-  Read the result back through [`xcam()`](#printerclient) (the detector accessors on
-  `XcamTelemetry`) or, for first-layer inspection,
-  [`first_layer_inspection_enabled()`](#printerclient), after the
-  settle window described in the module docs. `xcam` arrives only in full status reports.
+  Read the result back through [`xcam_detector_state()`](#printerclient), after
+  the settle window described in the module docs. `xcam` arrives only in full status reports.
   bambuddy notes the firmware links spaghetti and pile-up sensitivity, so setting one may
   change both; that is unconfirmed.
 
@@ -1919,6 +1968,29 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-first-layer-inspection-enabled"></span>`fn first_layer_inspection_enabled(&self) -> Option<bool>`
 
   Whether first-layer inspection is on, as last reported (`print.cfg` bit 12, else `xcam.first_layer_inspector`).
+
+- <span id="superprinterclient-xcam-detector-state"></span>`fn xcam_detector_state(&self, module: XcamModule) -> XcamDetectorState` — [`XcamModule`](../types/control/index.md#xcammodule), [`XcamDetectorState`](../types/control/index.md#xcamdetectorstate)
+
+  One camera detector's last reported state: the read-side counterpart of [`set_xcam_detector`](#printerclient).
+
+  Routes each module to the field that reports it on this printer's generation, following
+  BambuStudio's `DevPrintOptionsParser::ParseDetectionV1_0`:
+
+  - [`PrintingMonitor`](../types/control/index.md#xcammodule) (AI monitoring) reads `print.cfg` bit
+    15 and bits 13-14 when `print.cfg` has been seen. Otherwise it reads `xcam.printing_monitor`,
+    else `xcam.spaghetti_detector` (neither when `xcam.cfg` is present), with sensitivity from
+    `xcam.halt_print_sensitivity`, else medium when the oldest generation reports
+    `print_halt: true`. bambuddy calls `halt_print_sensitivity` always stale (`bambu_mqtt.py`);
+    BambuStudio reads it anyway, and so does this.
+  - The four AI failure detectors read their `xcam.cfg` triple. AI monitoring is a separate
+    switch from [`SpaghettiDetector`](../types/control/index.md#xcammodule).
+  - [`FirstLayerInspector`](../types/control/index.md#xcammodule) is
+    [`first_layer_inspection_enabled()`](#printerclient).
+  - [`BuildplateMarkerDetector`](../types/control/index.md#xcammodule) reads
+    `xcam.buildplate_marker_detector`; the other three read their `xcam.cfg` bit.
+
+  `xcam` arrives only in full status reports. Says nothing about support; ask
+  [`Capabilities::xcam_module_support`](capabilities/index.md#capabilities) for that.
 
 - <span id="superprinterclient-store-sent-files-enabled"></span>`fn store_sent_files_enabled(&self) -> Option<bool>`
 
