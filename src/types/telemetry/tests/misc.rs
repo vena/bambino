@@ -217,11 +217,9 @@ fn test_xcam_deserialization() {
     let xcam = print.xcam.unwrap();
     assert_eq!(xcam.first_layer_inspector, Some(true));
     assert_eq!(xcam.spaghetti_detector, Some(false));
-    // Old-gen payload: no `cfg`, so no detector decodes and AI monitoring falls back to the
-    // `spaghetti_detector` boolean.
+    // Old-gen payload: no `cfg`, so no detector decodes.
     assert!(!xcam.supports_ai_monitoring());
     assert!(xcam.spaghetti_detection().is_none());
-    assert_eq!(xcam.ai_monitoring_enabled(), Some(false));
 }
 
 /// Every distinct `xcam.cfg` value observed across upstream fixtures decodes to all four
@@ -250,7 +248,6 @@ fn test_xcam_cfg_decodes_observed_fixture_values() {
             assert!(detector.enabled, "cfg {cfg}");
             assert_eq!(detector.sensitivity, Some(expected), "cfg {cfg}");
         }
-        assert_eq!(xcam.ai_monitoring_enabled(), Some(true), "cfg {cfg}");
     }
 }
 

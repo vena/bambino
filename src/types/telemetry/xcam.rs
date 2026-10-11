@@ -94,7 +94,12 @@ pub struct XcamTelemetry {
     /// at all — see [`supports_ai_monitoring`](Self::supports_ai_monitoring).
     pub cfg: Option<u32>,
 
-    /// Mid-generation AI-monitoring master switch, superseded by `cfg`.
+    /// Mid-generation AI-monitoring master switch.
+    ///
+    /// AI monitoring is its own switch, not `cfg`'s spaghetti detector, and newer firmware
+    /// reports it in the top-level `print.cfg` (bit 15) instead. Read it through
+    /// [`PrinterClient::xcam_detector_state`](crate::client::PrinterClient::xcam_detector_state),
+    /// which sees both containers.
     pub printing_monitor: Option<bool>,
 
     /// Oldest-generation AI-monitoring master switch, superseded by `printing_monitor`.
@@ -105,8 +110,10 @@ pub struct XcamTelemetry {
 
     /// AI-monitoring sensitivity as a bare string (`"low"`/`"medium"`/`"high"`).
     ///
-    /// Old-gen only, and bambuddy reports it as reliably stale (`bambu_mqtt.py`, "it's always
-    /// stale"). Prefer the per-detector sensitivity off `cfg` whenever `cfg` is present.
+    /// bambuddy reports it as reliably stale (`bambu_mqtt.py`, "it's always stale"). No `cfg`
+    /// detector stands in for it; the top-level `print.cfg` bits 13-14 do, and
+    /// [`PrinterClient::xcam_detector_state`](crate::client::PrinterClient::xcam_detector_state)
+    /// prefers them.
     pub halt_print_sensitivity: Option<String>,
 
     /// Whether first-layer inspection is enabled.
@@ -149,18 +156,6 @@ impl XcamTelemetry {
     /// Presence of `cfg` is the signal, matching BambuStudio's `is_support_detect` assignment.
     pub fn supports_ai_monitoring(&self) -> bool {
         self.cfg.is_some()
-    }
-
-    /// Returns whether AI print monitoring is enabled, across all three protocol generations.
-    ///
-    /// Checks `cfg`'s spaghetti-detection bit first, then `printing_monitor`, then
-    /// `spaghetti_detector` — the same precedence BambuStudio applies. `None` means no
-    /// generation's key was present.
-    pub fn ai_monitoring_enabled(&self) -> Option<bool> {
-        if let Some(detector) = self.spaghetti_detection() {
-            return Some(detector.enabled);
-        }
-        self.printing_monitor.or(self.spaghetti_detector)
     }
 
     /// Returns spaghetti-detection state decoded from `cfg`, or `None` when `cfg` is absent.
