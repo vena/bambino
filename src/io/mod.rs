@@ -1222,7 +1222,7 @@ pub(crate) fn der_certs_to_pem_bundle(certs: impl IntoIterator<Item = Vec<u8>>) 
     Some(out)
 }
 
-/// Wraps a TLS peer name so `Display` renders a short prefix and masks the rest.
+/// Wraps a TLS peer name so `Display` keeps its first three and last four characters and masks the rest.
 ///
 /// The `host` handed to a `TlsConnector::connect` is the printer's **serial number**, not its
 /// IP — MQTT connects by serial for SNI and FTPS follows. A serial is treated as a credential
@@ -1230,10 +1230,14 @@ pub(crate) fn der_certs_to_pem_bundle(certs: impl IntoIterator<Item = Vec<u8>>) 
 /// the peer must not print it whole: consumer logs get pasted into bug reports, and on
 /// ESP-IDF they also go straight out the UART to whoever is watching.
 ///
-/// Keeps the first three characters because that prefix is the model code
-/// (`crate::models::resolve_model` keys off it) — useful when triaging, and not a secret. The
-/// mask is fixed-width rather than one character per elided byte, so the serial's length
-/// doesn't leak either. An empty name renders `<empty>` rather than a bare mask, keeping
+/// Each character between the kept ends becomes one `*`, so `03WABCDEFGHIJ` renders
+/// `03W******GHIJ`. The first three characters are the model code
+/// (`crate::models::resolve_model` keys off it), useful when triaging and not a secret. The
+/// last four tell apart two printers of the same model, which a log has to do once more than
+/// one is on the network. This is the mask boo uses for its own logs, adopted so the two
+/// match (#628); it shows the serial's length, which an earlier fixed-width mask hid, by
+/// decision. A name of seven characters or fewer renders all `*`, one per character, so a short
+/// name never shows whole. An empty name renders `<empty>` rather than a bare mask, keeping
 /// "nothing was passed" distinguishable from "it was hidden".
 ///
 /// Lives here rather than in `io/esp_idf.rs` (its only caller today) for the same reason
@@ -1242,20 +1246,41 @@ pub(crate) fn der_certs_to_pem_bundle(certs: impl IntoIterator<Item = Vec<u8>>) 
 #[cfg(any(feature = "esp-idf", test))]
 pub(crate) struct RedactedHost<'a>(pub(crate) &'a str);
 
+/// Characters `RedactedHost` keeps at the start of a name: the model code.
+#[cfg(any(feature = "esp-idf", test))]
+const REDACTED_HOST_KEPT_PREFIX: usize = 3;
+
+/// Characters `RedactedHost` keeps at the end of a name: enough to tell two printers apart.
+#[cfg(any(feature = "esp-idf", test))]
+const REDACTED_HOST_KEPT_SUFFIX: usize = 4;
+
 #[cfg(any(feature = "esp-idf", test))]
 impl core::fmt::Display for RedactedHost<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.0.is_empty() {
             return f.write_str("<empty>");
         }
+        let len = self.0.chars().count();
+        let masked = len.saturating_sub(REDACTED_HOST_KEPT_PREFIX + REDACTED_HOST_KEPT_SUFFIX);
+        if masked == 0 {
+            for _ in 0..len {
+                f.write_str("*")?;
+            }
+            return Ok(());
+        }
         // `char_indices`, not byte slicing: a non-ASCII name would panic on a split landing
         // mid-codepoint, and one caller is a handshake-failure path where a panic is worst.
-        let split = self
-            .0
-            .char_indices()
-            .nth(3)
-            .map_or(self.0.len(), |(i, _)| i);
-        write!(f, "{}***", &self.0[..split])
+        let byte_at = |n| {
+            self.0
+                .char_indices()
+                .nth(n)
+                .map_or(self.0.len(), |(i, _)| i)
+        };
+        f.write_str(&self.0[..byte_at(REDACTED_HOST_KEPT_PREFIX)])?;
+        for _ in 0..masked {
+            f.write_str("*")?;
+        }
+        f.write_str(&self.0[byte_at(len - REDACTED_HOST_KEPT_SUFFIX)..])
     }
 }
 
@@ -1447,25 +1472,21 @@ mod redacted_host_tests {
     use alloc::string::ToString as _;
 
     #[test]
-    fn keeps_the_model_prefix_and_masks_the_rest() {
+    fn keeps_the_model_prefix_and_last_four_and_masks_each_char_between() {
         // Shaped like a serial, not a real one.
-        assert_eq!(RedactedHost("03WABCDEFGHIJ").to_string(), "03W***");
+        assert_eq!(RedactedHost("03WABCDEFGHIJ").to_string(), "03W******GHIJ");
     }
 
     #[test]
-    fn mask_width_does_not_track_the_hidden_length() {
-        assert_eq!(
-            RedactedHost("03WA").to_string(),
-            RedactedHost("03WABCDEFGHIJKLMNOP").to_string()
-        );
+    fn names_of_seven_chars_or_fewer_are_wholly_masked() {
+        // Keeping 3 + 4 of a 7-character name would print it whole.
+        assert_eq!(RedactedHost("03WABCD").to_string(), "*******");
+        assert_eq!(RedactedHost("0").to_string(), "*");
     }
 
     #[test]
-    fn names_at_or_below_the_prefix_length_are_still_masked() {
-        // No early return for a short name: the mask must not signal "nothing was elided",
-        // or a 3-character name would be readable in full and marked as if it weren't.
-        assert_eq!(RedactedHost("03W").to_string(), "03W***");
-        assert_eq!(RedactedHost("0").to_string(), "0***");
+    fn eight_char_name_masks_one_char() {
+        assert_eq!(RedactedHost("03WABCDE").to_string(), "03W*BCDE");
     }
 
     #[test]
@@ -1475,10 +1496,10 @@ mod redacted_host_tests {
 
     #[test]
     fn multibyte_name_splits_on_a_char_boundary_without_panicking() {
-        // Each 'e' here is 2 bytes, so a byte-indexed split at 3 would panic.
+        // Each 'e' here is 2 bytes, so a byte-indexed split at 3 or at len - 4 would panic.
         assert_eq!(
-            RedactedHost("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}").to_string(),
-            "\u{e9}\u{e9}\u{e9}***"
+            RedactedHost("\u{e9}\u{e9}\u{e9}a\u{e9}\u{e9}\u{e9}\u{e9}").to_string(),
+            "\u{e9}\u{e9}\u{e9}*\u{e9}\u{e9}\u{e9}\u{e9}"
         );
     }
 }
