@@ -467,6 +467,45 @@ fn test_ams_unit_model_none_when_info_absent_or_unknown() {
 }
 
 #[test]
+fn test_ams_unit_display_name() {
+    // BambuStudio `DevAms::GetDisplayName` (`DeviceCore/DevFilaSystem.cpp`).
+    let named = |json: &str| {
+        serde_json::from_str::<AmsUnit>(json)
+            .unwrap()
+            .display_name()
+    };
+    assert_eq!(
+        named(r#"{"id":"0","info":"2003"}"#).as_deref(),
+        Some("AMS 2 Pro(1)")
+    );
+    assert_eq!(
+        named(r#"{"id":"1","info":"1001"}"#).as_deref(),
+        Some("AMS(2)")
+    );
+    assert_eq!(
+        named(r#"{"id":"0","info":"2"}"#).as_deref(),
+        Some("AMS Lite(1)")
+    );
+    assert_eq!(
+        named(r#"{"id":"128","info":"4"}"#).as_deref(),
+        Some("AMS HT(1)")
+    );
+    assert_eq!(
+        named(r#"{"id":"130","info":"4"}"#).as_deref(),
+        Some("AMS HT(3)")
+    );
+    // The A2L's AMS Lite: physical 16, normalized to 6 on ingest, numbered from 16 upstream.
+    assert_eq!(
+        named(r#"{"id":"16","info":"5"}"#).as_deref(),
+        Some("AMS Lite(1)")
+    );
+    // A type this crate doesn't know, or no `info` at all, falls back to "AMS" as upstream does.
+    assert_eq!(named(r#"{"id":"2","info":"F"}"#).as_deref(), Some("AMS(3)"));
+    assert_eq!(named(r#"{"id":"2"}"#).as_deref(), Some("AMS(3)"));
+    assert_eq!(named(r#"{"id":"x","info":"1"}"#), None);
+}
+
+#[test]
 fn test_p1s_capture_reports_an_ams_2_pro() {
     // Regression pin for the mislabelling this replaced: tests/mocks/P1S.json carries
     // info "2003" with a populated humidity_raw, which is an AMS 2 Pro attached to a P1S — a

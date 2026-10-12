@@ -856,6 +856,42 @@ impl AmsUnit {
         self.ams_type().and_then(AmsUnitModel::from_wire)
     }
 
+    /// The unit's name as BambuStudio labels it, such as `"AMS 2 Pro(1)"` or `"AMS HT(2)"`.
+    ///
+    /// Transcribed from BambuStudio's `DevAms::GetDisplayName` (`DeviceCore/DevFilaSystem.cpp`),
+    /// the label its drying panel and filament-mapping popup give a unit. The type part comes
+    /// from [`unit_model`](Self::unit_model): `AMS`, `AMS Lite` (both AMS Lite variants, since
+    /// upstream's `DevAms::GetAmsType` folds `AMS_LITE_MIXED` into `AMS_LITE`), `AMS 2 Pro` or
+    /// `AMS HT`. Any other type, or none known, falls back to `AMS`, as upstream does. The
+    /// number counts from 1 within the unit's id block: `id + 1` for a standard unit,
+    /// `id - 127` for an AMS-HT, and `1` for an A2L's AMS Lite, which upstream numbers from its
+    /// physical id 16 rather than the normalized 6.
+    ///
+    /// `None` only when [`id`](Self::id) isn't a number.
+    #[must_use]
+    pub fn display_name(&self) -> Option<String> {
+        use crate::ams::ids::{AMS_HT_ID_MIN, wire_ams_id};
+        #[cfg(not(feature = "std"))]
+        use alloc::format;
+
+        let physical_id = wire_ams_id(self.ams_id()?);
+        let number = if physical_id >= AMS_HT_ID_MIN {
+            physical_id - AMS_HT_ID_MIN + 1
+        } else if (0x10..=0x1F).contains(&physical_id) {
+            // Upstream's block for ids 16-31, of which the A2L's AMS Lite (16) is the one known.
+            physical_id - 0x10 + 1
+        } else {
+            physical_id + 1
+        };
+        let kind = match self.unit_model() {
+            Some(AmsUnitModel::AmsLite | AmsUnitModel::AmsLiteMixed) => "AMS Lite",
+            Some(AmsUnitModel::Ams2Pro) => "AMS 2 Pro",
+            Some(AmsUnitModel::AmsHt) => "AMS HT",
+            Some(AmsUnitModel::Ams | AmsUnitModel::ExternalSpool) | None => "AMS",
+        };
+        Some(format!("{kind}({number})"))
+    }
+
     /// Drying status from bits 4–7.
     #[must_use]
     pub fn dry_status(&self) -> Option<AmsDryStatus> {
