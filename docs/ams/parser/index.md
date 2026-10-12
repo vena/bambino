@@ -19,6 +19,7 @@ tray data, and calculating global indexes.
 | [`evaluate_spool_presence`](#evaluate-spool-presence) | fn | Evaluates if a physical spool is present in a specific standard AMS slot. |
 | [`resolve_global_tray_id`](#resolve-global-tray-id) | fn | Computes the unique global channel identifier for a given expansion unit and local tray. |
 | [`resolve_printing_global_id`](#resolve-printing-global-id) | fn | Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map` inversion, accounting for IDEX map translations. |
+| [`slot_label`](#slot-label) | fn | BambuStudio's short label for a slot or external spool, such as `"A1"`, `"HT-A"` or `"Ext-R"`. |
 
 ## Functions
 
@@ -143,4 +144,30 @@ a caller with its own confirmed `ams_extruder_map` source may still use this dir
 
 Map entries may be wire ids: each is passed through [`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id), so an
 A2L-attached AMS Lite resolves under either its physical 16 or its normalized 6 (#344).
+
+### `slot_label`
+
+```rust
+fn slot_label(ams_id: u8, slot_id: u8, extruder_count: u8) -> Option<String>
+```
+
+BambuStudio's short label for a slot or external spool, such as `"A1"`, `"HT-A"` or `"Ext-R"`.
+
+Transcribed from BambuStudio's `GUI_App::transition_tridid` (`src/slic3r/GUI/GUI_App.cpp`),
+applied to the global tray id [`resolve_global_tray_id`](#resolve-global-tray-id) returns:
+
+- a standard unit's slot is the unit's letter (`A` for id 0) and the 1-based slot, `A1`…`D4`
+- an A2L's AMS Lite is `Q1`…`Q4`; `ams_id` may be its physical 16 or its normalized 6
+- an AMS-HT is `HT-A`…`HT-H`, lettered from id 128
+- an external spool is `Ext`, or `Ext-R` (255) and `Ext-L` (254) when `extruder_count` is 2
+
+These are the labels BambuStudio's print, mapping and sync dialogs show, which pass this same
+tray id. Its device page instead passes `ams_id * 4 + slot` for every unit, which labels an
+AMS-HT plain `A` and collides with standard unit 0; that route is deliberately not
+reproduced. For a unit's own name see `crate::types::AmsUnit::display_name`.
+
+`extruder_count` is the printer's, as
+`ExtruderCollection::extruder_count`
+reports it. `None` when `(ams_id, slot_id)` addresses no slot, as for
+[`resolve_global_tray_id`](#resolve-global-tray-id).
 
