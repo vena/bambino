@@ -618,6 +618,21 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   (`ams_f1/0`, `n3f/0`, `n3s/0`) and BambuStudio falls back to it when the bitmask is
   missing, but that lives in a different payload than this one.
 
+- <span id="amsunit-display-name"></span>`fn display_name(&self) -> Option<String>`
+
+  The unit's name as BambuStudio labels it, such as `"AMS 2 Pro(1)"` or `"AMS HT(2)"`.
+
+  Transcribed from BambuStudio's `DevAms::GetDisplayName` (`DeviceCore/DevFilaSystem.cpp`),
+  the label its drying panel and filament-mapping popup give a unit. The type part comes
+  from [`unit_model`](ams/index.md#amsunit): `AMS`, `AMS Lite` (both AMS Lite variants, since
+  upstream's `DevAms::GetAmsType` folds `AMS_LITE_MIXED` into `AMS_LITE`), `AMS 2 Pro` or
+  `AMS HT`. Any other type, or none known, falls back to `AMS`, as upstream does. The
+  number counts from 1 within the unit's id block: `id + 1` for a standard unit,
+  `id - 127` for an AMS-HT, and `1` for an A2L's AMS Lite, which upstream numbers from its
+  physical id 16 rather than the normalized 6.
+
+  `None` only when [`id`](ams/index.md#amsunit) isn't a number.
+
 - <span id="amsunit-dry-status"></span>`fn dry_status(&self) -> Option<AmsDryStatus>` — [`AmsDryStatus`](ams/index.md#amsdrystatus)
 
   Drying status from bits 4–7.
