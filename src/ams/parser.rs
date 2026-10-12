@@ -6,15 +6,16 @@
 //! tray data, and calculating global indexes.
 
 #[cfg(test)]
+use super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID;
 use super::ids::{
-    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID, AMS_LITE_ON_A2L_PHYSICAL_ID,
-};
-use super::ids::{
-    AMS_HT_ID_MIN, AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_SLOTS_PER_UNIT, is_ams_ht_id,
-    is_external_spool_id, is_standard_id, normalize_ams_unit_id,
+    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID, AMS_HT_ID_MIN,
+    AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_SLOTS_PER_UNIT, is_ams_ht_id, is_external_spool_id,
+    is_standard_id, normalize_ams_unit_id,
 };
 use crate::types::AmsTray;
 use crate::types::telemetry::ams::AMS_TRAY_STATE_EMPTY;
+#[cfg(not(feature = "std"))]
+use alloc::{format, string::String};
 
 /// Evaluates if a physical spool is present in a specific standard AMS slot.
 ///
@@ -163,6 +164,45 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     } else {
         None
     }
+}
+
+/// BambuStudio's short label for a slot or external spool, such as `"A1"`, `"HT-A"` or `"Ext-R"`.
+///
+/// Transcribed from BambuStudio's `GUI_App::transition_tridid` (`src/slic3r/GUI/GUI_App.cpp`),
+/// applied to the global tray id [`resolve_global_tray_id`] returns:
+///
+/// - a standard unit's slot is the unit's letter (`A` for id 0) and the 1-based slot, `A1`…`D4`
+/// - an A2L's AMS Lite is `Q1`…`Q4`; `ams_id` may be its physical 16 or its normalized 6
+/// - an AMS-HT is `HT-A`…`HT-H`, lettered from id 128
+/// - an external spool is `Ext`, or `Ext-R` (255) and `Ext-L` (254) when `extruder_count` is 2
+///
+/// These are the labels BambuStudio's print, mapping and sync dialogs show, which pass this same
+/// tray id. Its device page instead passes `ams_id * 4 + slot` for every unit, which labels an
+/// AMS-HT plain `A` and collides with standard unit 0; that route is deliberately not
+/// reproduced. For a unit's own name see [`crate::types::AmsUnit::display_name`].
+///
+/// `extruder_count` is the printer's, as
+/// [`ExtruderCollection::extruder_count`](crate::types::ExtruderCollection::extruder_count)
+/// reports it. `None` when `(ams_id, slot_id)` addresses no slot, as for
+/// [`resolve_global_tray_id`].
+#[must_use]
+pub fn slot_label(ams_id: u8, slot_id: u8, extruder_count: u8) -> Option<String> {
+    const DUAL_EXTRUDER_COUNT: u8 = 2;
+    let ams_lite_base = AMS_LITE_ON_A2L_NORMALIZED_ID * AMS_SLOTS_PER_UNIT;
+
+    let tray_id = resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id)?;
+    Some(match tray_id {
+        AMS_EXTERNAL_SPOOL_MAIN_ID if extruder_count == DUAL_EXTRUDER_COUNT => "Ext-R".into(),
+        AMS_EXTERNAL_SPOOL_DEPUTY_ID if extruder_count == DUAL_EXTRUDER_COUNT => "Ext-L".into(),
+        id if is_external_spool_id(id) => "Ext".into(),
+        id if is_ams_ht_id(id) => format!("HT-{}", char::from(b'A' + (id - AMS_HT_ID_MIN))),
+        id if id >= ams_lite_base => format!("Q{}", id - ams_lite_base + 1),
+        id => format!(
+            "{}{}",
+            char::from(b'A' + id / AMS_SLOTS_PER_UNIT),
+            id % AMS_SLOTS_PER_UNIT + 1
+        ),
+    })
 }
 
 /// Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map`
@@ -389,6 +429,45 @@ mod tests {
         // An A2L-attached AMS Lite is addressed by its *normalized* id 6; the raw physical 16 must
         // still be rejected, so a caller that skipped normalization fails loudly.
         assert_eq!(resolve_global_tray_id(AMS_LITE_ON_A2L_PHYSICAL_ID, 0), None);
+    }
+
+    #[test]
+    fn test_slot_label() {
+        // BambuStudio `GUI_App::transition_tridid` (`GUI_App.cpp`).
+        assert_eq!(slot_label(0, 0, 1).as_deref(), Some("A1"));
+        assert_eq!(slot_label(3, 3, 1).as_deref(), Some("D4"));
+        // The A2L's AMS Lite under either spelling.
+        assert_eq!(
+            slot_label(AMS_LITE_ON_A2L_PHYSICAL_ID, 0, 1).as_deref(),
+            Some("Q1")
+        );
+        assert_eq!(
+            slot_label(AMS_LITE_ON_A2L_NORMALIZED_ID, 3, 1).as_deref(),
+            Some("Q4")
+        );
+        assert_eq!(slot_label(128, 0, 2).as_deref(), Some("HT-A"));
+        assert_eq!(slot_label(135, 0, 2).as_deref(), Some("HT-H"));
+        // External spools: one label on a single extruder, right/left on two.
+        assert_eq!(
+            slot_label(AMS_EXTERNAL_SPOOL_MAIN_ID, 0, 1).as_deref(),
+            Some("Ext")
+        );
+        assert_eq!(
+            slot_label(AMS_EXTERNAL_SPOOL_DEPUTY_ID, 0, 1).as_deref(),
+            Some("Ext")
+        );
+        assert_eq!(
+            slot_label(AMS_EXTERNAL_SPOOL_MAIN_ID, 0, 2).as_deref(),
+            Some("Ext-R")
+        );
+        assert_eq!(
+            slot_label(AMS_EXTERNAL_SPOOL_DEPUTY_ID, 0, 2).as_deref(),
+            Some("Ext-L")
+        );
+        // No slot there.
+        assert_eq!(slot_label(0, 4, 1), None);
+        assert_eq!(slot_label(128, 1, 1), None);
+        assert_eq!(slot_label(8, 0, 1), None);
     }
 
     /// Only an A2L-attached AMS Lite's physical id 16 is remapped; the mapping is self-scoping because
