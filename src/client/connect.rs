@@ -9,6 +9,7 @@ use core::time::Duration;
 use crate::camera::CameraProtocol;
 use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
+use crate::file_tunnel::{FILE_TUNNEL_PORT, FileTunnelClient};
 use crate::ftps::FtpsClient;
 use crate::identity::PrinterIdentity;
 use crate::io::{
@@ -103,6 +104,25 @@ where
     }
     cam.authenticate(&identity.access_code).await?;
     Ok(cam)
+}
+
+/// Dials, wraps in TLS and runs the file tunnel handshake — the one file tunnel connect sequence.
+///
+/// The capability check stays with the caller, as the camera's RTSPS check does.
+async fn dial_file_tunnel<RawIO, Tls, Factory, T>(
+    factory: &Factory,
+    tls: &Tls,
+    identity: &PrinterIdentity,
+    timer: &T,
+) -> Result<FileTunnelClient<Tls::Stream>, Error>
+where
+    RawIO: AsyncIo,
+    Tls: TlsConnector<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
+    T: TimerProvider,
+{
+    let raw = factory.dial(&identity.ip, FILE_TUNNEL_PORT).await?;
+    FileTunnelClient::connect(raw, tls, identity, timer).await
 }
 
 /// Dials and logs in the FTPS control channel over borrowed config — the one FTPS connect sequence.
@@ -452,6 +472,7 @@ where
             ftps_config: self.ftps_config,
             camera: self.camera,
             camera_config: self.camera_config,
+            file_tunnel: self.file_tunnel,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer,
@@ -537,6 +558,7 @@ where
             ftps_config: Some((tls, factory, timer)),
             camera: self.camera,
             camera_config: self.camera_config,
+            file_tunnel: self.file_tunnel,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
@@ -684,6 +706,51 @@ where
         // close the TLS session through the connector (GitHub issue #293), and it makes a
         // disconnect/reconnect cycle work instead of permanently reporting "not configured".
         self.camera = Some(camera_stream);
+        Ok(())
+    }
+
+    /// Establishes the file tunnel session if not already connected.
+    ///
+    /// Refuses with [`Error::ModelMismatch`], without dialing, when
+    /// [`Capabilities::file_tunnel_support`](super::Capabilities::file_tunnel_support) says the
+    /// printer doesn't serve it. That always covers the chamber-image models, whose port 6000 is
+    /// the camera server: dialing one would hold its single connection for 60 s. A poisoned
+    /// session is disconnected and redialed, as `ensure_ftps()` does. Uses the port-6000 slot
+    /// `.with_file_tunnel()`/`.with_camera()` configure, raced against the connect timeout.
+    pub(super) async fn ensure_file_tunnel(&mut self) -> Result<(), Error> {
+        if !self.capabilities().file_tunnel_support().is_supported() {
+            return Err(Error::ModelMismatch(
+                "this printer does not serve the port-6000 file tunnel; use FTPS".into(),
+            ));
+        }
+        match &self.file_tunnel {
+            Some(client) if client.is_poisoned() => self.disconnect_file_tunnel().await,
+            Some(_) => return Ok(()),
+            None => {}
+        }
+        let (tls, factory) = self.camera_config.as_ref().ok_or_else(|| {
+            Error::NotConfigured(
+                "file tunnel — call .with_file_tunnel(), which configures the port-6000 connector"
+                    .into(),
+            )
+        })?;
+        let identity = &self.core.identity;
+        if identity.ip.is_empty() || identity.access_code.is_empty() {
+            return Err(Error::NotConfigured(
+                "file tunnel needs the printer's ip and access code, which a from_mqtt() client \
+                 doesn't have"
+                    .into(),
+            ));
+        }
+        let client = race_against_connect_timeout(
+            &self.timer,
+            self.core.connect_timeout,
+            dial_file_tunnel(factory, tls, identity, &self.timer),
+        )
+        .await?;
+        // Like the camera, nothing is moved out of `camera_config`: `disconnect_file_tunnel()`
+        // closes through the same connector, and a later call redials.
+        self.file_tunnel = Some(client);
         Ok(())
     }
 
@@ -863,10 +930,13 @@ where
     /// Configures the binary-JPEG camera for lazy connection on first camera method call.
     ///
     /// Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
-    /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
+    /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`. The
+    /// same slot serves the file tunnel on printers that have one; see
+    /// [`with_file_tunnel()`](Self::with_file_tunnel).
     ///
-    /// Call [`disconnect_camera()`](Self::disconnect_camera) first on a client with a connected
-    /// camera session, for the same reason as `.with_ftps()`. On a
+    /// Call [`disconnect_camera()`](Self::disconnect_camera) (or
+    /// [`disconnect_file_tunnel()`](Self::disconnect_file_tunnel)) first on a client with a
+    /// connected session, for the same reason as `.with_ftps()`. On a
     /// [`from_mqtt()`](PrinterClient::from_mqtt) client the first camera call returns
     /// [`Error::NotConfigured`]; use [`with_attached_camera()`](Self::with_attached_camera) there.
     #[must_use]
@@ -898,6 +968,7 @@ where
             ftps_config: self.ftps_config,
             camera: None,
             camera_config: Some((tls, factory)),
+            file_tunnel: None,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
@@ -905,6 +976,40 @@ where
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         }
+    }
+
+    /// Configures the port-6000 file tunnel for lazy connection on first use.
+    ///
+    /// The same builder as [`with_camera()`](Self::with_camera), under the name that fits a
+    /// printer serving the file tunnel: no printer serves both the binary camera and the tunnel
+    /// on port 6000, so one connector and dialer cover whichever applies. A connector already
+    /// cloned for MQTT or FTPS serves here too. Call
+    /// [`disconnect_file_tunnel()`](Self::disconnect_file_tunnel) first on a client with a
+    /// connected tunnel, for the same reason as `.with_ftps()`.
+    #[must_use]
+    pub fn with_file_tunnel<NewRawIO, NewTls, NewFactory>(
+        self,
+        tls: NewTls,
+        factory: NewFactory,
+    ) -> PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        NewRawIO,
+        NewTls,
+        NewFactory,
+    >
+    where
+        NewRawIO: AsyncIo,
+        NewTls: TlsConnector<NewRawIO>,
+        NewFactory: RawStreamFactory<NewRawIO>,
+    {
+        self.with_camera(tls, factory)
     }
 
     /// Installs a camera stream the caller connected, changing the camera type parameters to match it.
@@ -951,6 +1056,7 @@ where
             ftps_config: self.ftps_config,
             camera: Some(camera),
             camera_config: Some((tls, super::PreConnected(PhantomData))),
+            file_tunnel: None,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
@@ -1000,6 +1106,7 @@ where
             ftps_config: None,
             camera: self.camera,
             camera_config: self.camera_config,
+            file_tunnel: self.file_tunnel,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,

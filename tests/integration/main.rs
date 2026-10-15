@@ -39,6 +39,7 @@ mod client_session_test;
 mod client_telemetry_cache_test;
 mod client_version_test;
 mod drying_capability_matrix_test;
+mod file_tunnel_test;
 mod ftps_test;
 mod model_matrix_test;
 mod mqtt_test;

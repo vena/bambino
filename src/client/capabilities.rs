@@ -118,6 +118,16 @@ impl<'a> Capabilities<'a> {
         self.quirks.ams_drying_while_printing_support(&self.context)
     }
 
+    /// Port-6000 file tunnel support — see [`ModelQuirks::file_tunnel_support`].
+    ///
+    /// Gate [`PrinterClient::file_tunnel`](crate::client::PrinterClient::file_tunnel) and anything
+    /// built on it on this; an `Assumed(true)` printer may still fail the handshake, which is the
+    /// signal to use FTPS instead.
+    #[must_use]
+    pub fn file_tunnel_support(&self) -> Support {
+        self.quirks.file_tunnel_support(&self.context)
+    }
+
     /// Prompt sound support — see [`ModelQuirks::prompt_sound_support`].
     #[must_use]
     pub fn prompt_sound_support(&self) -> Support {

@@ -3,12 +3,9 @@
 #[cfg(not(feature = "std"))]
 use alloc::{format, string::String, vec, vec::Vec};
 
-use core::marker::PhantomData;
-
 use serde::Serialize;
 use serde::de::{DeserializeOwned, IgnoredAny};
 
-use crate::client::DummyTimer;
 use crate::error::Error;
 use crate::ftps::protocol::{ftps_deadline_ms, write_bounded};
 use crate::identity::PrinterIdentity;
@@ -44,25 +41,19 @@ pub(crate) const MEM_PROJECT_FILE_INDEX: u32 = 16;
 /// way back is a new connection. A failure `result` the printer sends in full (`FILE_NO_EXIST`)
 /// is [`Error::TunnelReply`] and leaves the session usable.
 ///
-/// **`Timer`** bounds every read and write when it has a real clock. Under the default
-/// [`DummyTimer`] nothing is bounded, including the handshake, so a printer that never answers
-/// the login (every P1/A1) hangs [`connect`](Self::connect) until it closes the socket after
-/// 60 s. Supply a real timer.
-pub struct FileTunnelClient<RawIO, Tls, Timer = DummyTimer>
-where
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Timer: TimerProvider,
-{
-    stream: Tls::Stream,
-    tls_connector: Tls,
-    timer: Timer,
+/// **Timer.** Every method takes the timer that bounds its reads and writes, as the camera
+/// stream's `read_next_frame_with_timer` does, so the client holds only its TLS stream `S`. Under a timer with no real clock (the
+/// crate's `DummyTimer`) nothing is bounded, including the handshake, so a printer that never
+/// answers the login (every P1/A1) hangs [`connect`](Self::connect) until it closes the socket
+/// after 60 s. [`PrinterClient::file_tunnel`](crate::client::PrinterClient::file_tunnel) supplies
+/// its own timer through [`FileTunnel`].
+pub struct FileTunnelClient<S: AsyncIo> {
+    stream: S,
     /// The header `seq` of the next frame this client sends.
     frame_seq: u32,
     /// The JSON `sequence` of the next request; `0` belongs to the setup frame.
     next_sequence: u32,
     poisoned: bool,
-    _raw: PhantomData<fn() -> RawIO>,
 }
 
 /// Writes one frame: the header, then the payload, as two writes, the way both reference clients send them.
@@ -191,61 +182,37 @@ fn require_success(command: &'static str, code: Option<i64>) -> Result<(), Error
     }
 }
 
-impl<RawIO, Tls, Timer> FileTunnelClient<RawIO, Tls, Timer>
-where
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Timer: TimerProvider,
-{
+impl<S: AsyncIo> FileTunnelClient<S> {
     /// Wraps `raw` in TLS, logs in and runs the setup exchange.
     ///
     /// `raw` must already be dialed to the printer's [`FILE_TUNNEL_PORT`](super::FILE_TUNNEL_PORT).
-    /// TLS uses the printer's serial as its identity, like every other channel. A printer that
-    /// doesn't serve the tunnel either refuses the login ([`Error::ProtocolViolation`]) or, like
-    /// every P1/A1, sends nothing, which the handshake timeout turns into
-    /// [`SocketError::TimedOut`](crate::io::SocketError::TimedOut) under a real `timer`.
-    pub async fn connect(
-        raw: RawIO,
-        tls_connector: Tls,
-        identity: &PrinterIdentity,
-        timer: Timer,
-    ) -> Result<Self, Error> {
-        let (stream, frame_seq) =
-            Self::connect_stream(raw, &tls_connector, identity, &timer).await?;
-        Ok(Self::from_stream(stream, tls_connector, timer, frame_seq))
-    }
-
-    /// The TLS connect and handshake over borrowed parts, so a caller holding them in a config can retry without losing them.
-    pub(crate) async fn connect_stream(
+    /// TLS uses the printer's serial as its identity, like every other channel; keep
+    /// `tls_connector` to [`disconnect`](Self::disconnect) through. A printer that doesn't serve
+    /// the tunnel either refuses the login ([`Error::ProtocolViolation`]) or, like every P1/A1,
+    /// sends nothing, which the handshake timeout turns into
+    /// [`SocketError::TimedOut`](crate::io::SocketError::TimedOut) when `timer` has a real clock.
+    pub async fn connect<RawIO, Tls, T>(
         raw: RawIO,
         tls_connector: &Tls,
         identity: &PrinterIdentity,
-        timer: &Timer,
-    ) -> Result<(Tls::Stream, u32), Error> {
+        timer: &T,
+    ) -> Result<Self, Error>
+    where
+        RawIO: AsyncIo,
+        Tls: TlsConnector<RawIO, Stream = S>,
+        T: TimerProvider,
+    {
         identity.validate()?;
         let mut stream = tls_connector.connect(&identity.serial, raw).await?;
         // Both reference clients seed the frame counter randomly; a clock reading serves.
         let mut frame_seq = timer.unix_millis().unwrap_or_else(|| timer.now_millis()) as u32;
         handshake(&mut stream, &identity.access_code, timer, &mut frame_seq).await?;
-        Ok((stream, frame_seq))
-    }
-
-    /// Assembles a client from a stream [`connect_stream`](Self::connect_stream) returned.
-    pub(crate) fn from_stream(
-        stream: Tls::Stream,
-        tls_connector: Tls,
-        timer: Timer,
-        frame_seq: u32,
-    ) -> Self {
-        Self {
+        Ok(Self {
             stream,
-            tls_connector,
-            timer,
             frame_seq,
             next_sequence: 1,
             poisoned: false,
-            _raw: PhantomData,
-        }
+        })
     }
 
     /// Whether an earlier failure left the session out of sync; see the struct docs.
@@ -263,14 +230,15 @@ where
     }
 
     /// Records a failure that leaves the session out of sync, and passes it on.
-    fn poison<T>(&mut self, err: Error) -> Result<T, Error> {
+    fn poison<R>(&mut self, err: Error) -> Result<R, Error> {
         self.poisoned = true;
         Err(err)
     }
 
     /// Sends one request and returns the `sequence` its reply will carry.
-    async fn send_request<R: Serialize>(
+    async fn send_request<R: Serialize, T: TimerProvider>(
         &mut self,
+        timer: &T,
         cmdtype: u32,
         req: &R,
         binary: &[u8],
@@ -280,7 +248,7 @@ where
         let payload = p::encode_request(cmdtype, sequence, req, binary)?;
         if let Err(e) = write_frame(
             &mut self.stream,
-            &self.timer,
+            timer,
             &mut self.frame_seq,
             p::MAGIC_CTRL,
             &payload,
@@ -296,18 +264,18 @@ where
     ///
     /// Matches on both, as ha-bambulab and open-bamboo-networking do; Studio matches on
     /// `sequence` alone. A reply that omits `cmdtype` is accepted on its `sequence`.
-    async fn read_reply_frame(&mut self, cmdtype: u32, sequence: u32) -> Result<Vec<u8>, Error> {
+    async fn read_reply_frame<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        cmdtype: u32,
+        sequence: u32,
+    ) -> Result<Vec<u8>, Error> {
         for _ in 0..=MAX_SKIPPED_FRAMES {
-            let (header, payload) = match read_frame(
-                &mut self.stream,
-                &self.timer,
-                FILE_TUNNEL_READ_TIMEOUT_SECS,
-            )
-            .await
-            {
-                Ok(frame) => frame,
-                Err(e) => return self.poison(e),
-            };
+            let (header, payload) =
+                match read_frame(&mut self.stream, timer, FILE_TUNNEL_READ_TIMEOUT_SECS).await {
+                    Ok(frame) => frame,
+                    Err(e) => return self.poison(e),
+                };
             match header.magic {
                 p::MAGIC_REJECT => return self.poison(rejected()),
                 p::MAGIC_CTRL_REPLY => {}
@@ -339,17 +307,18 @@ where
     }
 
     /// Sends a single-reply request and parses its reply body.
-    async fn single_reply<R: Serialize, T: DeserializeOwned + Default>(
+    async fn single_reply<R: Serialize, B: DeserializeOwned + Default, T: TimerProvider>(
         &mut self,
+        timer: &T,
         command: &'static str,
         cmdtype: u32,
         req: &R,
-    ) -> Result<T, Error> {
+    ) -> Result<B, Error> {
         self.check_poisoned()?;
-        let sequence = self.send_request(cmdtype, req, &[]).await?;
-        let payload = self.read_reply_frame(cmdtype, sequence).await?;
+        let sequence = self.send_request(timer, cmdtype, req, &[]).await?;
+        let payload = self.read_reply_frame(timer, cmdtype, sequence).await?;
         let (json, _) = p::split_payload(&payload);
-        let env: Envelope<T> = p::parse_envelope(json, command)?;
+        let env: Envelope<B> = p::parse_envelope(json, command)?;
         if env.result == Some(result::CONTINUE) {
             return self.poison(Error::ProtocolViolation(
                 format!("file tunnel {command} answered CONTINUE to a single-reply request").into(),
@@ -362,9 +331,13 @@ where
     /// Lists the storages the printer has (`REQUEST_MEDIA_ABILITY`), such as `["emmc","udisk"]`.
     ///
     /// Probe this instead of guessing labels for [`list_files`](Self::list_files).
-    pub async fn media_ability(&mut self) -> Result<Vec<String>, Error> {
+    pub async fn media_ability<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+    ) -> Result<Vec<String>, Error> {
         let reply: MediaAbilityReply = self
             .single_reply(
+                timer,
                 "REQUEST_MEDIA_ABILITY",
                 cmd::REQUEST_MEDIA_ABILITY,
                 &MediaAbilityReq {
@@ -380,13 +353,15 @@ where
     ///
     /// `storage` is a label from [`media_ability`](Self::media_ability), or `None` for the
     /// printer's default, which Studio's file browser treats as external storage.
-    pub async fn list_files(
+    pub async fn list_files<T: TimerProvider>(
         &mut self,
+        timer: &T,
         kind: FileKind,
         storage: Option<&str>,
     ) -> Result<Vec<TunnelFile>, Error> {
         let reply: ListInfoReply = self
             .single_reply(
+                timer,
                 "LIST_INFO",
                 cmd::LIST_INFO,
                 &ListInfoReq {
@@ -426,8 +401,9 @@ where
     /// after `sink` has seen every byte, so a caller writing to storage should treat its output as
     /// provisional until this returns `Ok`. An error from `sink` stops the transfer and leaves the
     /// session out of sync, since the printer goes on sending.
-    pub async fn download(
+    pub async fn download<T: TimerProvider>(
         &mut self,
+        timer: &T,
         file: &TunnelFile,
         mut sink: impl FnMut(&[u8]) -> Result<(), Error>,
     ) -> Result<u64, Error> {
@@ -438,8 +414,10 @@ where
             offset: 0,
             mem_dl_param_size: None,
         };
-        let sequence = self.send_request(cmd::FILE_DOWNLOAD, &req, &[]).await?;
-        self.receive_download("FILE_DOWNLOAD", sequence, None, &mut sink)
+        let sequence = self
+            .send_request(timer, cmd::FILE_DOWNLOAD, &req, &[])
+            .await?;
+        self.receive_download(timer, "FILE_DOWNLOAD", sequence, None, &mut sink)
             .await
     }
 
@@ -449,8 +427,9 @@ where
     /// `Metadata/model_settings.config` and `Metadata/slice_info.config`
     /// (`PartSkipDialog::DownloadPartsFile`). A member larger than `max_bytes` is refused before
     /// any of it is buffered.
-    pub async fn read_running_job_member(
+    pub async fn read_running_job_member<T: TimerProvider>(
         &mut self,
+        timer: &T,
         member: &str,
         max_bytes: usize,
     ) -> Result<Vec<u8>, Error> {
@@ -476,9 +455,12 @@ where
             offset: 0,
             mem_dl_param_size: Some(param.len()),
         };
-        let sequence = self.send_request(cmd::FILE_DOWNLOAD, &req, &param).await?;
+        let sequence = self
+            .send_request(timer, cmd::FILE_DOWNLOAD, &req, &param)
+            .await?;
         let mut out = Vec::new();
         self.receive_download(
+            timer,
             "FILE_DOWNLOAD mem:/16",
             sequence,
             Some(max_bytes as u64),
@@ -492,8 +474,9 @@ where
     }
 
     /// Receives a streamed `FILE_DOWNLOAD` reply, checking offsets, `total` and `file_md5`.
-    async fn receive_download(
+    async fn receive_download<T: TimerProvider>(
         &mut self,
+        timer: &T,
         command: &'static str,
         sequence: u32,
         max_total: Option<u64>,
@@ -502,7 +485,9 @@ where
         let mut digest = md5::Context::new();
         let mut received: u64 = 0;
         loop {
-            let payload = self.read_reply_frame(cmd::FILE_DOWNLOAD, sequence).await?;
+            let payload = self
+                .read_reply_frame(timer, cmd::FILE_DOWNLOAD, sequence)
+                .await?;
             let (json, binary) = p::split_payload(&payload);
             let env: Envelope<DownloadReply> = match p::parse_envelope(json, command) {
                 Ok(env) => env,
@@ -616,16 +601,21 @@ where
         }
     }
 
-    /// Closes the TLS session and returns the connector and timer for a later connect.
+    /// Closes the TLS session through `tls_connector` (the one that opened it), then drops it.
     ///
     /// A poisoned session is dropped without a close: there is no orderly shutdown to negotiate
     /// with a peer in an unknown state (`.claude/rules/tls-session-teardown.md`).
-    pub async fn disconnect(mut self) -> (Tls, Timer) {
+    pub async fn disconnect<RawIO, Tls, T>(mut self, tls_connector: &Tls, timer: &T)
+    where
+        RawIO: AsyncIo,
+        Tls: TlsConnector<RawIO, Stream = S>,
+        T: TimerProvider,
+    {
         if !self.poisoned {
-            let close = self.tls_connector.close(&mut self.stream);
+            let close = tls_connector.close(&mut self.stream);
             match with_deadline(
                 close,
-                &self.timer,
+                timer,
                 FILE_TUNNEL_WRITE_TIMEOUT_SECS.saturating_mul(1000),
             )
             .await
@@ -635,18 +625,67 @@ where
             }
         }
         drop(self.stream);
-        (self.tls_connector, self.timer)
     }
 
     #[cfg(test)]
-    pub(crate) fn stream(&self) -> &Tls::Stream {
+    pub(crate) fn stream(&self) -> &S {
         &self.stream
     }
 }
 
+/// A [`FileTunnelClient`] paired with the timer that bounds it, as [`PrinterClient::file_tunnel`](crate::client::PrinterClient::file_tunnel) hands it out.
+///
+/// The same operations as the client, without the timer argument. Borrowed from the
+/// `PrinterClient` for the length of one use; get a fresh one per operation.
+pub struct FileTunnel<'a, S: AsyncIo, T: TimerProvider> {
+    pub(crate) client: &'a mut FileTunnelClient<S>,
+    pub(crate) timer: &'a T,
+}
+
+impl<S: AsyncIo, T: TimerProvider> FileTunnel<'_, S, T> {
+    /// See [`FileTunnelClient::media_ability`].
+    pub async fn media_ability(&mut self) -> Result<Vec<String>, Error> {
+        self.client.media_ability(self.timer).await
+    }
+
+    /// See [`FileTunnelClient::list_files`].
+    pub async fn list_files(
+        &mut self,
+        kind: FileKind,
+        storage: Option<&str>,
+    ) -> Result<Vec<TunnelFile>, Error> {
+        self.client.list_files(self.timer, kind, storage).await
+    }
+
+    /// See [`FileTunnelClient::download`].
+    pub async fn download(
+        &mut self,
+        file: &TunnelFile,
+        sink: impl FnMut(&[u8]) -> Result<(), Error>,
+    ) -> Result<u64, Error> {
+        self.client.download(self.timer, file, sink).await
+    }
+
+    /// See [`FileTunnelClient::read_running_job_member`].
+    pub async fn read_running_job_member(
+        &mut self,
+        member: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, Error> {
+        self.client
+            .read_running_job_member(self.timer, member, max_bytes)
+            .await
+    }
+
+    /// See [`FileTunnelClient::is_poisoned`].
+    pub fn is_poisoned(&self) -> bool {
+        self.client.is_poisoned()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::DummyTimer;
     use crate::io::SocketError;
     use crate::test_support::MockIo;
 
@@ -697,17 +736,15 @@ mod tests {
         ]
     }
 
-    async fn connected(
-        after_handshake: &[Vec<u8>],
-    ) -> FileTunnelClient<MockIo, PassthroughTls, DummyTimer> {
+    async fn connected(after_handshake: &[Vec<u8>]) -> FileTunnelClient<MockIo> {
         let mut frames = handshake_frames();
         frames.extend_from_slice(after_handshake);
         let chunks: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
         FileTunnelClient::connect(
             MockIo::with_chunks(&chunks),
-            PassthroughTls,
+            &PassthroughTls,
             &identity(),
-            DummyTimer,
+            &DummyTimer,
         )
         .await
         .unwrap()
@@ -751,11 +788,11 @@ mod tests {
     #[tokio::test]
     async fn reject_frame_fails_the_connect() {
         let reject = frame(p::MAGIC_REJECT, &[0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
-        let result = FileTunnelClient::<_, _, DummyTimer>::connect(
+        let result = FileTunnelClient::connect(
             MockIo::with_chunks(&[&reject]),
-            PassthroughTls,
+            &PassthroughTls,
             &identity(),
-            DummyTimer,
+            &DummyTimer,
         )
         .await;
         assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -763,13 +800,9 @@ mod tests {
 
     #[tokio::test]
     async fn silent_peer_that_closes_fails_the_connect() {
-        let result = FileTunnelClient::<_, _, DummyTimer>::connect(
-            MockIo::empty(),
-            PassthroughTls,
-            &identity(),
-            DummyTimer,
-        )
-        .await;
+        let result =
+            FileTunnelClient::connect(MockIo::empty(), &PassthroughTls, &identity(), &DummyTimer)
+                .await;
         assert!(matches!(
             result,
             Err(Error::Network(SocketError::ConnectionReset))
@@ -783,11 +816,11 @@ mod tests {
             reply(r#"{"mtype":12291,"sequence":0,"result":18,"reply":{}}"#),
         ];
         let chunks: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
-        let result = FileTunnelClient::<_, _, DummyTimer>::connect(
+        let result = FileTunnelClient::connect(
             MockIo::with_chunks(&chunks),
-            PassthroughTls,
+            &PassthroughTls,
             &identity(),
-            DummyTimer,
+            &DummyTimer,
         )
         .await;
         assert!(matches!(
@@ -805,7 +838,10 @@ mod tests {
             r#"{"cmdtype":7,"mtype":12289,"reply":{"storage":["emmc","udisk"]},"result":0,"sequence":1}"#,
         )])
         .await;
-        assert_eq!(client.media_ability().await.unwrap(), vec!["emmc", "udisk"]);
+        assert_eq!(
+            client.media_ability(&DummyTimer).await.unwrap(),
+            vec!["emmc", "udisk"]
+        );
         let sent = written_frames(client.stream());
         assert_eq!(
             core::str::from_utf8(&sent[2].1).unwrap(),
@@ -821,7 +857,10 @@ mod tests {
             reply(r#"{"cmdtype":7,"reply":{"storage":["emmc"]},"result":0,"sequence":1}"#),
         ])
         .await;
-        assert_eq!(client.media_ability().await.unwrap(), vec!["emmc"]);
+        assert_eq!(
+            client.media_ability(&DummyTimer).await.unwrap(),
+            vec!["emmc"]
+        );
     }
 
     #[tokio::test]
@@ -832,7 +871,7 @@ mod tests {
         ])
         .await;
         let err = client
-            .list_files(FileKind::Model, Some("emmc"))
+            .list_files(&DummyTimer, FileKind::Model, Some("emmc"))
             .await
             .unwrap_err();
         assert!(matches!(
@@ -843,16 +882,16 @@ mod tests {
             }
         ));
         assert!(!client.is_poisoned());
-        assert!(client.media_ability().await.unwrap().is_empty());
+        assert!(client.media_ability(&DummyTimer).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn transport_failure_poisons_the_session() {
         let mut client = connected(&[]).await;
-        assert!(client.media_ability().await.is_err());
+        assert!(client.media_ability(&DummyTimer).await.is_err());
         assert!(client.is_poisoned());
         assert!(matches!(
-            client.media_ability().await,
+            client.media_ability(&DummyTimer).await,
             Err(Error::ProtocolViolation(_))
         ));
     }
@@ -864,7 +903,7 @@ mod tests {
         )])
         .await;
         let files = client
-            .list_files(FileKind::Timelapse, Some("internal"))
+            .list_files(&DummyTimer, FileKind::Timelapse, Some("internal"))
             .await
             .unwrap();
         assert_eq!(files[0].path.as_deref(), Some("/t/a.mp4"));
@@ -879,7 +918,7 @@ mod tests {
         )])
         .await;
         assert!(matches!(
-            client.list_files(FileKind::Model, None).await,
+            client.list_files(&DummyTimer, FileKind::Model, None).await,
             Err(Error::ProtocolViolation(_))
         ));
     }
@@ -912,7 +951,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let n = client
-            .download(&file, |chunk| {
+            .download(&DummyTimer, &file, |chunk| {
                 out.extend_from_slice(chunk);
                 Ok(())
             })
@@ -944,7 +983,10 @@ mod tests {
             size: 1,
             storage: None,
         };
-        client.download(&file, |_| Ok(())).await.unwrap();
+        client
+            .download(&DummyTimer, &file, |_| Ok(()))
+            .await
+            .unwrap();
         let sent = written_frames(client.stream());
         assert!(
             core::str::from_utf8(&sent[2].1)
@@ -968,7 +1010,7 @@ mod tests {
             storage: None,
         };
         assert!(matches!(
-            client.download(&file, |_| Ok(())).await,
+            client.download(&DummyTimer, &file, |_| Ok(())).await,
             Err(Error::ProtocolViolation(_))
         ));
     }
@@ -989,7 +1031,7 @@ mod tests {
         ])
         .await;
         let out = client
-            .read_running_job_member("Metadata/pick_1.png", 1024)
+            .read_running_job_member(&DummyTimer, "Metadata/pick_1.png", 1024)
             .await
             .unwrap();
         assert_eq!(out, png);
@@ -1018,7 +1060,7 @@ mod tests {
         .await;
         assert!(matches!(
             client
-                .read_running_job_member("Metadata/pick_9.png", 1024)
+                .read_running_job_member(&DummyTimer, "Metadata/pick_9.png", 1024)
                 .await,
             Err(Error::TunnelReply { result: 2, .. })
         ));
@@ -1040,7 +1082,7 @@ mod tests {
         .await;
         assert!(matches!(
             client
-                .read_running_job_member("Metadata/pick_1.png", 100)
+                .read_running_job_member(&DummyTimer, "Metadata/pick_1.png", 100)
                 .await,
             Err(Error::ProtocolViolation(_))
         ));

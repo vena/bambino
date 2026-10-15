@@ -16,7 +16,7 @@
 pub mod client;
 pub(crate) mod protocol;
 
-pub use client::FileTunnelClient;
+pub use client::{FileTunnel, FileTunnelClient};
 
 /// Port the file tunnel listens on, shared with the chamber-image stream of P1/A1 printers.
 pub const FILE_TUNNEL_PORT: u16 = 6000;

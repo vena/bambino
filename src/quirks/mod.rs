@@ -785,6 +785,34 @@ impl ModelQuirks {
         .resolve(ctx, Support::Assumed(false))
     }
 
+    /// Returns whether the printer serves the port-6000 file tunnel, with its provenance [REF-FILESVC].
+    ///
+    /// Reported by `fun` bit 31, BambuStudio's `is_support_brtc` ("support tcp and upload
+    /// protocol"). Studio uses that bit to choose the tunnel over FTPS for uploads
+    /// (`SendToPrinterDialog`) and to enable its skip-objects button
+    /// (`PrintingTaskPanel::enable_partskip_button`).
+    ///
+    /// Without a reported bit: a chamber-image model ([`CameraProtocol::BinaryJpeg`]) is
+    /// `Inferred(false)`. Those printers send no `fun`, and their port 6000 is the camera server,
+    /// which ignores the tunnel's login (P1S, `01.10.00.00`). Any other model is `Assumed(true)`,
+    /// unlike Studio, which defaults the flag to false until telemetry arrives: every captured
+    /// RTSPS model that sends `fun` sets the bit, and a client that tries and fails the handshake
+    /// falls back to FTPS.
+    #[must_use]
+    pub fn file_tunnel_support(&self, ctx: &QuirkContext) -> Support {
+        let model = if self.camera == CameraProtocol::BinaryJpeg {
+            Support::Inferred(false)
+        } else {
+            Support::Assumed(true)
+        };
+        SupportBits {
+            fun: Some(bits::FUN_BRTC_BIT),
+            fun2: None,
+            home_flag: None,
+        }
+        .resolve(ctx, model)
+    }
+
     /// Returns true if the model can keep sent print files on external storage: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C.
     ///
     /// No telemetry bit reports it. BambuStudio's per-model
@@ -1552,6 +1580,41 @@ mod tests {
                 "cali_version {version}"
             );
         }
+    }
+
+    #[test]
+    fn test_file_tunnel_support() {
+        let empty = QuirkContext::empty();
+        // Chamber-image models send no `fun` and never serve the tunnel.
+        for model in [
+            PrinterModel::P1S,
+            PrinterModel::P1P,
+            PrinterModel::A1,
+            PrinterModel::A1Mini,
+            PrinterModel::A2L,
+        ] {
+            assert_eq!(
+                model.quirks().file_tunnel_support(&empty),
+                Support::Inferred(false),
+                "{model:?}"
+            );
+        }
+        assert_eq!(
+            PrinterModel::P2S.quirks().file_tunnel_support(&empty),
+            Support::Assumed(true)
+        );
+        // ha-bambulab's X1-Carbon fixture (`01.09.00.01`): bit 31 set.
+        let x1c = QuirkContext::empty().with_fun(Some("11A30F9CFB"));
+        assert_eq!(
+            PrinterModel::X1C.quirks().file_tunnel_support(&x1c),
+            Support::Reported(true)
+        );
+        // ha-bambulab's A2L fixture: `fun` present, bit 31 clear.
+        let a2l = QuirkContext::empty().with_fun(Some("100d122002fbd"));
+        assert_eq!(
+            PrinterModel::A2L.quirks().file_tunnel_support(&a2l),
+            Support::Reported(false)
+        );
     }
 
     #[test]

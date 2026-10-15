@@ -212,6 +212,8 @@ pub(crate) const FUN_NOZZLE_BLOB_DETECT_BIT: u32 = 13;
 pub(crate) const FUN_DOOR_OPEN_CHECK_BIT: u32 = 12;
 /// `fun` bit 62: idle heating protection supported (`DevPrintOptions.cpp`).
 pub(crate) const FUN_IDLE_HEATING_PROTECTION_BIT: u32 = 62;
+/// `fun` bit 31: the port-6000 file tunnel is served, BambuStudio's `is_support_brtc` ("support tcp and upload protocol", `DeviceManager.hpp`) [REF-FILESVC].
+pub(crate) const FUN_BRTC_BIT: u32 = 31;
 /// `fun` bit 42: camera spaghetti detection supported.
 pub(crate) const FUN_SPAGHETTI_BIT: u32 = 42;
 /// `fun` bit 43: camera purge chute pile-up detection supported.

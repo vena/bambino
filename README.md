@@ -15,6 +15,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 - **Discovery**: find printers on your LAN via SSDP (ports 2021/1990)
 - **MQTT control**: connect to the printer's local broker (port 8883), send commands, receive telemetry
 - **File transfer**: implicit FTPS (port 990) for listing, uploading, downloading, and managing files on the SD card
+- **Internal storage**: the port-6000 file tunnel newer printers (P2S, X2D, H2 series) serve, for listing and downloading files FTPS can't see and reading the running job's files without knowing where the job is stored
 - **Camera**: binary JPEG streaming client (port 6000, A1/P1 series, A2L); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
 - **Model quirks**: per-model differences handled polymorphically: FTPS TLS requirements, fan step resolution, Z-axis homing safety, door sensors, camera protocols, nozzle counts (single/IDEX/tool changer), temperature limits, and chamber heater capabilities
 
@@ -24,7 +25,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 
 For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::ftps().await?` provide direct access to the underlying `MqttClient` and `FtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
 
-The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access; useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
+The underlying modules (`mqtt`, `ftps`, `file_tunnel`, `discovery`, `camera`) are also public if you need direct protocol access; useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
 ## Quick start
 
@@ -325,6 +326,26 @@ let free = ftp.get_available_space().await?;
 > **Direct protocol access:** For cases where `PrinterClient` isn't needed, `FtpsClient::connect()` provides standalone FTPS access; see the [`ftps`](src/ftps/) module.
 >
 > **Timestamps:** file dates from a LAN-mode printer are unreliable; see [Timestamps on LAN-mode printers](#timestamps-on-lan-mode-printers) below.
+
+### Internal storage (file tunnel)
+
+Newer printers keep print files on internal storage that FTPS doesn't show, and serve it through a TLS file service on port 6000 instead ([REF-FILESVC] in `reference/08_file_service.md`). Configure it with `.with_file_tunnel()`, the same slot the binary camera uses (no printer serves both on port 6000), so one connector cloned for MQTT and FTPS serves here too:
+
+```rust
+let mut printer = printer.with_file_tunnel(tls.clone(), TokioRawStreamFactory);
+
+if printer.capabilities().file_tunnel_support().is_supported() {
+    let mut tunnel = printer.file_tunnel().await?; // connects on first use
+    let storages = tunnel.media_ability().await?;   // e.g. ["emmc", "udisk"]
+    let files = tunnel.list_files(FileKind::Model, Some("emmc")).await?;
+    let pick = tunnel.read_running_job_member("Metadata/pick_1.png", 1 << 20).await?;
+}
+printer.disconnect_file_tunnel().await; // frees the TLS session
+```
+
+The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. P1 and A1 printers never serve it, and `file_tunnel()` refuses them without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB.
+
+> **Not yet run against a printer that serves it.** The protocol follows Bambu Studio's source and two independent working clients; only the P1S's refusal has been checked on hardware.
 
 ### Timestamps on LAN-mode printers
 

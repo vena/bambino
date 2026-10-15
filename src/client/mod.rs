@@ -22,6 +22,7 @@ pub mod command;
 mod connect;
 pub mod drying;
 pub mod dummy;
+mod file_tunnel;
 mod hardware;
 mod job;
 mod motion;
@@ -70,6 +71,7 @@ use core::time::Duration;
 use crate::camera::CameraProtocol;
 use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
+use crate::file_tunnel::FileTunnelClient;
 use crate::ftps::FtpsClient;
 use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
@@ -266,7 +268,10 @@ pub struct PrinterClient<
     pub(crate) ftps: Option<FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>>,
     pub(crate) ftps_config: Option<(FtpsTls, FtpsFactory, FtpsTimer)>,
     pub(crate) camera: Option<BinaryCameraStream<CameraTls::Stream>>,
+    /// The port-6000 connector and dialer, shared by the camera (chamber-image models) and the
+    /// file tunnel (the rest): no printer serves both, so one slot covers whichever applies.
     pub(crate) camera_config: Option<(CameraTls, CameraFactory)>,
+    pub(crate) file_tunnel: Option<FileTunnelClient<CameraTls::Stream>>,
     pub(crate) mqtt_tls: MqttTls,
     pub(crate) mqtt_factory: MqttFactory,
     pub(crate) timer: Timer,
@@ -315,6 +320,7 @@ where
             ftps_config: None,
             camera: None,
             camera_config: None,
+            file_tunnel: None,
             mqtt_tls: tls,
             mqtt_factory: factory,
             timer: DummyTimer,
