@@ -53,6 +53,11 @@ JSON path per doc pass the Makefile runs (host + esp-idf), since each sees a
 different cfg-gated slice of the crate.
 """
 
+# Lets the `str | None` annotations below run on Python 3.9, which is what
+# `python3` resolves to on a Mac whose Homebrew Python no longer links an
+# unversioned `python3` (python@3.14 3.14.8_2 installs only `python3.14`).
+from __future__ import annotations
+
 import json
 import os
 import re
