@@ -98,7 +98,8 @@ fn plate_image_member(plate: u32) -> String
 Name of plate `plate`'s image inside the `.3mf`: `Metadata/plate_<plate>.png`.
 
 `plate` is 1-based, as telemetry's `plate_idx` reports it; `plate_idx` is authoritative over
-the archive's own plate data (`reference/03_mqtt_telemetry.md`, "`plate_idx`").
+the archive's own plate data (`reference/03_mqtt_telemetry.md`, "`plate_idx`"). P1 and A1
+printers don't send `plate_idx`; see that section for what BambuStudio falls back to.
 
 ### `plate_small_image_member`
 
