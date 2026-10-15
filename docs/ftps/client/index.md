@@ -151,9 +151,9 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   Reads the first `buf.len()` bytes of a remote file into `buf`, then stops the transfer.
 
   Returns the number of bytes read: `buf.len()`, or fewer when the file is shorter. Built for
-  reading a job's `.3mf` from the front, where Bambu Studio puts the plate images, without
-  transferring the rest of a file that can be tens of MB. The caller owns `buf`, so it
-  decides where those bytes live.
+  reading a job's `.3mf` from the front, where Bambu Studio and OrcaSlicer put the plate
+  images, without transferring the rest of a file that can be tens of MB. The caller owns
+  `buf`, so it decides where those bytes live.
 
   **A full `buf` ends this session.** The printer has no `REST` or `ABOR` (both `502` on a
   P1S) and answers a FIN on the data channel by sending the rest of the file; only an RST
