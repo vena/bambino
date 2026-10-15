@@ -18,6 +18,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **Physical Material Expansion (AMS, AMS-HT & Spools)** ([`05_materials_ams.md`](05_materials_ams.md)): Details the expansion bus bitmask maps, moisture evaluation profiles, RFID serialization, and active dry-chamber configurations.
 *   **Video Streaming & Chamber Image Handshakes** ([`06_cameras.md`](06_cameras.md)): Documents the dual video/imaging interfaces, direct RTSPS handshakes, and proprietary binary chamber image streams.
 *   **Diagnostic Mapping & Calibration Profiles** ([`07_diagnostics_hms.md`](07_diagnostics_hms.md)): Formulates the raw HMS code translation algorithms, error level parsing, and linear pressure-advance (K-profile) database storage.
+*   **Port-6000 File Service** ([`08_file_service.md`](08_file_service.md)): The TLS file service on port 6000: framing, handshake, request/reply envelope, commands (including in-memory reads of the running job's `.3mf` members), and which printers serve it.
 
 ---
 
@@ -39,7 +40,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Multicast configuration (IP: `239.255.255.250`, Port: `2021`)
     *   M-SEARCH and NOTIFY packets, location ports, UPnP deviations, and virtual printer exclusion suffix
 *   **[REF-NET-PORTS] Section 1.2: Direct Local Port Mapping Matrix**
-    *   Port 8883 (MQTT/TLS), Port 990 (Implicit FTPS), Port 322 (RTSPS), Port 6000 (Chamber Image)
+    *   Port 8883 (MQTT/TLS), Port 990 (Implicit FTPS), Port 322 (RTSPS), Port 6000 (Chamber Image; File Service [REF-FILESVC])
 *   **[REF-NET-SECURE] Section 1.3: Cryptographic Context & Handshakes**
     *   TLS 1.2 / TLS 1.3 contexts, SNI hostname overrides, and X.509 constraints
     *   BBL CA trust-anchor bundle [REF-NET-CABUNDLE] — the five upstream anchors, their load-bearing file order (the legacy root a P1S needs is last), and the multi-certificate encoding constraint
@@ -151,3 +152,16 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   K-Profile telemetry database schemas (read stream)
 *   **Section 7.3: Mechanical & Firmware Quirks**
     *   K-profile request priming
+
+### [Chapter 8: Port-6000 File Service](08_file_service.md)
+*   **[REF-FILESVC] Section 8.1: Network Boundary & Sources**
+    *   What the service reaches that FTPS doesn't, and which upstream establishes which layer
+*   **Section 8.2: Transport, Framing & Handshake**
+    *   16-byte frame header, login/control/reject magics, login and setup frames
+*   **Section 8.3: Request & Reply Envelope**
+    *   JSON envelope, binary after `\n\n`, notifies, reply matching, result codes
+*   **Section 8.4: Commands**
+    *   `REQUEST_MEDIA_ABILITY`, `LIST_INFO`, `SUB_FILE` member reads, `FILE_DOWNLOAD` including `mem:/16` `get_project_file` and `mem:/26`, chunked `FILE_UPLOAD`, `FILE_DEL`, `TASK_CANCEL`
+*   **Section 8.5: Which Printers Serve It**
+    *   Studio's `ipcam.file` gate, the skip-objects path, and the open A1/P1 question
+*   **Section 8.6: Implementation Notes for bambino**
