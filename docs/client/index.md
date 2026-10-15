@@ -1511,6 +1511,28 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   client connected; [`read_job_images`](#printerclient) then falls back to the
   job's file. See the module doc for the chain.
 
+- <span id="superprinterclient-job-path"></span>`async fn job_path(&mut self) -> Result<Option<String>, Error>` — [`Error`](../error/index.md#error)
+
+  Returns the running job's `.3mf` path on the printer's card, or `None` when it can't be found exactly.
+
+  The path comes from the `url` of the start command the printer echoed for this job, when
+  this client saw one, and otherwise from `/` followed by `gcode_file`. One `SIZE` request
+  confirms the file is there; a file that isn't is `None`, not an error.
+
+  That second rule covers every file Bambu Studio and OrcaSlicer send, which go to the card
+  root (`url: "ftp://<name>"`), and a print started from the printer's screen of a file at
+  the root. **A file placed in a folder by hand** and printed from the screen reports only
+  its bare name (the P1S screen lists every folder but `cache` flattened into one list), so
+  it gives `None`, unless a *different* file of the same name sits at the root: that one is
+  returned, and its images are not the job's. `reference/02_ftps.md` [REF-FTPS-OPS] has the
+  capture. A `gcode_file` that is a path rather than a bare `.3mf` name, as X1 firmware's
+  `/data/Metadata/plate_1.gcode` on internal storage, is `None`.
+
+  # Errors
+
+  Whatever connecting FTPS or the `SIZE` request returns, except the `550` of a missing
+  file.
+
 - <span id="superprinterclient-read-job-images"></span>`async fn read_job_images<'b>(&mut self, remote_path: &str, buf: &'b mut [u8]) -> Result<JobImages<'b>, Error>` — [`JobImages`](#jobimages), [`Error`](../error/index.md#error)
 
   Reads the running job's plate and pick images from the start of its `.3mf` at `remote_path`, into `buf`.
@@ -1520,9 +1542,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   With no answer from either, the result's `plate` and both images are `None`: the images
   of a guessed plate would look right and be wrong.
 
-  `remote_path` is the job's file on the printer's storage. For a print sent over LAN to a
-  P1S it was `/` followed by `gcode_file` (`reference/02_ftps.md`); mapping a job to its
-  file in general is GitHub issue #630.
+  `remote_path` is the job's file on the printer's card, from [`job_path`](#printerclient).
 
   One FTPS read, which usually ends the session: see
   [`FtpsClient::download_prefix`](../ftps/index.md). `buf` needs room
