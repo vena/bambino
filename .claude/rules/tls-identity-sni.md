@@ -3,6 +3,7 @@ paths:
   - "src/client/connect.rs"
   - "src/client/camera.rs"
   - "src/ftps/client.rs"
+  - "src/file_tunnel/client.rs"
   - "src/io/tokio.rs"
   - "src/io/tokio/**"
 ---

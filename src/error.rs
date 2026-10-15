@@ -83,6 +83,18 @@ pub enum Error {
         text: Cow<'static, str>,
     },
 
+    /// The printer's port-6000 file tunnel answered a request with a failure `result`.
+    ///
+    /// Carries the printer's code; [`file_tunnel::result_name`](crate::file_tunnel::result_name)
+    /// names the ones BambuStudio defines (`10` is `FILE_NO_EXIST`, `17` `STORAGE_UNAVAILABLE`).
+    /// The reply was read in full, so the tunnel session is still in sync and usable.
+    TunnelReply {
+        /// The request that failed (`"LIST_INFO"`, `"FILE_DOWNLOAD"`, ...).
+        command: &'static str,
+        /// The printer's `result` code.
+        result: i64,
+    },
+
     /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
     ModelMismatch(Cow<'static, str>),
 
@@ -152,6 +164,12 @@ impl core::fmt::Display for Error {
                 code,
                 text,
             } => write!(f, "FTP {command} rejected: {code} {text}"),
+            Error::TunnelReply { command, result } => {
+                match crate::file_tunnel::result_name(*result) {
+                    Some(name) => write!(f, "file tunnel {command} failed: {result} ({name})"),
+                    None => write!(f, "file tunnel {command} failed: {result}"),
+                }
+            }
             Error::ModelMismatch(s) => write!(f, "Model capability mismatch: {s}"),
             Error::Backpressure => {
                 f.write_str("Command queue saturated with unacknowledged commands")

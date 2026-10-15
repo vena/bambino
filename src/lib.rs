@@ -77,6 +77,7 @@
 //!   one coordinated interface with methods for thermal control, motion, print jobs, etc.
 //! - [`mqtt`] — Low-level MQTT v3.1.1 client and command serialization.
 //! - [`ftps`] — Implicit FTPS client for SD card file operations.
+//! - [`file_tunnel`] — Port-6000 file service on newer printers: internal storage and the running job's files.
 //! - [`discovery`] — SSDP-based printer discovery on the local network.
 //! - [`types`] — Telemetry schemas, version info, and shared data types.
 //! - [`models`] — Printer model identification from serial numbers.
@@ -104,6 +105,7 @@ pub mod camera;
 pub mod client;
 pub mod diagnostics;
 pub mod discovery;
+pub mod file_tunnel;
 pub mod ftps;
 pub mod mqtt;
 pub mod quirks;

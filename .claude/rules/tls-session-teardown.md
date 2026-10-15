@@ -10,6 +10,7 @@ paths:
   - "src/ftps/client.rs"
   - "src/mqtt/client/mod.rs"
   - "src/camera/binary.rs"
+  - "src/file_tunnel/client.rs"
 ---
 
 Every path that tears a TLS session down must **close it and then drop it** — both, in that order. `TlsConnector::close()` (`src/io/mod.rs`) sends `close_notify`; dropping the stream is what returns its memory. Neither substitutes for the other: MbedTLS frees a session's buffers in `Drop`, not in `close()` (~48 KB per session on an ESP32-C6, against ~29 KB of headroom at the two-session peak — see the `mbedtls-rs` comment in `Cargo.toml`), and a drop without a close leaves the peer seeing a truncated connection, which is indistinguishable from a truncation attack to anyone reading the wire.

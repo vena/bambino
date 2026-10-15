@@ -75,6 +75,13 @@ thiserror = { version = "2.0.18", optional = true }
 # Configured with default-features disabled to ensure compatibility with no_std/Embassy environments.
 httparse = { version = "1.10.1", default-features = false }
 
+# MD5 for the port-6000 file tunnel's transfer checksums (`src/file_tunnel/`): the printer ends
+# every download with the file's MD5 and expects one with every upload. A checksum the printer
+# chose, not a security boundary. `md5` over RustCrypto's `md-5` because it has no dependencies,
+# where `md-5` pulls in `digest` and `crypto-common` for a trait this crate never uses. Its only
+# feature, `std`, adds an `io::Write` impl, so it stays off for every target.
+md5 = { version = "0.8.1", default-features = false }
+
 # Host runtime and network transport layer
 # Enabled "io-util", "macros", and "rt-multi-thread" features of tokio to support async main binaries and select macros.
 tokio = { version = "1.52.3", features = [
