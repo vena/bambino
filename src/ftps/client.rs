@@ -19,6 +19,7 @@ use crate::ftps::parser::{
     CurrentDateTime, FTP_MAX_LISTING_ENTRIES, FtpFile, FtpTimestamp, parse_listing_line,
     parse_mdtm_timestamp,
 };
+use crate::ftps::project::{Walk, walk_front};
 use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::PrinterModel;
@@ -671,9 +672,8 @@ where
     /// passing host time instead costs. Entries whose year came from `now` are flagged with
     /// [`FtpFile::year_is_inferred`].
     ///
-    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`](crate::ftps::parser::FTP_MAX_LISTING_ENTRIES)
-    /// entries. To place a listing's memory yourself, use
-    /// [`list_directory_each`](Self::list_directory_each), which this collects from.
+    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] entries. To place a listing's memory yourself,
+    /// use [`list_directory_each`](Self::list_directory_each), which this collects from.
     pub async fn list_directory(
         &mut self,
         remote_path: &str,
@@ -950,28 +950,104 @@ where
                 "download_prefix needs a non-empty buffer".into(),
             ));
         }
+        let (filled, _) = self
+            .download_prefix_until(remote_path, buf, |_| false)
+            .await?;
+        Ok(filled)
+    }
+
+    /// Reads named members from the front of a remote `.3mf` into `buf`, stopping once they're found.
+    ///
+    /// For a job's plate and pick images: pass names from
+    /// [`plate_image_member`](crate::ftps::project::plate_image_member) and
+    /// [`pick_image_member`](crate::ftps::project::pick_image_member). Each result is a slice of
+    /// `buf` holding that member's bytes, or `None` when the archive's front section has no such
+    /// member; see [`front_members`](crate::ftps::project::front_members) for the layout this
+    /// relies on. The caller owns `buf`, so it decides where the bytes live and caps how much is
+    /// read; a member is never returned cut short.
+    ///
+    /// The read stops at the end of the last requested member, or the end of the front section,
+    /// so `buf` needs room for everything up to there: about 36 KB for plate 1's images on a
+    /// typical single-plate file, more for later plates (every plate's `plate_N.png` comes before
+    /// any plate's `pick_N.png`).
+    ///
+    /// **This usually ends the session**, like [`download_prefix`](Self::download_prefix): the
+    /// read stops before the end of the file, so the client is left poisoned and
+    /// `PrinterClient::ftps()` reconnects.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidArgument`] for an empty `buf` (before anything is sent), or a `buf` too
+    ///   small to reach the requested members.
+    /// - [`Error::ProtocolViolation`] when the file isn't the slicers' layout, or ends inside
+    ///   its front section.
+    /// - Anything [`download_prefix`](Self::download_prefix) returns.
+    pub async fn read_front_members<'b, const N: usize>(
+        &mut self,
+        remote_path: &str,
+        buf: &'b mut [u8],
+        names: [&str; N],
+    ) -> Result<[Option<&'b [u8]>; N], Error> {
+        if buf.is_empty() {
+            return Err(Error::InvalidArgument(
+                "read_front_members needs a non-empty buffer".into(),
+            ));
+        }
+        let capacity = buf.len();
+        let (filled, eof) = self
+            .download_prefix_until(remote_path, &mut *buf, |read| {
+                !matches!(walk_front(read, &names), Ok(Walk::NeedMore))
+            })
+            .await?;
+        let buf: &'b [u8] = buf;
+        match walk_front(&buf[..filled], &names)? {
+            Walk::Done(found) => Ok(found),
+            Walk::NeedMore if eof => Err(Error::ProtocolViolation(
+                "the .3mf ends inside its front section".into(),
+            )),
+            Walk::NeedMore => Err(Error::InvalidArgument(
+                format!(
+                    "a {capacity}-byte buffer ends before the requested .3mf members do; pass a larger one"
+                )
+                .into(),
+            )),
+        }
+    }
+
+    /// Reads a remote file into `buf` until it fills, the file ends, or `done` returns `true` for the bytes so far.
+    ///
+    /// Returns the bytes read and whether the file ended. A read that stops before the end
+    /// aborts the data channel and poisons the client: see
+    /// [`download_prefix`](Self::download_prefix).
+    async fn download_prefix_until(
+        &mut self,
+        remote_path: &str,
+        buf: &mut [u8],
+        done: impl FnMut(&[u8]) -> bool,
+    ) -> Result<(usize, bool), Error> {
         let mut data_channel = self.open_transfer("RETR", remote_path).await?;
-        let filled = match read_prefix(
+        let read = read_prefix_until(
             &mut data_channel,
             buf,
             &self.timer,
             FTPS_READ_TIMEOUT_SECS * 1000,
+            done,
         )
-        .await
-        {
-            Ok(n) => n,
+        .await;
+        let (filled, eof) = match read {
+            Ok(read) => read,
             Err(e) => {
                 self.poisoned = true;
                 return Err(e);
             }
         };
-        if filled < buf.len() {
+        if eof {
             self.finish_transfer("RETR", data_channel).await?;
         } else {
             self.abort_data_channel(data_channel).await;
             self.poisoned = true;
         }
-        Ok(filled)
+        Ok((filled, eof))
     }
 
     /// Creates a directory on the printer's MicroSD storage.

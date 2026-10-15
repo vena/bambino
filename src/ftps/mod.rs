@@ -9,6 +9,7 @@
 
 pub mod client;
 pub mod parser;
+pub mod project;
 pub(crate) mod protocol;
 
 /// Implicit-TLS FTPS port every Bambu printer serves its storage on.

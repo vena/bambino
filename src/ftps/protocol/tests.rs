@@ -158,19 +158,20 @@ async fn test_read_prefix_stops_at_a_full_buffer() {
     // A stream that never ends: the read must stop once `buf` is full, not keep going.
     let mut stream = MockIo::infinite();
     let mut buf = [0u8; FTPS_DATA_READ_BUF_SIZE * 2 + 7];
-    let n = read_prefix(&mut stream, &mut buf, &DummyTimer, 30_000)
+    let (n, eof) = read_prefix_until(&mut stream, &mut buf, &DummyTimer, 30_000, |_| false)
         .await
         .expect("prefix read");
-    assert_eq!(n, buf.len());
+    assert_eq!((n, eof), (buf.len(), false));
 }
 
 #[tokio::test]
 async fn test_read_prefix_assembles_chunks_and_stops_at_eof() {
     let mut stream = MockIo::with_chunks(&[b"PK\x03\x04", b"abc", b"defg"]);
     let mut buf = [0u8; 64];
-    let n = read_prefix(&mut stream, &mut buf, &DummyTimer, 30_000)
+    let (n, eof) = read_prefix_until(&mut stream, &mut buf, &DummyTimer, 30_000, |_| false)
         .await
         .expect("prefix read");
+    assert!(eof);
     assert_eq!(&buf[..n], b"PK\x03\x04abcdefg");
 }
 
@@ -180,15 +181,33 @@ async fn test_read_prefix_keeps_the_bytes_of_a_chunk_that_overfills() {
     // left unread on the stream.
     let mut stream = MockIo::with_chunks(&[b"0123", b"456789"]);
     let mut buf = [0u8; 6];
-    let n = read_prefix(&mut stream, &mut buf, &DummyTimer, 30_000)
+    let (n, eof) = read_prefix_until(&mut stream, &mut buf, &DummyTimer, 30_000, |_| false)
         .await
         .expect("prefix read");
-    assert_eq!((n, &buf), (6, b"012345"));
+    assert_eq!((n, eof, &buf), (6, false, b"012345"));
     let mut rest = [0u8; 8];
     let m = embedded_io_async::Read::read(&mut stream, &mut rest)
         .await
         .expect("rest");
     assert_eq!(&rest[..m], b"6789");
+}
+
+#[tokio::test]
+async fn test_read_prefix_until_stops_when_done() {
+    // `done` sees the bytes so far after each read and stops the read; later chunks stay unread.
+    let mut stream = MockIo::with_chunks(&[b"ab", b"cd", b"ef"]);
+    let mut buf = [0u8; 64];
+    let (n, eof) = read_prefix_until(&mut stream, &mut buf, &DummyTimer, 30_000, |read| {
+        read.ends_with(b"cd")
+    })
+    .await
+    .expect("prefix read");
+    assert_eq!((&buf[..n], eof), (&b"abcd"[..], false));
+    let mut rest = [0u8; 8];
+    let m = embedded_io_async::Read::read(&mut stream, &mut rest)
+        .await
+        .expect("rest");
+    assert_eq!(&rest[..m], b"ef");
 }
 
 /// Collects `read_lines_to_eof`'s lines and result for one stream.

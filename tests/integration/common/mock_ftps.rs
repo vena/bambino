@@ -319,6 +319,27 @@ pub async fn run_mock_server_download_prefix(
         .expect("data write");
 }
 
+/// Mock server for `read_front_members`: `RETR` of `file`, which the client stops reading early.
+///
+/// Like [`run_mock_server_download_prefix`], nothing follows the `150`. The write is allowed to
+/// fail: the data channel holds 4 KiB, so a client that stops reading leaves the rest unsent.
+pub async fn run_mock_server_front_members(
+    server_control: tokio::io::DuplexStream,
+    data_container: DataContainer,
+    file: Vec<u8>,
+) {
+    let mut ctl = Control::new(server_control, data_container);
+    ctl.handshake(true).await;
+
+    let mut server_data = ctl.pasv().await;
+    ctl.expect(
+        "RETR /model/job.3mf\r\n",
+        b"150 Opening data connection.\r\n",
+    )
+    .await;
+    let _ = server_data.write_all(&file).await;
+}
+
 /// Mock server for a `download_prefix` whose file ends before the buffer fills.
 ///
 /// The transfer completes as a normal `RETR` does, and the session must stay usable: an `AVBL`

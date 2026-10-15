@@ -200,6 +200,20 @@ The server offers no partial download. Measured on a P1S (2026-10-14/15, GitHub 
 
 So the only partial read is `RETR` from byte 0, stopped by resetting the data connection, after which the FTPS session is over and the client must log in again. `FtpsClient::download_prefix` implements exactly that.
 
+##### Plate Images at the Front of a `.3mf` [REF-FTPS-3MF-FRONT]
+A job's plate and pick images can be read with that partial read, because both slicers put them at the start of the archive. BambuStudio's and OrcaSlicer's `_BBS_3MF_Exporter::_save_model_to_file` (each in its own `src/libslic3r/Format/bbs_3mf.cpp`) write, in order:
+
+1.  `[Content_Types].xml` (deflate).
+2.  Every plate's `Metadata/plate_N.png` and `plate_N_small.png` (128×128), then every `plate_no_light_N.png`, then `top_N.png` and `pick_N.png` per plate. All are stored uncompressed (`_add_thumbnail_file_to_archive` passes `MZ_NO_COMPRESSION`).
+3.  `Metadata/plate_N.json` (`_add_bbox_file_to_archive`, deflate).
+4.  The model, G-code and configs. `slice_info.config` comes near the end.
+
+Every entry sets general-purpose flag bit 3 (flags `0x0808`): the local header carries no CRC or sizes, and a data descriptor (optional `PK\x07\x08`, CRC-32, compressed size, uncompressed size; 8-byte sizes after a Zip64 extra field) follows the data. A front-to-back walk therefore finds a stored PNG's end after its `IEND` chunk, and a deflated entry's end at the descriptor whose compressed size equals the distance walked and which is followed by a ZIP header. `ftps::project::front_members` does this and never inflates.
+
+Measured on a P1S (2026-10-14), a 1.96 MB OrcaSlicer-sliced `.gcode.3mf` with three objects on plate 1: `[Content_Types].xml` at 0, `plate_1.png` at 286, `plate_1_small.png` at 14924, `plate_no_light_1.png` at 17986, `top_1.png` at 20340, `pick_1.png` at 33552, `plate_1.json` at 35894, first non-`Metadata/` entry at 36292. All of these were read from the first 36 864 bytes and matched a full ZIP reader byte for byte. The Bambu Studio layout is confirmed by its exporter source and by the bundled `resources/calib/pressure_advance/*.3mf` files, from which `front_members` returns `plate_1.png` and `pick_1.png` byte-identical to Python's `zipfile` (2026-10-15). **Not yet checked: a Bambu Studio-sliced job read from a printer's card.**
+
+**Pick image to `identify_id`.** `pick_N.png` fills each object with one flat colour, and `identify_id = (B << 16) | (G << 8) | R`: BambuStudio `SkipPartCanvas::LoadPickImage` (each contour's majority colour, `SkipIdHelper` then `reverse()`) and ha-bambulab `_identify_objects_in_pick_image` both decode it this way. Background is transparent (ha-bambulab skips alpha 0) or black (BambuStudio drops alpha; id 0 is none). On the measured file the three dominant colours decode to 82, 106 and 139, the plate's `identify_id`s in `slice_info.config`, which is what `skip_objects` takes. `plate_N.json`'s `bbox_objects[].id` is **not** the `identify_id` (84, 119, 152 on the same file; BambuStudio `Plater::priv::generate_first_layer_bbox` sets it from `obj->id().id`). Object names and `label_object_enabled` are only in `slice_info.config`, out of reach of a front read.
+
 ---
 
 ### 2.4 Mechanical & Firmware Quirks

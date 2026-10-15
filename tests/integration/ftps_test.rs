@@ -298,6 +298,92 @@ async fn test_ftps_download_prefix_stops_early_and_ends_the_session() {
     }
 }
 
+/// Appends one `.3mf` entry as the slicers write it: flag bit 3, stored, then a signed data
+/// descriptor. CRC-32 is computed bitwise here so the test doesn't share the library's.
+fn stored_entry(out: &mut Vec<u8>, name: &str, data: &[u8]) {
+    let crc = !data.iter().fold(!0u32, |mut crc, &b| {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+        }
+        crc
+    });
+    out.extend_from_slice(b"PK\x03\x04\x14\x00\x08\x08\x00\x00");
+    out.extend_from_slice(&[0; 16]);
+    out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(name.as_bytes());
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"PK\x07\x08");
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+}
+
+/// A PNG of `pixels` IDAT bytes: signature, IDAT, IEND (chunk CRCs zeroed).
+fn test_png(pixels: &[u8]) -> Vec<u8> {
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    for (kind, data) in [(&b"IDAT"[..], pixels), (b"IEND", &[])] {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&[0; 4]);
+    }
+    out
+}
+
+/// `read_front_members` returns the members byte for byte and stops the transfer once it has
+/// them: the file's tail is never read, so the data channel ends with an RST and the session
+/// with it. A buffer too small to reach them is refused rather than returning a cut member.
+#[tokio::test]
+async fn test_ftps_read_front_members_stops_after_the_members() {
+    use bambino::ftps::project::{pick_image_member, plate_image_member};
+
+    let plate = test_png(&[7u8; 6000]);
+    let pick = test_png(&[9u8; 3000]);
+    let mut file = Vec::new();
+    stored_entry(&mut file, "Metadata/plate_1.png", &plate);
+    stored_entry(&mut file, "Metadata/pick_1.png", &pick);
+    let front_len = file.len();
+    stored_entry(&mut file, "3D/3dmodel.model", &[1u8; 64 * 1024]);
+    let (plate_name, pick_name) = (plate_image_member(1), pick_image_member(1));
+
+    for (buf_len, fits) in [(front_len + 8192, true), (front_len - 1, false)] {
+        let (client_control, server_control, data_container, factory) = setup();
+        let server_handle = tokio::spawn(mock_ftps::run_mock_server_front_members(
+            server_control,
+            data_container.clone(),
+            file.clone(),
+        ));
+        let aborted = factory.aborted.clone();
+        let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+        let mut buf = vec![0u8; buf_len];
+        let result = client
+            .read_front_members(
+                "/model/job.3mf",
+                &mut buf,
+                [plate_name.as_str(), pick_name.as_str()],
+            )
+            .await;
+        if fits {
+            let [p, k] = result.expect("members read");
+            assert_eq!(p, Some(&plate[..]));
+            assert_eq!(k, Some(&pick[..]));
+        } else {
+            assert!(
+                matches!(result, Err(Error::InvalidArgument(_))),
+                "{:?}",
+                result.map(|_| ())
+            );
+        }
+        assert_eq!(aborted.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(client.is_poisoned());
+
+        server_handle.await.expect("Mock server panicked");
+    }
+}
+
 /// A file shorter than the buffer completes like a normal `RETR`: no RST, and the session goes on.
 #[tokio::test]
 async fn test_ftps_download_prefix_of_a_short_file_keeps_the_session() {

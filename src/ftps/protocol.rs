@@ -556,26 +556,33 @@ pub(crate) async fn read_to_eof_bounded<IO: AsyncIo, T: TimerProvider>(
     Ok(())
 }
 
-/// Reads `stream` into `buf` until `buf` is full or the stream ends, returning the bytes read.
+/// Reads `stream` into `buf` until `buf` is full, the stream ends, or `done` returns `true` for the bytes read so far.
+///
+/// `done` runs after every read. Returns the bytes read and whether the stream ended (EOF) before
+/// `buf` filled or `done` stopped it: when that's `false` the rest of the stream is unread.
 ///
 /// Same per-read deadline as [`read_to_eof`]: `budget_ms` restarts before every read, so only a
 /// stall of `budget_ms` with no bytes times out.
-pub(crate) async fn read_prefix<IO: AsyncIo, T: TimerProvider>(
+pub(crate) async fn read_prefix_until<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     buf: &mut [u8],
     timer: &T,
     budget_ms: u64,
-) -> Result<usize, Error> {
+    mut done: impl FnMut(&[u8]) -> bool,
+) -> Result<(usize, bool), Error> {
     let mut filled = 0;
     while filled < buf.len() {
         let deadline_ms = ftps_deadline_from_ms(timer, budget_ms);
         match read_transfer_chunk(stream, &mut buf[filled..], timer, deadline_ms).await {
-            Ok(0) => break,
+            Ok(0) => return Ok((filled, true)),
             Ok(n) => filled += n,
             Err(e) => return Err(Error::Network(e)),
         }
+        if done(&buf[..filled]) {
+            break;
+        }
     }
-    Ok(filled)
+    Ok((filled, false))
 }
 
 /// Longest `LIST` line [`read_lines_to_eof`] passes on, in bytes, without its `\n`.
