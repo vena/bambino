@@ -16,7 +16,8 @@ use embedded_io_async::{Error as _, Write};
 
 use crate::error::Error;
 use crate::ftps::parser::{
-    CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
+    CurrentDateTime, FTP_MAX_LISTING_ENTRIES, FtpFile, FtpTimestamp, parse_listing_line,
+    parse_mdtm_timestamp,
 };
 use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector, TlsVersion};
@@ -669,13 +670,84 @@ where
     /// clocks can be years apart; see [`CurrentDateTime`] for how to recover the printer's and what
     /// passing host time instead costs. Entries whose year came from `now` are flagged with
     /// [`FtpFile::year_is_inferred`].
+    ///
+    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`](crate::ftps::parser::FTP_MAX_LISTING_ENTRIES)
+    /// entries. To place a listing's memory yourself, use
+    /// [`list_directory_each`](Self::list_directory_each), which this collects from.
     pub async fn list_directory(
         &mut self,
         remote_path: &str,
         now: impl Into<CurrentDateTime>,
     ) -> Result<Vec<FtpFile>, Error> {
+        let mut files = Vec::new();
+        let mut capped = false;
+        self.list_directory_each(remote_path, now, |file| {
+            if files.len() < FTP_MAX_LISTING_ENTRIES {
+                files.push(file);
+            } else if !capped {
+                capped = true;
+                log::warn!(
+                    "LIST payload yielded more than {FTP_MAX_LISTING_ENTRIES} entries; truncating the parsed listing"
+                );
+            }
+        })
+        .await?;
+        Ok(files)
+    }
+
+    /// Lists a directory like [`list_directory`](Self::list_directory), handing each entry to `on_entry` as its line arrives.
+    ///
+    /// Nothing is collected, so the caller decides where entries live; bambino keeps one line
+    /// buffer of at most 4 KiB. `now` is as for `list_directory`. The same per-line leniency
+    /// applies: a malformed or non-UTF-8 line skips that entry only, and so does a line over the
+    /// buffer, which no real entry reaches (a name is at most 255 bytes on ext4, 765 on FAT).
+    /// No entry cap applies; every parsed entry is delivered.
+    ///
+    /// # Errors
+    ///
+    /// As for `list_directory`. **Entries delivered before an error are not a complete
+    /// listing; discard them.** In particular a `426` final reply whose payload is empty or
+    /// doesn't end on a line terminator is [`Error::ProtocolViolation`], after the complete
+    /// lines before the cut were already delivered.
+    pub async fn list_directory_each(
+        &mut self,
+        remote_path: &str,
+        now: impl Into<CurrentDateTime>,
+        mut on_entry: impl FnMut(FtpFile),
+    ) -> Result<(), Error> {
+        let now = now.into();
+        // One undecodable filename (e.g. a Latin-1 name on a FAT microSD) must skip just that
+        // entry, not fail the whole directory — the same per-line leniency as the parser's
+        // drop-malformed-lines contract. Skipped here rather than loosening the parser to
+        // lossy `&str` conversion, which would surface U+FFFD mojibake as a real name.
+        let mut deliver = |line: &[u8]| {
+            if let Some(file) = core::str::from_utf8(line)
+                .ok()
+                .and_then(|line| parse_listing_line(line, now))
+            {
+                on_entry(file);
+            }
+        };
+
         let mut data_channel = self.open_transfer("LIST", remote_path).await?;
-        let listing_payload = self.read_transfer(&mut data_channel).await?;
+        let read = read_lines_to_eof(
+            &mut data_channel,
+            &self.timer,
+            FTPS_READ_TIMEOUT_SECS * 1000,
+            FTP_MAX_LISTING_LINE_BYTES,
+            FTPS_MAX_TRANSFER_BYTES,
+            // `str::lines` semantics: a `\r` before the `\n` is part of the terminator.
+            |line| deliver(line.strip_suffix(b"\r").unwrap_or(line)),
+        )
+        .await;
+        let read = match read {
+            Ok(read) => read,
+            Err(e) => {
+                // The final reply is still owed.
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         let code = self.finish_transfer("LIST", data_channel).await?;
 
         // `upload_file`/`download_file` each pair their 426 tolerance with an independent SIZE
@@ -688,36 +760,22 @@ where
         // ends on a line terminator. A truncation landing exactly on a line boundary still
         // passes; this narrows the window rather than closing it, which is why 426 is not
         // tolerated here as freely as on the byte-exact-verifiable transfer paths.
-        if code == FTP_TRANSFER_ABORTED
-            && (listing_payload.is_empty() || !listing_payload.ends_with(b"\n"))
-        {
+        if code == FTP_TRANSFER_ABORTED && (read.total_bytes == 0 || !read.ends_on_newline) {
             // Not poisoned: the final reply was read, so the control channel is in sync —
             // per `.claude/rules/ftps-poisoning.md`, only a transport-level failure desyncs it.
             // A 426 with zero bytes is not the close race (vsFTPd reports a genuinely empty
             // directory with `226` + zero bytes) — the data channel died before delivering
             // anything, and accepting it would silently map that failure to "empty directory".
             return Err(Error::ProtocolViolation(
-                "LIST aborted (426) with an empty or truncated payload".into(),
+                "LIST aborted (426) with an empty or truncated payload; the listing is incomplete"
+                    .into(),
             ));
         }
-
-        let now = now.into();
-        // The common case: the whole listing is valid UTF-8 and is parsed in place.
-        if let Ok(listing) = core::str::from_utf8(&listing_payload) {
-            return Ok(parse_unix_listing(listing, now));
+        // A complete transfer's unterminated last line is a real line, as `str::lines` reads it.
+        if !read.tail.is_empty() {
+            deliver(&read.tail);
         }
-        // One undecodable filename (e.g. a Latin-1 name on a FAT microSD) must skip just that
-        // entry, not fail the whole directory — the same per-line leniency as the parser's
-        // drop-malformed-lines contract. Filtered here rather than loosening the parser to
-        // lossy `&str` conversion, which would surface U+FFFD mojibake as a real name.
-        let mut listing = String::with_capacity(listing_payload.len());
-        for line in listing_payload.split(|&b| b == b'\n') {
-            if let Ok(line) = core::str::from_utf8(line) {
-                listing.push_str(line);
-                listing.push('\n');
-            }
-        }
-        Ok(parse_unix_listing(&listing, now))
+        Ok(())
     }
 
     /// Queries the exact size of a file stored on the printer's MicroSD card.

@@ -318,168 +318,11 @@ impl From<FtpTimestamp> for CurrentDateTime {
 /// (e.g., parsing a December modification date in January). In this event, we decrement the
 /// calculated year by 1.
 pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
-    let current_year = now.year;
-    let now_ts = now.as_timestamp();
     let mut files = Vec::new();
-
     for line in payload.lines() {
-        // Only the column whitespace before the permissions and the line terminator go: a
-        // trailing space can belong to the filename (#319). `lines()` already strips `\r\n`.
-        let trimmed = line.trim_start();
-        if trimmed.trim_end().is_empty() {
-            continue;
-        }
-
-        let mut rest = trimmed;
-
-        // Standard UNIX listings contain exactly 9 base columns:
-        // [0:Perms] [1:Links] [2:Owner] [3:Group] [4:Size] [5:Month] [6:Day] [7:TimeOrYear] [8+:Name]
-        let Some(perms) = take(&mut rest) else {
+        let Some(file) = parse_listing_line(line, now) else {
             continue;
         };
-        for _ in 0..3 {
-            take(&mut rest);
-        }
-        let Some(Ok(size)) = take(&mut rest).map(str::parse::<u64>) else {
-            continue;
-        };
-        let Some(month_str) = take(&mut rest) else {
-            continue;
-        };
-        let Some(day_str) = take(&mut rest) else {
-            continue;
-        };
-        let Some(time_or_year) = take(&mut rest) else {
-            continue;
-        };
-
-        // Everything following the 8th whitespace-delimited block is the filename.
-        // `rest` is a real slice into `trimmed` at this point (see `next_token`'s doc comment),
-        // so it's sliced out verbatim rather than re-tokenized and rejoined with `.join(" ")`
-        // — that used to collapse any run of multiple consecutive spaces in the real filename
-        // down to one, confirmed on real hardware (a P1S) to desync the reported name from the
-        // printer's actual on-disk name and make `delete_file`/`download_file` silently no-op
-        // (masked because `delete_file` reads a 550 for a name the listing doesn't show as
-        // "already gone") when called with the reported name. Exactly one separator character is stripped, not the
-        // whole whitespace run: vsftpd pads *inside* the fixed-width date column and emits a
-        // single space before the name (`reference/02_ftps.md`), so any further leading space
-        // — FAT keeps them — is part of the name (#319).
-        let name = rest
-            .strip_prefix(|c: char| c == ' ' || c == '\t')
-            .unwrap_or(rest);
-        if name.is_empty() {
-            continue;
-        }
-        let name = name.to_string();
-
-        // Defense in depth: reject filenames containing the same command-injection-capable
-        // control characters `validate_ftp_path` rejects on the way out. A caller might
-        // round-trip a name returned here into another FTP command
-        // (`delete_file`/`rename_file`/`download_file`) — this client can't control what
-        // characters the printer's own filesystem (or a MITM'd `LIST` response) contains.
-        //
-        // Only the control-character half applies here. The full `validate_ftp_path` also
-        // rejects `..` and a leading dash, which are properties of an unsafe *command
-        // argument*, not an unsafe *name* — running them over inbound listings made a real file
-        // named `-timelapse.mp4` vanish from `list_directory` with no error and no log.
-        if super::protocol::validate_ftp_path_bytes(&name).is_err() {
-            log::warn!("Dropping LIST entry with control characters in its name");
-            continue;
-        }
-
-        let is_dir = perms.starts_with('d');
-        let month = match parse_month(month_str) {
-            Some(m) => m,
-            None => continue,
-        };
-        let day = match day_str.parse::<u8>().ok() {
-            Some(d) if (1..=31).contains(&d) => d,
-            _ => continue,
-        };
-
-        let year_is_inferred = time_or_year.contains(':');
-        // Field contains HH:MM time layout for a recent file; a YYYY line carries no time.
-        let (hour, minute) = if year_is_inferred {
-            let mut time_parts = time_or_year.split(':');
-            let Some(parsed_hour) = time_parts.next().and_then(|h| h.parse::<u8>().ok()) else {
-                continue;
-            };
-            let Some(parsed_minute) = time_parts.next().and_then(|m| m.parse::<u8>().ok()) else {
-                continue;
-            };
-            if parsed_hour > 23 || parsed_minute > 59 {
-                continue;
-            }
-            (parsed_hour, parsed_minute)
-        } else {
-            (0, 0)
-        };
-        // The entry's timestamp in a candidate `year`; everything else is final.
-        let at = |year| FtpTimestamp {
-            year,
-            month,
-            day,
-            hour,
-            minute,
-            second: 0,
-        };
-
-        let mut year = current_year;
-        if year_is_inferred {
-            // Rollover calculation: If parsed datetime attributes exceed our current system markers,
-            // we have crossed a calendar year boundary. Drop the year parameter accordingly.
-            if at(current_year) > now_ts {
-                year = current_year - 1;
-            }
-        } else {
-            // Field contains direct YYYY calendar year representation.
-            // Sibling gap to the day/hour/minute range checks above — a parse failure
-            // must reject the line, not silently default to current_year, and a parsed value
-            // still needs a sanity range (printer filesystems don't predate 2000).
-            match time_or_year.parse::<i32>() {
-                Ok(y) if (2000..=9999).contains(&y) => year = y,
-                _ => continue,
-            }
-        }
-
-        // Sibling gap to the day range check above — validate against the
-        // actual month length (leap-year-aware, using the now-finalized `year`) so a
-        // calendar-invalid line (e.g. "Feb 30") from the untrusted printer LIST output is
-        // rejected instead of silently accepted.
-        //
-        // For the inferred-year (HH:MM) branch, an invalid day here doesn't mean the line is
-        // calendar-invalid — it can mean the rollover heuristic picked the wrong one of its two
-        // candidate years (e.g. a Feb 29 entry landing in a non-leap `current_year - 1`). Retry
-        // against the other candidate before dropping the entry.
-        if day > days_in_month(month, year) {
-            if year_is_inferred {
-                let alternate_year = if year == current_year {
-                    current_year - 1
-                } else {
-                    current_year
-                };
-                // Calendar validity alone is not enough. Retrying forward — from
-                // `current_year - 1` back to `current_year` — can only be sound if the entry
-                // still lands at or before the reference clock, which is the exact invariant
-                // the rollover comparison above enforces in the first place. Without this, a
-                // `Feb 29 10:00` line read on 2024-01-15 rolls back to the non-leap 2023,
-                // fails the day check, and is then "repaired" to 2024-02-29 — six weeks in
-                // the future. Retrying backward to `current_year - 1` moves the entry further
-                // into the past and never violates the invariant, so it needs no extra guard.
-                let alternate_is_future = at(alternate_year) > now_ts;
-                if day <= days_in_month(month, alternate_year) && !alternate_is_future {
-                    year = alternate_year;
-                } else {
-                    log::warn!(
-                        "Dropping LIST entry with no sound rollover-candidate year (calendar-invalid, or future-dated relative to the reference clock)"
-                    );
-                    continue;
-                }
-            } else {
-                continue;
-            }
-        }
-
         if files.len() >= FTP_MAX_LISTING_ENTRIES {
             log::warn!(
                 "LIST payload yielded more than {} entries; truncating the parsed listing",
@@ -487,17 +330,168 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             );
             break;
         }
+        files.push(file);
+    }
+    files
+}
 
-        files.push(FtpFile {
-            name,
-            is_dir,
-            size,
-            modified: at(year),
-            year_is_inferred,
-        });
+/// Parses one `LIST` line, without its terminator, into an entry; `None` for a blank or malformed line.
+///
+/// The per-line half of [`parse_unix_listing`], shared with
+/// [`FtpsClient::list_directory_each`](crate::ftps::FtpsClient::list_directory_each), which parses
+/// lines as they arrive instead of from a buffered payload.
+pub(crate) fn parse_listing_line(line: &str, now: CurrentDateTime) -> Option<FtpFile> {
+    let current_year = now.year;
+    let now_ts = now.as_timestamp();
+    // Only the column whitespace before the permissions and the line terminator go: a
+    // trailing space can belong to the filename (#319). The caller strips the terminator.
+    let trimmed = line.trim_start();
+    if trimmed.trim_end().is_empty() {
+        return None;
     }
 
-    files
+    let mut rest = trimmed;
+
+    // Standard UNIX listings contain exactly 9 base columns:
+    // [0:Perms] [1:Links] [2:Owner] [3:Group] [4:Size] [5:Month] [6:Day] [7:TimeOrYear] [8+:Name]
+    let perms = take(&mut rest)?;
+    for _ in 0..3 {
+        take(&mut rest);
+    }
+    let Some(Ok(size)) = take(&mut rest).map(str::parse::<u64>) else {
+        return None;
+    };
+    let month_str = take(&mut rest)?;
+    let day_str = take(&mut rest)?;
+    let time_or_year = take(&mut rest)?;
+
+    // Everything following the 8th whitespace-delimited block is the filename.
+    // `rest` is a real slice into `trimmed` at this point (see `next_token`'s doc comment),
+    // so it's sliced out verbatim rather than re-tokenized and rejoined with `.join(" ")`
+    // — that used to collapse any run of multiple consecutive spaces in the real filename
+    // down to one, confirmed on real hardware (a P1S) to desync the reported name from the
+    // printer's actual on-disk name and make `delete_file`/`download_file` silently no-op
+    // (masked because `delete_file` reads a 550 for a name the listing doesn't show as
+    // "already gone") when called with the reported name. Exactly one separator character is stripped, not the
+    // whole whitespace run: vsftpd pads *inside* the fixed-width date column and emits a
+    // single space before the name (`reference/02_ftps.md`), so any further leading space
+    // — FAT keeps them — is part of the name (#319).
+    let name = rest
+        .strip_prefix(|c: char| c == ' ' || c == '\t')
+        .unwrap_or(rest);
+    if name.is_empty() {
+        return None;
+    }
+    let name = name.to_string();
+
+    // Defense in depth: reject filenames containing the same command-injection-capable
+    // control characters `validate_ftp_path` rejects on the way out. A caller might
+    // round-trip a name returned here into another FTP command
+    // (`delete_file`/`rename_file`/`download_file`) — this client can't control what
+    // characters the printer's own filesystem (or a MITM'd `LIST` response) contains.
+    //
+    // Only the control-character half applies here. The full `validate_ftp_path` also
+    // rejects `..` and a leading dash, which are properties of an unsafe *command
+    // argument*, not an unsafe *name* — running them over inbound listings made a real file
+    // named `-timelapse.mp4` vanish from `list_directory` with no error and no log.
+    if super::protocol::validate_ftp_path_bytes(&name).is_err() {
+        log::warn!("Dropping LIST entry with control characters in its name");
+        return None;
+    }
+
+    let is_dir = perms.starts_with('d');
+    let month = parse_month(month_str)?;
+    let day = match day_str.parse::<u8>().ok() {
+        Some(d) if (1..=31).contains(&d) => d,
+        _ => return None,
+    };
+
+    let year_is_inferred = time_or_year.contains(':');
+    // Field contains HH:MM time layout for a recent file; a YYYY line carries no time.
+    let (hour, minute) = if year_is_inferred {
+        let mut time_parts = time_or_year.split(':');
+        let parsed_hour = time_parts.next().and_then(|h| h.parse::<u8>().ok())?;
+        let parsed_minute = time_parts.next().and_then(|m| m.parse::<u8>().ok())?;
+        if parsed_hour > 23 || parsed_minute > 59 {
+            return None;
+        }
+        (parsed_hour, parsed_minute)
+    } else {
+        (0, 0)
+    };
+    // The entry's timestamp in a candidate `year`; everything else is final.
+    let at = |year| FtpTimestamp {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second: 0,
+    };
+
+    let mut year = current_year;
+    if year_is_inferred {
+        // Rollover calculation: If parsed datetime attributes exceed our current system markers,
+        // we have crossed a calendar year boundary. Drop the year parameter accordingly.
+        if at(current_year) > now_ts {
+            year = current_year - 1;
+        }
+    } else {
+        // Field contains direct YYYY calendar year representation.
+        // Sibling gap to the day/hour/minute range checks above — a parse failure
+        // must reject the line, not silently default to current_year, and a parsed value
+        // still needs a sanity range (printer filesystems don't predate 2000).
+        match time_or_year.parse::<i32>() {
+            Ok(y) if (2000..=9999).contains(&y) => year = y,
+            _ => return None,
+        }
+    }
+
+    // Sibling gap to the day range check above — validate against the
+    // actual month length (leap-year-aware, using the now-finalized `year`) so a
+    // calendar-invalid line (e.g. "Feb 30") from the untrusted printer LIST output is
+    // rejected instead of silently accepted.
+    //
+    // For the inferred-year (HH:MM) branch, an invalid day here doesn't mean the line is
+    // calendar-invalid — it can mean the rollover heuristic picked the wrong one of its two
+    // candidate years (e.g. a Feb 29 entry landing in a non-leap `current_year - 1`). Retry
+    // against the other candidate before dropping the entry.
+    if day > days_in_month(month, year) {
+        if year_is_inferred {
+            let alternate_year = if year == current_year {
+                current_year - 1
+            } else {
+                current_year
+            };
+            // Calendar validity alone is not enough. Retrying forward — from
+            // `current_year - 1` back to `current_year` — can only be sound if the entry
+            // still lands at or before the reference clock, which is the exact invariant
+            // the rollover comparison above enforces in the first place. Without this, a
+            // `Feb 29 10:00` line read on 2024-01-15 rolls back to the non-leap 2023,
+            // fails the day check, and is then "repaired" to 2024-02-29 — six weeks in
+            // the future. Retrying backward to `current_year - 1` moves the entry further
+            // into the past and never violates the invariant, so it needs no extra guard.
+            let alternate_is_future = at(alternate_year) > now_ts;
+            if day <= days_in_month(month, alternate_year) && !alternate_is_future {
+                year = alternate_year;
+            } else {
+                log::warn!(
+                    "Dropping LIST entry with no sound rollover-candidate year (calendar-invalid, or future-dated relative to the reference clock)"
+                );
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+
+    Some(FtpFile {
+        name,
+        is_dir,
+        size,
+        modified: at(year),
+        year_is_inferred,
+    })
 }
 
 #[cfg(test)]

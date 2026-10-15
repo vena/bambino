@@ -578,6 +578,94 @@ pub(crate) async fn read_prefix<IO: AsyncIo, T: TimerProvider>(
     Ok(filled)
 }
 
+/// Longest `LIST` line [`read_lines_to_eof`] passes on, in bytes, without its `\n`.
+///
+/// A real line is the fixed columns (~60 bytes) plus a name of at most 255 bytes on ext4, or 255
+/// UTF-16 units (at most 765 UTF-8 bytes) on FAT, so this leaves wide room. It bounds the only
+/// buffer `list_directory_each` keeps: a longer line can't be a real entry and is skipped.
+pub(crate) const FTP_MAX_LISTING_LINE_BYTES: usize = 4096;
+
+/// What [`read_lines_to_eof`] saw besides the complete lines it handed over.
+pub(crate) struct LinesRead {
+    /// Total payload bytes read.
+    pub(crate) total_bytes: usize,
+    /// Whether the payload's last byte was `\n`: `LIST`'s one integrity signal on a `426`.
+    pub(crate) ends_on_newline: bool,
+    /// The final line when the payload didn't end on `\n`, otherwise empty.
+    ///
+    /// Held back rather than passed to `on_line`, because whether it is a complete line or a
+    /// truncated one depends on the transfer's final reply, which comes after EOF.
+    pub(crate) tail: Vec<u8>,
+}
+
+/// Reads `stream` to EOF, handing each `\n`-terminated line (without the `\n`) to `on_line` as it arrives.
+///
+/// Keeps one line buffer, at most `max_line_bytes`; a longer line is logged and skipped whole,
+/// never passed on truncated. `max_bytes` caps the total like [`read_to_eof_bounded`]'s, and the
+/// per-read deadline is [`read_to_eof`]'s.
+pub(crate) async fn read_lines_to_eof<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    timer: &T,
+    budget_ms: u64,
+    max_line_bytes: usize,
+    max_bytes: usize,
+    mut on_line: impl FnMut(&[u8]),
+) -> Result<LinesRead, Error> {
+    let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
+    let mut line = Vec::new();
+    // Set once the current line passed `max_line_bytes`; its bytes are dropped up to its `\n`.
+    let mut overlong = false;
+    let mut total_bytes = 0usize;
+    let mut last_byte = None;
+    loop {
+        let deadline_ms = ftps_deadline_from_ms(timer, budget_ms);
+        let n = match read_transfer_chunk(stream, &mut chunk, timer, deadline_ms).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => return Err(Error::Network(e)),
+        };
+        total_bytes += n;
+        if total_bytes > max_bytes {
+            return Err(Error::ProtocolViolation(
+                "FTPS transfer exceeds maximum accepted size".into(),
+            ));
+        }
+        last_byte = Some(chunk[n - 1]);
+
+        let mut rest = &chunk[..n];
+        while let Some(pos) = rest.iter().position(|&b| b == b'\n') {
+            let head = &rest[..pos];
+            if overlong {
+                // Already logged when it crossed the limit.
+            } else if line.len() + head.len() > max_line_bytes {
+                log::warn!("Skipping a LIST line longer than {max_line_bytes} bytes");
+            } else if line.is_empty() {
+                on_line(head);
+            } else {
+                line.extend_from_slice(head);
+                on_line(&line);
+            }
+            line.clear();
+            overlong = false;
+            rest = &rest[pos + 1..];
+        }
+        if !overlong {
+            if line.len() + rest.len() > max_line_bytes {
+                log::warn!("Skipping a LIST line longer than {max_line_bytes} bytes");
+                overlong = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(rest);
+            }
+        }
+    }
+    Ok(LinesRead {
+        total_bytes,
+        ends_on_newline: last_byte == Some(b'\n'),
+        tail: line,
+    })
+}
+
 #[cfg(test)]
 mod tests;
 

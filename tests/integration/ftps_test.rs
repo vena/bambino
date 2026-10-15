@@ -804,6 +804,59 @@ async fn test_ftps_list_directory_skips_non_utf8_line() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// Runs `list_directory_each` against one mock server, returning what the sink got and the result.
+async fn list_each_with<F>(
+    server: impl FnOnce(tokio::io::DuplexStream, DataContainer) -> F,
+) -> (Vec<bambino::ftps::FtpFile>, Result<(), Error>)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(server(server_control, data_container.clone()));
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+    let mut entries = Vec::new();
+    let result = client
+        .list_directory_each("/model", REF_NOW, |entry| entries.push(entry))
+        .await;
+    server_handle.await.expect("Mock server panicked");
+    (entries, result)
+}
+
+/// The sink sees exactly what `list_directory` returns, including the per-line non-UTF-8 skip.
+#[tokio::test]
+async fn test_ftps_list_directory_each_matches_list_directory() {
+    let (entries, result) = list_each_with(mock_ftps::run_mock_server_list_non_utf8_line).await;
+    result.expect("LIST with one non-UTF-8 line should still succeed");
+    let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["job.3mf"]);
+    assert_eq!(entries[0].size, 102400);
+
+    let (entries, result) = list_each_with(mock_ftps::run_mock_server_list_426_recovery).await;
+    result.expect("LIST should tolerate 426 confirmation");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "job.3mf");
+}
+
+/// A 426 cut mid-line still errors; the entry before the cut was already delivered, which is
+/// why the doc tells the caller to discard everything on error.
+#[tokio::test]
+async fn test_ftps_list_directory_each_426_truncated_errors_after_delivering() {
+    let (entries, result) = list_each_with(mock_ftps::run_mock_server_list_426_truncated).await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "got {result:?}"
+    );
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "job.3mf");
+
+    let (entries, result) = list_each_with(mock_ftps::run_mock_server_list_426_empty).await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "got {result:?}"
+    );
+    assert!(entries.is_empty());
+}
+
 #[tokio::test]
 async fn test_ftps_upload_426_recovery_via_size() {
     let (client_control, server_control, data_container, factory) = setup();

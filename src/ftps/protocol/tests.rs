@@ -191,6 +191,81 @@ async fn test_read_prefix_keeps_the_bytes_of_a_chunk_that_overfills() {
     assert_eq!(&rest[..m], b"6789");
 }
 
+/// Collects `read_lines_to_eof`'s lines and result for one stream.
+async fn lines_of(chunks: &[&[u8]], max_line: usize) -> (Vec<Vec<u8>>, LinesRead) {
+    let mut stream = MockIo::with_chunks(chunks);
+    let mut lines = Vec::new();
+    let read = read_lines_to_eof(
+        &mut stream,
+        &DummyTimer,
+        30_000,
+        max_line,
+        usize::MAX,
+        |l| lines.push(l.to_vec()),
+    )
+    .await
+    .expect("line read");
+    (lines, read)
+}
+
+#[tokio::test]
+async fn test_read_lines_to_eof_joins_lines_across_chunks() {
+    let (lines, read) = lines_of(&[b"ab", b"c\nde", b"f\n\ng"], 64).await;
+    assert_eq!(lines, [&b"abc"[..], b"def", b""]);
+    assert_eq!(read.tail, b"g");
+    assert!(!read.ends_on_newline);
+    assert_eq!(read.total_bytes, 10);
+}
+
+#[tokio::test]
+async fn test_read_lines_to_eof_reports_a_terminated_payload() {
+    let (lines, read) = lines_of(&[b"a\r\n", b"b\n"], 64).await;
+    // The `\r` is the caller's to strip: only `\n` frames a line here.
+    assert_eq!(lines, [&b"a\r"[..], b"b"]);
+    assert!(read.tail.is_empty());
+    assert!(read.ends_on_newline);
+}
+
+#[tokio::test]
+async fn test_read_lines_to_eof_skips_overlong_lines_whole() {
+    // Over the limit within one chunk, across chunks, and as the unterminated tail: each is
+    // dropped entirely, never passed on cut short, and the lines around them survive.
+    let (lines, read) = lines_of(
+        &[
+            b"ok1\n0123456789\nok",
+            b"2\n01234",
+            b"56789\nok3\n",
+            b"0123456789",
+        ],
+        8,
+    )
+    .await;
+    assert_eq!(lines, [&b"ok1"[..], b"ok2", b"ok3"]);
+    assert!(read.tail.is_empty());
+    assert!(!read.ends_on_newline);
+}
+
+#[tokio::test]
+async fn test_read_lines_to_eof_accepts_a_line_at_the_limit() {
+    let (lines, _) = lines_of(&[b"0123", b"4567\n"], 8).await;
+    assert_eq!(lines, [&b"01234567"[..]]);
+}
+
+#[tokio::test]
+async fn test_read_lines_to_eof_rejects_oversized_transfer() {
+    let mut stream = MockIo::infinite();
+    let result = read_lines_to_eof(
+        &mut stream,
+        &DummyTimer,
+        30_000,
+        FTP_MAX_LISTING_LINE_BYTES,
+        FTPS_DATA_READ_BUF_SIZE * 4,
+        |_| {},
+    )
+    .await;
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+}
+
 #[tokio::test]
 async fn test_write_command_sends_single_write_call() {
     // Regression test: write_command must send "cmd\r\n" as one write_all call, not two
