@@ -190,6 +190,16 @@ Upon reaching EOF on the data socket, the client must close the data channel and
 226 Transfer complete.\r\n
 ```
 
+##### Reading Only the Start of a File [REF-FTPS-PARTIAL]
+The server offers no partial download. Measured on a P1S (2026-10-14/15, GitHub issue #629):
+
+*   **`REST` is not implemented.** `REST <offset>` after `PASV` is answered with a bare `502`, so a download cannot start mid-file. No upstream sends it either (bambuddy `bambu_ftp.py` and ha-bambulab `bambu_client.py` only pass ftplib's default `rest=None`).
+*   **`ABOR` is not implemented.** `ABOR` during a `RETR` is answered `502`, and the transfer runs on to the end of the file and its `226`.
+*   **A FIN on the data channel is ignored.** After the client half-closes the data connection, the server still sends the rest of the file (1.94 MB, ~8 s, on a 1.96 MB file), then closes its side and replies `226`; the control session stays usable.
+*   **An RST stops the transfer at once,** and the server then closes the control connection without a reply (no `426`). Port 990 accepted new sessions immediately afterwards and at +30 s and +130 s, across runs of six back-to-back early stops from macOS, an ESP-IDF ESP32-C6 and an embassy ESP32-C6, on files of 1.96 MB and 47 MB.
+
+So the only partial read is `RETR` from byte 0, stopped by resetting the data connection, after which the FTPS session is over and the client must log in again. `FtpsClient::download_prefix` implements exactly that.
+
 ---
 
 ### 2.4 Mechanical & Firmware Quirks
