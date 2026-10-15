@@ -24,11 +24,45 @@ follows). It never inflates. See `reference/02_ftps.md` [REF-FTPS-3MF-FRONT].
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`JobPrefix`](#jobprefix) | struct | The start of a job's `.3mf` and the plates it holds G-code for, from [`FtpsClient::read_job_prefix`](../index.md). |
 | [`front_members`](#front-members) | fn | Finds the members named in `names` in `prefix`, the first bytes of a `.3mf`, returning each one's bytes or `None`. |
+| [`gcode_plates`](#gcode-plates) | fn | Returns the plates whose G-code a `.3mf` holds, read from the start of the file, in archive order. |
 | [`pick_identify_id`](#pick-identify-id) | fn | Decodes one pick-image pixel, given as `[r, g, b, a]`, into the `identify_id` of the object it belongs to. |
 | [`pick_image_member`](#pick-image-member) | fn | Name of plate `plate`'s pick image: `Metadata/pick_<plate>.png`. |
 | [`plate_image_member`](#plate-image-member) | fn | Name of plate `plate`'s image inside the `.3mf`: `Metadata/plate_<plate>.png`. |
 | [`plate_small_image_member`](#plate-small-image-member) | fn | Name of plate `plate`'s 128×128 thumbnail: `Metadata/plate_<plate>_small.png`. |
+
+## Types
+
+### `JobPrefix<'a>`
+
+```rust
+struct JobPrefix<'a> {
+    pub bytes: &'a [u8],
+    pub gcode_plates: Vec<u32>,
+}
+```
+
+The start of a job's `.3mf` and the plates it holds G-code for, from [`FtpsClient::read_job_prefix`](../index.md).
+
+#### Fields
+
+- **`bytes`**: `&'a [u8]`
+
+  The bytes read, from offset 0. Pass them to [`front_members`](#front-members) for plate images.
+
+- **`gcode_plates`**: `Vec<u32>`
+
+  What [`gcode_plates`](#gcode-plates) returns for these bytes.
+
+#### Trait Implementations
+
+##### `impl Debug for JobPrefix<'a>`
+
+- <span id="jobprefix-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+
+---
 
 ## Functions
 
@@ -58,6 +92,32 @@ of the last of them.
 - [`Error::ProtocolViolation`](../../error/index.md#error) when the bytes aren't the layout described in the module
   doc: not a ZIP, an encrypted entry, an entry whose end can't be found without inflating
   it, a descriptor that disagrees with the data, or a requested member that is compressed.
+
+### `gcode_plates`
+
+```rust
+fn gcode_plates(prefix: &[u8]) -> Result<Vec<u32>, crate::error::Error>
+```
+
+**Types:** [`Error`](../../error/index.md#error)
+
+Returns the plates whose G-code a `.3mf` holds, read from the start of the file, in archive order.
+
+Both slicers' exporters (`_BBS_3MF_Exporter::_save_model_to_file`) write one
+`Metadata/plate_<N>.gcode.md5` for every plate with G-code, all in one loop and before the
+first `Metadata/plate_<N>.gcode`. A file sent to a printer stores no meshes
+(`SaveStrategy::SkipModel`), so that list sits just past the front section: within the first
+30–55 KB on the files measured (`reference/02_ftps.md` [REF-FTPS-3MF-FRONT]). The printer can
+only print G-code the file holds, so when this returns exactly one plate, that is the plate
+being printed. Several mean the file alone can't say which.
+
+The walk ends at the first plate's G-code member, or at the central directory.
+
+# Errors
+
+As [`front_members`](#front-members): [`Error::InvalidArgument`](../../error/index.md#error) when `prefix` ends before the list does,
+[`Error::ProtocolViolation`](../../error/index.md#error) for a file the walk can't follow, such as one that stores its
+meshes uncompressed before the list.
 
 ### `pick_identify_id`
 

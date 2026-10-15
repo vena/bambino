@@ -251,6 +251,23 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
     its front section.
   - Anything [`download_prefix`](client/index.md#ftpsclient) returns.
 
+- <span id="ftpsclient-read-job-prefix"></span>`async fn read_job_prefix<'b>(&mut self, remote_path: &str, buf: &'b mut [u8]) -> Result<JobPrefix<'b>, Error>` — [`JobPrefix`](project/index.md#jobprefix), [`Error`](../error/index.md#error)
+
+  Reads the start of a remote `.3mf` into `buf` until its list of plate G-code is complete, returning the bytes and the list.
+
+  The list is [`gcode_plates`](project/index.md#gcode-plates)': exactly one plate
+  there is the plate being printed. Every plate image comes before the list, so
+  [`front_members`](project/index.md#front-members) over the returned bytes yields any
+  plate's images with no second read. About 30–55 KB on the files measured.
+
+  **This usually ends the session**, like [`download_prefix`](client/index.md#ftpsclient).
+
+  # Errors
+
+  As [`read_front_members`](client/index.md#ftpsclient): [`Error::InvalidArgument`](../error/index.md#error) for an
+  empty `buf` or one too small to reach the end of the list, and
+  [`Error::ProtocolViolation`](../error/index.md#error) for a file the walk can't follow or one that ends inside it.
+
 - <span id="ftpsclient-create-directory"></span>`async fn create_directory(&mut self, path: &str) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Creates a directory on the printer's MicroSD storage.

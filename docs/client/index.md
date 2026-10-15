@@ -805,6 +805,79 @@ client
 
 #### Trait Implementations
 
+### `JobImages<'b>`
+
+```rust
+struct JobImages<'b> {
+    pub plate: Option<JobPlate>,
+    pub plate_image: Option<&'b [u8]>,
+    pub pick_image: Option<&'b [u8]>,
+}
+```
+
+A running job's plate and its images, from [`PrinterClient::read_job_images`](#printerclient).
+
+#### Fields
+
+- **`plate`**: `Option<JobPlate>`
+
+  The plate the images belong to; `None` when no source could tell, and then both images
+  are `None` too.
+
+- **`plate_image`**: `Option<&'b [u8]>`
+
+  `Metadata/plate_<N>.png`, or `None` when the file has none for this plate.
+
+- **`pick_image`**: `Option<&'b [u8]>`
+
+  `Metadata/pick_<N>.png`, or `None` when the file has none for this plate. Decode its
+  pixels with [`pick_identify_id`](../ftps/project/index.md#pick-identify-id).
+
+#### Trait Implementations
+
+##### `impl Debug for JobImages<'b>`
+
+- <span id="jobimages-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+### `JobPlate`
+
+```rust
+struct JobPlate {
+    pub plate: u32,
+    pub source: PlateSource,
+}
+```
+
+A running job's plate number and the source that gave it.
+
+#### Fields
+
+- **`plate`**: `u32`
+
+  The 1-based plate number, as the `.3mf`'s `Metadata/plate_<N>.png` names it.
+
+- **`source`**: `PlateSource`
+
+  Which link of the chain answered.
+
+#### Trait Implementations
+
+##### `impl Clone for JobPlate`
+
+- <span id="jobplate-clone"></span>`fn clone(&self) -> JobPlate` — [`JobPlate`](#jobplate)
+
+##### `impl Copy for JobPlate`
+
+##### `impl Debug for JobPlate`
+
+- <span id="jobplate-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for JobPlate`
+
+##### `impl PartialEq for JobPlate`
+
+- <span id="jobplate-partialeq-eq"></span>`fn eq(&self, other: &JobPlate) -> bool` — [`JobPlate`](#jobplate)
+
 ### `PreheatHandles`
 
 ```rust
@@ -1429,6 +1502,38 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
 
   Supported on models with a physical fire alarm buzzer (H2 series).
+
+- <span id="superprinterclient-job-plate"></span>`fn job_plate(&self) -> Option<JobPlate>` — [`JobPlate`](#jobplate)
+
+  Returns the running job's plate from the sources that need no file read, or `None` when none of them knows it.
+
+  Reads cached telemetry only. `None` is common on P1/A1 for a print started before this
+  client connected; [`read_job_images`](#printerclient) then falls back to the
+  job's file. See the module doc for the chain.
+
+- <span id="superprinterclient-read-job-images"></span>`async fn read_job_images<'b>(&mut self, remote_path: &str, buf: &'b mut [u8]) -> Result<JobImages<'b>, Error>` — [`JobImages`](#jobimages), [`Error`](../error/index.md#error)
+
+  Reads the running job's plate and pick images from the start of its `.3mf` at `remote_path`, into `buf`.
+
+  The plate comes from [`job_plate`](#printerclient) when it knows, and otherwise from the
+  file itself, in the same read: a file holding G-code for exactly one plate names it.
+  With no answer from either, the result's `plate` and both images are `None`: the images
+  of a guessed plate would look right and be wrong.
+
+  `remote_path` is the job's file on the printer's storage. For a print sent over LAN to a
+  P1S it was `/` followed by `gcode_file` (`reference/02_ftps.md`); mapping a job to its
+  file in general is GitHub issue #630.
+
+  One FTPS read, which usually ends the session: see
+  [`FtpsClient::download_prefix`](../ftps/index.md). `buf` needs room
+  for the file's front section and, when the plate isn't known beforehand, its list of
+  plate G-code after it: about 30–55 KB on the files measured.
+
+  # Errors
+
+  As [`FtpsClient::read_front_members`](../ftps/index.md) and
+  [`FtpsClient::read_job_prefix`](../ftps/index.md), plus whatever
+  connecting FTPS returns.
 
 - <span id="superprinterclient-is-axis-homed"></span>`fn is_axis_homed(&self, axis: Axis) -> Option<bool>` — [`Axis`](../quirks/index.md#axis)
 
@@ -3699,6 +3804,50 @@ The terminal outcome of one published command.
 ##### `impl PartialEq for CommandOutcome`
 
 - <span id="commandoutcome-partialeq-eq"></span>`fn eq(&self, other: &CommandOutcome) -> bool` — [`CommandOutcome`](command/index.md#commandoutcome)
+
+### `PlateSource`
+
+```rust
+enum PlateSource {
+    Telemetry,
+    StartCommand,
+    ProjectFile,
+}
+```
+
+Where a running job's plate number came from; see the module doc for the chain.
+
+#### Variants
+
+- **`Telemetry`**
+
+  Telemetry's `plate_idx`.
+
+- **`StartCommand`**
+
+  The `param` of the `project_file` start command the printer echoed for this job.
+
+- **`ProjectFile`**
+
+  The job's `.3mf`, which holds G-code for this plate only.
+
+#### Trait Implementations
+
+##### `impl Clone for PlateSource`
+
+- <span id="platesource-clone"></span>`fn clone(&self) -> PlateSource` — [`PlateSource`](#platesource)
+
+##### `impl Copy for PlateSource`
+
+##### `impl Debug for PlateSource`
+
+- <span id="platesource-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PlateSource`
+
+##### `impl PartialEq for PlateSource`
+
+- <span id="platesource-partialeq-eq"></span>`fn eq(&self, other: &PlateSource) -> bool` — [`PlateSource`](#platesource)
 
 ### `TelemetryEvent`
 
