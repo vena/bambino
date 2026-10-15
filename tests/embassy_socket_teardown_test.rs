@@ -5,7 +5,9 @@
 //! cannot do that, and the compiler cannot catch an embassy-net change that brings it back, so
 //! this test watches the wire instead: two real embassy-net stacks joined by an in-memory
 //! Ethernet link, one dialing the other through bambino's `EmbassyRawStreamFactory`, and the
-//! listening side checking that it sees the dial's FIN once the stream is dropped.
+//! listening side checking that it sees the dial's FIN once the stream is dropped. The one
+//! exception, a stream marked with `abort_on_drop` (an early-stopped download, #629), must reach
+//! the peer as an RST instead, and its socket must be free again at once.
 //!
 //! **Why this runs on the host.** `embassy-net` needs only a `Driver` and a time source.
 //! `InMemoryLink` below is the driver; `embassy-time`'s `std` feature (a dev-dependency)

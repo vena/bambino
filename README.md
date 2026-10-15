@@ -320,6 +320,8 @@ let data = ftp.download_file("/timelapse/video.mp4").await?;
 let free = ftp.get_available_space().await?;
 ```
 
+> **Reading only the start of a file:** `ftp.download_prefix(path, &mut buf)` fills `buf` from the start of the file and stops the transfer, so a few tens of KB of a large file (a `.3mf`'s plate images, say) never cost the whole download. Stopping early ends the FTPS session, and the next `ftps()` call reconnects. The printer has no other partial read: see [REF-FTPS-PARTIAL] in `reference/02_ftps.md`.
+>
 > **Direct protocol access:** For cases where `PrinterClient` isn't needed, `FtpsClient::connect()` provides standalone FTPS access; see the [`ftps`](src/ftps/) module.
 >
 > **Timestamps:** file dates from a LAN-mode printer are unreliable; see [Timestamps on LAN-mode printers](#timestamps-on-lan-mode-printers) below.
@@ -687,7 +689,7 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   gcode-raw prompts for interactive confirmation unless --unsafe is
                   passed, and bypasses all model safety checks; see its --help.
                   ams (dry | dry-stop)
-Files actions:    list  upload  download  delete  space  clock-check
+Files actions:    list  upload  download  head  delete  space  clock-check
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
 Ack-probe:        -o/--output  -t/--tests  --window

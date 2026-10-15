@@ -83,7 +83,9 @@ impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
 /// `150`/`125` "opening data connection" reply and the matching final reply, since that's the
 /// widest such window; now on every `write_command`/`read_response` failure in every method,
 /// including the single-reply metadata/filesystem commands); every public method checks the
-/// flag first and returns [`Error::ProtocolViolation`] immediately if set. A poisoned client
+/// flag first and returns [`Error::ProtocolViolation`] immediately if set.
+/// [`download_prefix`](Self::download_prefix) also sets it on purpose when it stops a transfer
+/// early, because the printer then closes the control connection. A poisoned client
 /// must be replaced: [`disconnect`](Self::disconnect) returns its parts for a fresh
 /// [`FtpsClient::connect`], and `PrinterClient::ftps()` does that by itself.
 ///
@@ -867,11 +869,11 @@ where
     /// **A full `buf` ends this session.** The printer has no `REST` or `ABOR` (both `502` on a
     /// P1S) and answers a FIN on the data channel by sending the rest of the file; only an RST
     /// stops it, after which it closes the control connection too (GitHub issue #629). So once
-    /// `buf` is full the data channel ends with an RST
-    /// ([`RawStreamFactory::abort_on_drop`]), no
-    /// further command is sent, and the client is left poisoned ([`is_poisoned`](Self::is_poisoned)):
-    /// every later call fails, and `PrinterClient::ftps()` reconnects. This holds for a file of
-    /// exactly `buf.len()` bytes too, since its end can't be seen without reading past it.
+    /// `buf` is full the data channel ends with an RST ([`RawStreamFactory::abort_on_drop`]), no
+    /// further command is sent, and the client is left poisoned
+    /// ([`is_poisoned`](Self::is_poisoned)): every later call fails, and `PrinterClient::ftps()`
+    /// reconnects. This holds for a file of exactly `buf.len()` bytes too, since its end can't be
+    /// seen without reading past it.
     ///
     /// When the file ends before `buf` is full, the transfer completes normally (`226`, or the
     /// `426` [`download_file`](Self::download_file) also accepts) and the session stays usable.

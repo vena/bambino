@@ -1078,6 +1078,43 @@ async fn test_ftps_closes_tls_sessions_on_teardown() {
     server_handle.abort();
 }
 
+/// An early-stopped `download_prefix` still closes the data channel's TLS session before the RST
+/// (`.claude/rules/tls-session-teardown.md`), and a disconnect of the spent client then closes
+/// nothing more: the printer has already closed the control connection.
+#[tokio::test]
+async fn test_ftps_download_prefix_closes_the_data_session_before_aborting() {
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_download_prefix(
+        server_control,
+        data_container.clone(),
+        true,
+    ));
+
+    let (connector, closes) = CloseCountingTlsConnector::new();
+    let mut client =
+        connect_client_with(client_control, connector, factory, PrinterModel::P1S).await;
+
+    let mut buf = [0u8; 8];
+    client
+        .download_prefix("/model/job.3mf", &mut buf)
+        .await
+        .expect("prefix read failed");
+    assert_eq!(
+        closes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "an early stop must close the data channel's TLS session"
+    );
+
+    client.disconnect().await;
+    assert_eq!(
+        closes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a spent client's disconnect must not write to the closed control connection"
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 #[tokio::test]
 async fn test_ftps_tls13_rejected_for_p2s() {
     let (client_control, _server_control, _, factory) = setup();
