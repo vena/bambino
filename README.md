@@ -727,7 +727,7 @@ Full API reference is generated straight from doc comments into [`docs/`](docs/i
 
 ### Protocol spec
 
-[`reference/`](reference/README.md) is the reverse-engineered spec this library implements against: seven chapters (network/discovery, FTPS, MQTT/telemetry, thermal/motion, AMS, cameras, diagnostics/HMS), cross-referencing wire captures and prior open-source work in lieu of any official documentation from Bambu Lab. Individual claims are tagged with stable IDs like `[REF-MOTO-GCODE]` or `[REF-AMS-MAP]` so code comments can point at the exact section backing a decision. Start at `reference/README.md` for the chapter map and terminology glossary. Worth a read if you're debugging a firmware quirk this library doesn't already model, or just want to know why a given field is shaped the way it is.
+[`reference/`](reference/README.md) is the reverse-engineered spec this library implements against: eight chapters (network/discovery, FTPS, MQTT/telemetry, thermal/motion, AMS, cameras, diagnostics/HMS, port-6000 file service), cross-referencing wire captures and prior open-source work in lieu of any official documentation from Bambu Lab. Individual claims are tagged with stable IDs like `[REF-MOTO-GCODE]` or `[REF-AMS-MAP]` so code comments can point at the exact section backing a decision. Start at `reference/README.md` for the chapter map and terminology glossary. Worth a read if you're debugging a firmware quirk this library doesn't already model, or just want to know why a given field is shaped the way it is.
 
 The spec is original work, derived from wire captures against printers we own and from publicly available sources: the open-source projects listed under [Acknowledgements](#acknowledgements), Bambu Lab's public wiki and product pages, and observed firmware behaviour. It documents protocol facts for interoperability; it contains no Bambu Lab source code, firmware, or confidential material.
 
@@ -739,6 +739,7 @@ The [protocol spec](reference/README.md) and this library would not have been po
 - [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer/)
 - [Bambuddy](https://github.com/maziggy/bambuddy/)
 - [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
+- [open-bamboo-networking](https://github.com/ClusterM/open-bamboo-networking/)
 - [bambu-printer-manager](https://github.com/synman/bambu-printer-manager/)
 - [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
 - [SpoolEase](https://github.com/yanshay/spoolease) - Not directly referenced for this project, but they deserve a special shout-out for many reasons.
