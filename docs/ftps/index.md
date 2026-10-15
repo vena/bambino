@@ -98,8 +98,22 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   passing host time instead costs. Entries whose year came from `now` are flagged with
   [`FtpFile::year_is_inferred`](parser/index.md#ftpfile).
 
-  Returns at most [`FTP_MAX_LISTING_ENTRIES`](parser/index.md#ftp-max-listing-entries) entries. To place a listing's memory yourself,
-  use [`list_directory_each`](client/index.md#ftpsclient), which this collects from.
+  Returns at most [`FTP_MAX_LISTING_ENTRIES`](parser/index.md#ftp-max-listing-entries) entries. To reuse a vector's capacity across
+  listings, use [`list_directory_into`](client/index.md#ftpsclient); to place a listing's
+  memory yourself, use [`list_directory_each`](client/index.md#ftpsclient).
+
+- <span id="ftpsclient-list-directory-into"></span>`async fn list_directory_into(&mut self, remote_path: &str, now: impl Into<CurrentDateTime>, files: &mut Vec<FtpFile>) -> Result<(), Error>` — [`CurrentDateTime`](parser/index.md#currentdatetime), [`FtpFile`](parser/index.md#ftpfile), [`Error`](../error/index.md#error)
+
+  Lists a directory like [`list_directory`](client/index.md#ftpsclient), into `files`, which is cleared first.
+
+  Keeps `files`' capacity, so polling a directory with one vector stops reallocating once it
+  has grown to the listing's size. That saves allocations, not placement: the vector and each
+  entry's `name` still come from the global allocator. Use
+  [`list_directory_each`](client/index.md#ftpsclient) to decide where entries live.
+
+  # Errors
+
+  As for `list_directory`. On error `files` is left empty, never holding part of a listing.
 
 - <span id="ftpsclient-list-directory-each"></span>`async fn list_directory_each(&mut self, remote_path: &str, now: impl Into<CurrentDateTime>, on_entry: impl FnMut(FtpFile)) -> Result<(), Error>` — [`CurrentDateTime`](parser/index.md#currentdatetime), [`FtpFile`](parser/index.md#ftpfile), [`Error`](../error/index.md#error)
 
