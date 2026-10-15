@@ -890,6 +890,57 @@ async fn test_ftps_list_directory_skips_non_utf8_line() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// `list_directory_into` replaces what `files` held, keeps its capacity, and leaves it empty when
+/// the listing fails rather than holding the entries before a 426 cut.
+#[tokio::test]
+async fn test_ftps_list_directory_into_replaces_and_clears_on_error() {
+    let stale = bambino::ftps::FtpFile {
+        name: "stale".into(),
+        is_dir: false,
+        size: 0,
+        modified: FtpTimestamp {
+            year: 2025,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        },
+        year_is_inferred: false,
+    };
+    let mut files = Vec::with_capacity(32);
+    files.push(stale);
+
+    async fn list_into<F>(
+        server: impl FnOnce(tokio::io::DuplexStream, DataContainer) -> F,
+        files: &mut Vec<bambino::ftps::FtpFile>,
+    ) -> Result<(), Error>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (client_control, server_control, data_container, factory) = setup();
+        let server_handle = tokio::spawn(server(server_control, data_container.clone()));
+        let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+        let result = client.list_directory_into("/model", REF_NOW, files).await;
+        server_handle.await.expect("Mock server panicked");
+        result
+    }
+
+    list_into(mock_ftps::run_mock_server_list_426_recovery, &mut files)
+        .await
+        .expect("LIST should tolerate 426 confirmation");
+    let names: Vec<_> = files.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["job.3mf"]);
+    assert!(files.capacity() >= 32, "capacity must be kept");
+
+    let result = list_into(mock_ftps::run_mock_server_list_426_truncated, &mut files).await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "{result:?}"
+    );
+    assert!(files.is_empty(), "no partial listing on error");
+}
+
 /// Runs `list_directory_each` against one mock server, returning what the sink got and the result.
 async fn list_each_with<F>(
     server: impl FnOnce(tokio::io::DuplexStream, DataContainer) -> F,

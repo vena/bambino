@@ -672,27 +672,54 @@ where
     /// passing host time instead costs. Entries whose year came from `now` are flagged with
     /// [`FtpFile::year_is_inferred`].
     ///
-    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] entries. To place a listing's memory yourself,
-    /// use [`list_directory_each`](Self::list_directory_each), which this collects from.
+    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] entries. To reuse a vector's capacity across
+    /// listings, use [`list_directory_into`](Self::list_directory_into); to place a listing's
+    /// memory yourself, use [`list_directory_each`](Self::list_directory_each).
     pub async fn list_directory(
         &mut self,
         remote_path: &str,
         now: impl Into<CurrentDateTime>,
     ) -> Result<Vec<FtpFile>, Error> {
         let mut files = Vec::new();
-        let mut capped = false;
-        self.list_directory_each(remote_path, now, |file| {
-            if files.len() < FTP_MAX_LISTING_ENTRIES {
-                files.push(file);
-            } else if !capped {
-                capped = true;
-                log::warn!(
-                    "LIST payload yielded more than {FTP_MAX_LISTING_ENTRIES} entries; truncating the parsed listing"
-                );
-            }
-        })
-        .await?;
+        self.list_directory_into(remote_path, now, &mut files)
+            .await?;
         Ok(files)
+    }
+
+    /// Lists a directory like [`list_directory`](Self::list_directory), into `files`, which is cleared first.
+    ///
+    /// Keeps `files`' capacity, so polling a directory with one vector stops reallocating once it
+    /// has grown to the listing's size. That saves allocations, not placement: the vector and each
+    /// entry's `name` still come from the global allocator. Use
+    /// [`list_directory_each`](Self::list_directory_each) to decide where entries live.
+    ///
+    /// # Errors
+    ///
+    /// As for `list_directory`. On error `files` is left empty, never holding part of a listing.
+    pub async fn list_directory_into(
+        &mut self,
+        remote_path: &str,
+        now: impl Into<CurrentDateTime>,
+        files: &mut Vec<FtpFile>,
+    ) -> Result<(), Error> {
+        files.clear();
+        let mut capped = false;
+        let result = self
+            .list_directory_each(remote_path, now, |file| {
+                if files.len() < FTP_MAX_LISTING_ENTRIES {
+                    files.push(file);
+                } else if !capped {
+                    capped = true;
+                    log::warn!(
+                        "LIST payload yielded more than {FTP_MAX_LISTING_ENTRIES} entries; truncating the parsed listing"
+                    );
+                }
+            })
+            .await;
+        if result.is_err() {
+            files.clear();
+        }
+        result
     }
 
     /// Lists a directory like [`list_directory`](Self::list_directory), handing each entry to `on_entry` as its line arrives.
