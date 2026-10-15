@@ -556,6 +556,28 @@ pub(crate) async fn read_to_eof_bounded<IO: AsyncIo, T: TimerProvider>(
     Ok(())
 }
 
+/// Reads `stream` into `buf` until `buf` is full or the stream ends, returning the bytes read.
+///
+/// Same per-read deadline as [`read_to_eof`]: `budget_ms` restarts before every read, so only a
+/// stall of `budget_ms` with no bytes times out.
+pub(crate) async fn read_prefix<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    buf: &mut [u8],
+    timer: &T,
+    budget_ms: u64,
+) -> Result<usize, Error> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        let deadline_ms = ftps_deadline_from_ms(timer, budget_ms);
+        match read_transfer_chunk(stream, &mut buf[filled..], timer, deadline_ms).await {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(Error::Network(e)),
+        }
+    }
+    Ok(filled)
+}
+
 #[cfg(test)]
 mod tests;
 

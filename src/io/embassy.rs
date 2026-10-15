@@ -355,6 +355,11 @@ where
     fn peer_chain_der(&self, _stream: &Self::Stream) -> Option<Vec<Vec<u8>>> {
         None
     }
+
+    /// The stream under the session, via `mbedtls-rs` 0.3's `Session::stream()`.
+    fn raw_stream_mut<'s>(&self, stream: &'s mut Self::Stream) -> Option<&'s mut RawStream> {
+        Some(stream.0.stream())
+    }
 }
 
 /// How often the pool task, and a dial waiting for a socket, recheck a connection that is still closing.
@@ -413,6 +418,10 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> Default
 /// smoltcp 0.13.1, `close()` doesn't restart the timeout clock, so an idle connection would get
 /// an RST in place of its FIN.
 ///
+/// The one exception is a stream marked by [`EmbassyRawStreamFactory`]'s `abort_on_drop`, for a
+/// download stopped early: its socket gets an RST at once, with no drain, because the printer
+/// answers a FIN on a data channel by sending the rest of the file (GitHub issue #629).
+///
 /// **Waiting its turn.** A dial waits while any connection of this pool is still closing, so the
 /// printer, which caps concurrent connections, never holds an old bambino connection alongside a
 /// new one. A dial fails at once with [`SocketError::ResourceExhausted`] when every socket is held
@@ -464,13 +473,15 @@ enum SlotUsage {
     Closing {
         since_ms: u64,
     },
+    /// The stream was dropped with `abort_on_drop` set; its RST hasn't been confirmed sent.
+    Aborting,
 }
 
 impl Slot {
     fn view(&self) -> SlotView {
         match (self.usage, self.socket.is_some()) {
             (SlotUsage::Idle, true) => SlotView::Idle,
-            (SlotUsage::Closing { .. }, _) => SlotView::Closing,
+            (SlotUsage::Closing { .. } | SlotUsage::Aborting, _) => SlotView::Closing,
             _ => SlotView::Leased,
         }
     }
@@ -522,15 +533,22 @@ impl EmbassySocketPool {
                 let slots = self.slots.borrow();
                 match (slots[i].usage, slots[i].socket.as_ref()) {
                     (SlotUsage::Closing { since_ms }, Some(socket)) => {
-                        (settle(socket.state(), since_ms, now_ms), since_ms)
+                        Some((settle(socket.state(), since_ms, now_ms), since_ms))
                     }
+                    (SlotUsage::Aborting, Some(_)) => None,
                     // Out of its slot for the other settler (the task or a dial) to drain or reset.
-                    (SlotUsage::Closing { .. }, None) => {
+                    (SlotUsage::Closing { .. } | SlotUsage::Aborting, None) => {
                         still_closing = true;
                         continue;
                     }
                     _ => continue,
                 }
+            };
+            let Some(action) = action else {
+                // Asked for by `abort_on_drop`: no drain, and no waiting on the printer.
+                self.send_rst(i).await;
+                log::trace!("embassy socket {i} aborted with an RST");
+                continue;
             };
             match action {
                 (SettleAction::Idle, since_ms) => {
@@ -572,13 +590,20 @@ impl EmbassySocketPool {
 
     /// Ends socket `i`'s connection with an RST, once it has outlived [`DRAIN_BOUND_MS`].
     async fn reset(&self, i: usize) {
+        if let Some(socket) = self.slots.borrow()[i].socket.as_ref() {
+            log::warn!(
+                "embassy socket {i} still {:?} {DRAIN_BOUND_MS} ms after its stream was dropped; sending RST",
+                socket.state()
+            );
+        }
+        self.send_rst(i).await;
+    }
+
+    /// Sends socket `i` an RST, waits a bounded time for it to leave, and marks the slot idle.
+    async fn send_rst(&self, i: usize) {
         let Some(mut socket) = self.slots.borrow_mut()[i].socket.take() else {
             return;
         };
-        log::warn!(
-            "embassy socket {i} still {:?} {DRAIN_BOUND_MS} ms after its stream was dropped; sending RST",
-            socket.state()
-        );
         socket.abort();
         // `abort()` only queues the RST; `flush()` waits for the stack to send it.
         let flushed = ::embassy_time::with_timeout(
@@ -632,17 +657,34 @@ impl EmbassySocketPool {
         }
         self.dropped.signal(());
     }
+
+    /// Ends a dropped stream's connection with an RST and puts its socket back as aborting.
+    ///
+    /// `abort()` only queues the RST; the settle pass flushes it before the socket is reused,
+    /// as embassy-net's `TcpSocket::abort` asks.
+    fn give_back_aborted(&self, i: usize, mut socket: ::embassy_net::tcp::TcpSocket<'static>) {
+        socket.abort();
+        {
+            let mut slots = self.slots.borrow_mut();
+            slots[i].socket = Some(socket);
+            slots[i].usage = SlotUsage::Aborting;
+        }
+        self.dropped.signal(());
+    }
 }
 
 /// A raw TCP connection from [`EmbassyRawStreamFactory`], on a socket borrowed from an [`EmbassySocketPool`].
 ///
 /// Dropping it ends the connection with a FIN and returns the socket to the pool, which keeps it
-/// registered until the printer has closed its side too (see [`EmbassySocketPool`]).
+/// registered until the printer has closed its side too (see [`EmbassySocketPool`]). After
+/// [`EmbassyRawStreamFactory`]'s `abort_on_drop`, dropping it sends an RST instead.
 pub struct EmbassyTcpStream {
     pool: &'static EmbassySocketPool,
     slot: usize,
     /// `Some` until `Drop` hands it back.
     socket: Option<::embassy_net::tcp::TcpSocket<'static>>,
+    /// Set by `abort_on_drop`: end with an RST rather than a FIN.
+    abort: bool,
 }
 
 impl EmbassyTcpStream {
@@ -659,7 +701,11 @@ impl EmbassyTcpStream {
 impl Drop for EmbassyTcpStream {
     fn drop(&mut self) {
         if let Some(socket) = self.socket.take() {
-            self.pool.give_back(self.slot, socket);
+            if self.abort {
+                self.pool.give_back_aborted(self.slot, socket);
+            } else {
+                self.pool.give_back(self.slot, socket);
+            }
         }
     }
 }
@@ -725,6 +771,7 @@ impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory {
             pool: self.pool,
             slot,
             socket: Some(socket),
+            abort: false,
         };
         let connected = match stream.socket.as_mut() {
             Some(socket) => socket.connect(core::net::SocketAddrV4::new(ip, port)).await,
@@ -744,6 +791,10 @@ impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory {
             }
         })?;
         Ok(stream)
+    }
+
+    fn abort_on_drop(&self, stream: &mut EmbassyTcpStream) {
+        stream.abort = true;
     }
 }
 /// How long a dropped connection may take to close before its socket is reset.

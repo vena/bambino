@@ -288,6 +288,44 @@ fn factory_stream_dropped_after_write_sends_data_then_fin() {
     assert_eq!(saw, (9, PeerSaw::Fin));
 }
 
+/// A stream marked with `abort_on_drop` (an early-stopped download, GitHub issue #629) must reach
+/// the peer as an RST, not a FIN: a printer keeps sending the rest of a file after a FIN.
+#[test]
+fn factory_stream_aborted_sends_rst() {
+    let saw = with_two_stacks(|dialer, listener| {
+        let factory = one_socket_factory(dialer);
+        peer_view_of_drop(listener, async move {
+            let mut stream = dial(factory).await;
+            factory.abort_on_drop(&mut stream);
+            drop(stream);
+        })
+    });
+    assert_eq!(saw, (0, PeerSaw::Reset));
+}
+
+/// An aborted stream's socket is free again as soon as its RST is out: the redial reuses it
+/// without the peer closing anything and without waiting out the FIN path's drain bound.
+#[test]
+fn aborted_socket_is_reused_at_once() {
+    let second = with_two_stacks(|dialer, listener| {
+        let factory = one_socket_factory(dialer);
+        async move {
+            let mut first = tcp_socket(listener);
+            let (accepted, mut stream) =
+                embassy_futures::join::join(first.accept(PORT), dial(factory)).await;
+            accepted.expect("listener accepts the first dial");
+            factory.abort_on_drop(&mut stream);
+            drop(stream);
+            let mut second = tcp_socket(listener);
+            let (accepted, redial) =
+                embassy_futures::join::join(second.accept(PORT), try_dial(factory)).await;
+            accepted.expect("listener accepts the second dial");
+            redial.is_ok()
+        }
+    });
+    assert!(second, "second dial reuses the aborted socket");
+}
+
 /// A dial cancelled while connecting hands its socket back: the one-socket pool can dial again,
 /// and that stream's drop still sends a FIN.
 #[test]

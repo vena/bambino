@@ -40,6 +40,11 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for DummyTlsConnector {
     async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
         Ok(raw_stream)
     }
+
+    /// The stream is its own raw stream, so an abort reaches the factory as on embassy.
+    fn raw_stream_mut<'s>(&self, stream: &'s mut RawIO) -> Option<&'s mut RawIO> {
+        Some(stream)
+    }
 }
 
 /// A pass-through TLS connector that reports a specific negotiated TLS version.
@@ -300,6 +305,8 @@ pub struct MockDataStreamFactory {
     /// serial-vs-IP choice is guarded separately by
     /// `test_ftps_control_channel_connects_with_serial_not_ip`).
     pub dialed: Arc<Mutex<Vec<(String, u16)>>>,
+    /// How many times `abort_on_drop` was called: once per early-stopped download.
+    pub aborted: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MockDataStreamFactory {
@@ -308,6 +315,7 @@ impl MockDataStreamFactory {
         Self {
             active_stream,
             dialed: Arc::new(Mutex::new(Vec::new())),
+            aborted: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -333,5 +341,10 @@ impl RawStreamFactory<TokioIo<tokio::io::DuplexStream>> for MockDataStreamFactor
         let mut guard = self.active_stream.lock().await;
         // Yield the stream if available, otherwise simulate a standard TCP connection refusal
         guard.take().ok_or(SocketError::ConnectionRefused)
+    }
+
+    fn abort_on_drop(&self, _stream: &mut TokioIo<tokio::io::DuplexStream>) {
+        self.aborted
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }

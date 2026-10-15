@@ -291,6 +291,55 @@ pub async fn run_mock_server_download(
     ctl.expect("SIZE /model/job.3mf\r\n", b"213 30\r\n").await;
 }
 
+/// The file [`run_mock_server_download_prefix`] serves: longer than any prefix the tests ask for.
+pub const PREFIX_FILE: &[u8] = b"PK\x03\x04Metadata/plate_1.png....then the 3D model and G-code";
+
+/// Mock server for an early-stopped `download_prefix`: RETR with no final reply.
+///
+/// Mirrors the P1S (GitHub issue #629): once the client resets the data channel the printer
+/// closes the control connection, so nothing after `150` is sent and no further command is read.
+/// `expect_prot_p` is `false` for the A1's plaintext data channel.
+pub async fn run_mock_server_download_prefix(
+    server_control: tokio::io::DuplexStream,
+    data_container: DataContainer,
+    expect_prot_p: bool,
+) {
+    let mut ctl = Control::new(server_control, data_container);
+    ctl.handshake(expect_prot_p).await;
+
+    let mut server_data = ctl.pasv().await;
+    ctl.expect(
+        "RETR /model/job.3mf\r\n",
+        b"150 Opening data connection.\r\n",
+    )
+    .await;
+    server_data
+        .write_all(PREFIX_FILE)
+        .await
+        .expect("data write");
+}
+
+/// Mock server for a `download_prefix` whose file ends before the buffer fills.
+///
+/// The transfer completes as a normal `RETR` does, and the session must stay usable: an `AVBL`
+/// follows on the same control connection.
+pub async fn run_mock_server_download_prefix_short_file(
+    server_control: tokio::io::DuplexStream,
+    data_container: DataContainer,
+) {
+    let mut ctl = Control::new(server_control, data_container);
+    ctl.handshake(true).await;
+
+    ctl.serve_data(
+        "RETR /model/job.3mf\r\n",
+        b"150 Opening data connection.\r\n",
+        PREFIX_FILE,
+        b"226 Transfer complete.\r\n",
+    )
+    .await;
+    ctl.expect("AVBL\r\n", b"213 107374182400\r\n").await;
+}
+
 /// Mock server for download (RETR) with a SIZE mismatch (should trigger ProtocolViolation).
 pub async fn run_mock_server_download_size_mismatch(
     server_control: tokio::io::DuplexStream,

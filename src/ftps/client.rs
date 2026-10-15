@@ -395,9 +395,9 @@ where
     fn check_poisoned(&self) -> Result<(), Error> {
         if self.poisoned {
             return Err(Error::ProtocolViolation(
-                "FTPS client is poisoned after a previous control-channel desync — this \
-                 instance must be discarded; reconnect with a new FtpsClient::connect() \
-                 call instead of reusing it"
+                "FTPS client is poisoned after a control-channel desync or an early-stopped \
+                 download_prefix — this instance must be discarded; reconnect with a new \
+                 FtpsClient::connect() call instead of reusing it"
                     .into(),
             ));
         }
@@ -543,6 +543,29 @@ where
                 "data-channel",
             )
             .await;
+        }
+    }
+
+    /// Ends a data channel whose transfer was stopped early: `close_notify`, then an RST.
+    ///
+    /// The TLS close comes first so the session itself ends in order
+    /// (`.claude/rules/tls-session-teardown.md`); the RST is what stops the printer sending the
+    /// rest of the file (see [`download_prefix`](Self::download_prefix)).
+    async fn abort_data_channel(&self, channel: DataChannel<RawIO, Tls::Stream>) {
+        match channel {
+            DataChannel::Plain(mut raw) => self.data_factory.abort_on_drop(&mut raw),
+            DataChannel::Secure(mut secure) => {
+                close_bounded(
+                    &self.tls_connector,
+                    &self.timer,
+                    &mut secure,
+                    "data-channel",
+                )
+                .await;
+                if let Some(raw) = self.tls_connector.raw_stream_mut(&mut secure) {
+                    self.data_factory.abort_on_drop(raw);
+                }
+            }
         }
     }
 
@@ -832,6 +855,63 @@ where
         }
 
         Ok(file_payload)
+    }
+
+    /// Reads the first `buf.len()` bytes of a remote file into `buf`, then stops the transfer.
+    ///
+    /// Returns the number of bytes read: `buf.len()`, or fewer when the file is shorter. Built for
+    /// reading a job's `.3mf` from the front, where Bambu Studio puts the plate images, without
+    /// transferring the rest of a file that can be tens of MB. The caller owns `buf`, so it
+    /// decides where those bytes live.
+    ///
+    /// **A full `buf` ends this session.** The printer has no `REST` or `ABOR` (both `502` on a
+    /// P1S) and answers a FIN on the data channel by sending the rest of the file; only an RST
+    /// stops it, after which it closes the control connection too (GitHub issue #629). So once
+    /// `buf` is full the data channel ends with an RST
+    /// ([`RawStreamFactory::abort_on_drop`]), no
+    /// further command is sent, and the client is left poisoned ([`is_poisoned`](Self::is_poisoned)):
+    /// every later call fails, and `PrinterClient::ftps()` reconnects. This holds for a file of
+    /// exactly `buf.len()` bytes too, since its end can't be seen without reading past it.
+    ///
+    /// When the file ends before `buf` is full, the transfer completes normally (`226`, or the
+    /// `426` [`download_file`](Self::download_file) also accepts) and the session stays usable.
+    /// There is no `SIZE` recheck: a partial read has nothing to compare against.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for an empty `buf`, before anything is sent.
+    pub async fn download_prefix(
+        &mut self,
+        remote_path: &str,
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
+        if buf.is_empty() {
+            return Err(Error::InvalidArgument(
+                "download_prefix needs a non-empty buffer".into(),
+            ));
+        }
+        let mut data_channel = self.open_transfer("RETR", remote_path).await?;
+        let filled = match read_prefix(
+            &mut data_channel,
+            buf,
+            &self.timer,
+            FTPS_READ_TIMEOUT_SECS * 1000,
+        )
+        .await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
+        if filled < buf.len() {
+            self.finish_transfer("RETR", data_channel).await?;
+        } else {
+            self.abort_data_channel(data_channel).await;
+            self.poisoned = true;
+        }
+        Ok(filled)
     }
 
     /// Creates a directory on the printer's MicroSD storage.

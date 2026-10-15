@@ -46,6 +46,19 @@ pub enum FilesAction {
         remote_path: String,
         local_path: String,
     },
+    /// Download only the first BYTES of a remote card file, then stop the transfer
+    ///
+    /// Stopping early ends the FTPS session (the printer closes it), so this is one command per
+    /// connection. A file shorter than BYTES is downloaded whole.
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] head <REMOTE_PATH> <LOCAL_PATH> [BYTES]"
+    )]
+    Head {
+        remote_path: String,
+        local_path: String,
+        #[arg(default_value_t = 65536)]
+        bytes: usize,
+    },
     /// Remove a file from the remote filesystem path
     #[command(
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>"
@@ -179,6 +192,28 @@ pub async fn run(
                     payload.len(),
                     local_path
                 );
+            }
+            FilesAction::Head {
+                remote_path,
+                local_path,
+                bytes,
+            } => {
+                if bytes == 0 || bytes > bambino::ftps::MAX_TRANSFER_BYTES {
+                    return Err(CliError::InvalidArgs(format!(
+                        "BYTES must be between 1 and {}",
+                        bambino::ftps::MAX_TRANSFER_BYTES
+                    )));
+                }
+                println!("Reading the first {bytes} bytes of '{remote_path}'...");
+                let mut buf = vec![0u8; bytes];
+                let started = Instant::now();
+                let n = client.download_prefix(&remote_path, &mut buf).await?;
+                print_transfer_time("RETR (prefix)", started);
+                fs::write(&local_path, &buf[..n])?;
+                println!("Success: {n} bytes written to '{local_path}'.");
+                if n == bytes {
+                    println!("Transfer stopped early; the printer has closed this FTPS session.");
+                }
             }
             FilesAction::Delete { remote_path } => {
                 println!("Deleting file from remote path '{}'...", remote_path);

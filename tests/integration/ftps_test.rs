@@ -256,6 +256,92 @@ async fn test_ftps_download_file() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// `download_prefix` with a buffer shorter than the file returns the file's first bytes, ends the
+/// data channel with an RST, and leaves the client spent (GitHub issue #629), on both the TLS and
+/// the A1's plaintext data channel.
+#[tokio::test]
+async fn test_ftps_download_prefix_stops_early_and_ends_the_session() {
+    for (model, prot_p) in [(PrinterModel::P1S, true), (PrinterModel::A1, false)] {
+        let (client_control, server_control, data_container, factory) = setup();
+        let server_handle = tokio::spawn(mock_ftps::run_mock_server_download_prefix(
+            server_control,
+            data_container.clone(),
+            prot_p,
+        ));
+        let aborted = factory.aborted.clone();
+        let mut client = connect_client(client_control, factory, model).await;
+
+        let mut buf = [0u8; 8];
+        let n = client
+            .download_prefix("/model/job.3mf", &mut buf)
+            .await
+            .expect("prefix read failed");
+        assert_eq!(&buf[..n], &mock_ftps::PREFIX_FILE[..8], "{model:?}");
+        assert_eq!(
+            aborted.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{model:?}: an early stop must end the data channel with an RST"
+        );
+        assert!(
+            client.is_poisoned(),
+            "{model:?}: the printer closes the control connection after the RST"
+        );
+        assert!(
+            matches!(
+                client.get_available_space().await,
+                Err(Error::ProtocolViolation(_))
+            ),
+            "{model:?}: no command may follow an early stop"
+        );
+
+        server_handle.await.expect("Mock server panicked");
+    }
+}
+
+/// A file shorter than the buffer completes like a normal `RETR`: no RST, and the session goes on.
+#[tokio::test]
+async fn test_ftps_download_prefix_of_a_short_file_keeps_the_session() {
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_download_prefix_short_file(
+        server_control,
+        data_container.clone(),
+    ));
+    let aborted = factory.aborted.clone();
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let mut buf = [0u8; 256];
+    let n = client
+        .download_prefix("/model/job.3mf", &mut buf)
+        .await
+        .expect("prefix read failed");
+    assert_eq!(&buf[..n], mock_ftps::PREFIX_FILE);
+    assert_eq!(aborted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(!client.is_poisoned());
+    client
+        .get_available_space()
+        .await
+        .expect("AVBL after a completed prefix read");
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// An empty buffer is refused before anything is sent: the mock's next expected command is QUIT.
+#[tokio::test]
+async fn test_ftps_download_prefix_rejects_an_empty_buffer() {
+    let (client_control, server_control, _, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(server_control));
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client.download_prefix("/model/job.3mf", &mut []).await;
+    assert!(
+        matches!(result, Err(Error::InvalidArgument(_))),
+        "{result:?}"
+    );
+    client.disconnect().await;
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 /// Regression test for the `fill_buf`-scoping desync `read_response`'s doc describes, made
 /// deterministic: the mock writes `150 ...\r\n226 ...\r\n` in one `write_all`, so both replies
 /// are unavoidably in one socket read. `test_ftps_download_file` reproduces the same coalescing

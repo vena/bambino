@@ -154,6 +154,44 @@ async fn test_read_to_eof_rejects_oversized_transfer() {
 }
 
 #[tokio::test]
+async fn test_read_prefix_stops_at_a_full_buffer() {
+    // A stream that never ends: the read must stop once `buf` is full, not keep going.
+    let mut stream = MockIo::infinite();
+    let mut buf = [0u8; FTPS_DATA_READ_BUF_SIZE * 2 + 7];
+    let n = read_prefix(&mut stream, &mut buf, &DummyTimer, 30_000)
+        .await
+        .expect("prefix read");
+    assert_eq!(n, buf.len());
+}
+
+#[tokio::test]
+async fn test_read_prefix_assembles_chunks_and_stops_at_eof() {
+    let mut stream = MockIo::with_chunks(&[b"PK\x03\x04", b"abc", b"defg"]);
+    let mut buf = [0u8; 64];
+    let n = read_prefix(&mut stream, &mut buf, &DummyTimer, 30_000)
+        .await
+        .expect("prefix read");
+    assert_eq!(&buf[..n], b"PK\x03\x04abcdefg");
+}
+
+#[tokio::test]
+async fn test_read_prefix_keeps_the_bytes_of_a_chunk_that_overfills() {
+    // The last chunk is longer than the room left: only what fits is taken, and the rest is
+    // left unread on the stream.
+    let mut stream = MockIo::with_chunks(&[b"0123", b"456789"]);
+    let mut buf = [0u8; 6];
+    let n = read_prefix(&mut stream, &mut buf, &DummyTimer, 30_000)
+        .await
+        .expect("prefix read");
+    assert_eq!((n, &buf), (6, b"012345"));
+    let mut rest = [0u8; 8];
+    let m = embedded_io_async::Read::read(&mut stream, &mut rest)
+        .await
+        .expect("rest");
+    assert_eq!(&rest[..m], b"6789");
+}
+
+#[tokio::test]
 async fn test_write_command_sends_single_write_call() {
     // Regression test: write_command must send "cmd\r\n" as one write_all call, not two
     // separate ones. Some embedded FTP servers (confirmed live against a Bambu P1S) don't

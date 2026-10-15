@@ -815,6 +815,15 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     fn peer_chain_der(&self, _stream: &Self::Stream) -> Option<Vec<Vec<u8>>> {
         None
     }
+
+    /// Returns the raw stream under `stream`'s TLS session, for [`RawStreamFactory::abort_on_drop`] only.
+    ///
+    /// Never read or write through it: bytes that bypass the session corrupt it. `None` (the
+    /// default) where the backend can't hand the raw stream out; an abort then relies on the
+    /// stack's own close, as [`RawStreamFactory::abort_on_drop`] describes.
+    fn raw_stream_mut<'s>(&self, _stream: &'s mut Self::Stream) -> Option<&'s mut RawStream> {
+        None
+    }
 }
 
 /// Dials a fresh, un-encrypted (pre-TLS) raw stream to a host:port.
@@ -833,6 +842,21 @@ pub trait RawStreamFactory<RawIO: AsyncIo> {
     /// A backend may accept only some address forms and reject the rest with
     /// [`SocketError::InvalidInput`]: embassy takes IPv4 literals only.
     async fn dial(&self, host: &str, port: u16) -> Result<RawIO, SocketError>;
+
+    /// Arranges for `stream`'s connection to end with a TCP RST, not a FIN, when it is dropped.
+    ///
+    /// Only for a download stopped early (`FtpsClient::download_prefix`): a Bambu printer ignores
+    /// a FIN on a data channel and sends the rest of the file, but stops at once on an RST (P1S,
+    /// GitHub issue #629). Every other teardown keeps its FIN, which protects data the printer
+    /// has not read yet.
+    ///
+    /// The default does nothing. That is enough where the stack already ends such a connection
+    /// with an RST once it is closed with received data unread: lwIP (ESP-IDF) sends one from
+    /// `tcp_close_shutdown` in that case, and answers data arriving after the close with another
+    /// from `tcp_input`; Linux does the same on close (RFC 2525), and macOS was seen to on the
+    /// P1S. The embassy pool closes with a FIN and then drains, so its factory overrides this;
+    /// tokio's sets a zero linger so the RST doesn't depend on what was left unread.
+    fn abort_on_drop(&self, _stream: &mut RawIO) {}
 }
 
 /// Platform-neutral asynchronous sleep controller.

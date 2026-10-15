@@ -352,6 +352,17 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
 
         Ok(TokioIo(stream))
     }
+
+    /// Sets a zero linger, so dropping the stream sends an RST whatever is left unread.
+    ///
+    /// Reaches only a stream this factory hands out directly (the plaintext data channel):
+    /// `TokioTlsConnector` keeps the default `raw_stream_mut`, so under TLS the OS's own RST on a
+    /// close with unread data does the job (see `RawStreamFactory::abort_on_drop`).
+    fn abort_on_drop(&self, stream: &mut TokioIo<::tokio::net::TcpStream>) {
+        if let Err(e) = stream.0.set_zero_linger() {
+            log::warn!("TCP set_zero_linger failed; the connection may end with a FIN: {e}");
+        }
+    }
 }
 
 /// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
