@@ -731,7 +731,9 @@ persistently and call it on every lazy (re)connect, mirroring `TlsConnector::con
   `tcp_close_shutdown` in that case, and answers data arriving after the close with another
   from `tcp_input`; Linux does the same on close (RFC 2525), and macOS was seen to on the
   P1S. The embassy pool closes with a FIN and then drains, so its factory overrides this;
-  tokio's sets a zero linger so the RST doesn't depend on what was left unread.
+  tokio's sets a zero linger so the RST doesn't depend on what was left unread. A factory
+  that wraps another must forward this, or the default silently turns the RST back into
+  the wrapped stack's normal close.
 
 #### Implementors
 

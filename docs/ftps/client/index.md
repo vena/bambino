@@ -44,7 +44,9 @@ To make this safe, the client sets `poisoned = true` (originally only on the
 `150`/`125` "opening data connection" reply and the matching final reply, since that's the
 widest such window; now on every `write_command`/`read_response` failure in every method,
 including the single-reply metadata/filesystem commands); every public method checks the
-flag first and returns [`Error::ProtocolViolation`](../../error/index.md#error) immediately if set. A poisoned client
+flag first and returns [`Error::ProtocolViolation`](../../error/index.md#error) immediately if set.
+[`download_prefix`](#ftpsclient) also sets it on purpose when it stops a transfer
+early, because the printer then closes the control connection. A poisoned client
 must be replaced: [`disconnect`](#ftpsclient) returns its parts for a fresh
 [`FtpsClient::connect`](#ftpsclient), and `PrinterClient::ftps()` does that by itself.
 
@@ -158,11 +160,11 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   **A full `buf` ends this session.** The printer has no `REST` or `ABOR` (both `502` on a
   P1S) and answers a FIN on the data channel by sending the rest of the file; only an RST
   stops it, after which it closes the control connection too (GitHub issue #629). So once
-  `buf` is full the data channel ends with an RST
-  ([`RawStreamFactory::abort_on_drop`](../../io/index.md#rawstreamfactory)), no
-  further command is sent, and the client is left poisoned ([`is_poisoned`](#ftpsclient)):
-  every later call fails, and `PrinterClient::ftps()` reconnects. This holds for a file of
-  exactly `buf.len()` bytes too, since its end can't be seen without reading past it.
+  `buf` is full the data channel ends with an RST ([`RawStreamFactory::abort_on_drop`](../../io/index.md#rawstreamfactory)), no
+  further command is sent, and the client is left poisoned
+  ([`is_poisoned`](#ftpsclient)): every later call fails, and `PrinterClient::ftps()`
+  reconnects. This holds for a file of exactly `buf.len()` bytes too, since its end can't be
+  seen without reading past it.
 
   When the file ends before `buf` is full, the transfer completes normally (`226`, or the
   `426` [`download_file`](#ftpsclient) also accepts) and the session stays usable.
