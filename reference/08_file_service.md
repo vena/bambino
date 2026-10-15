@@ -142,7 +142,7 @@ This is not a subscription. It reads named members out of a file that `LIST_INFO
 
 Each reply frame's `reply` carries `path` (the requested `file#member`), `size`, an optional `mimetype` and `thumbnail`, and `continue: true` when more fragments of the **same** member follow. The member's bytes follow `\n\n`. `size == 0` means the member is missing. `result` stays `CONTINUE` until the last member.
 
-This needs the file's `path`, so it can't reach the running job without first finding the job's file in `LIST_INFO` (#630).
+This needs the file's `path`, so reaching the running job means first finding its file in `LIST_INFO`.
 
 #### `FILE_DOWNLOAD` (4): download a whole file
 
@@ -159,7 +159,7 @@ or `{"file":"<name>","offset":0}` when `LIST_INFO` gave no `path`. Each reply fr
 \n\n{"sequence_id":1,"version":1,"peer_host":"studio","command":"get_project_file","file_rel_path":"Metadata/pick_1.png"}
 ```
 
-- **`mem:/16` with `get_project_file`** reads a member of **the running job's** `.3mf` by relative name, with no path. Studio's skip-objects dialog (`PartSkipDialog::DownloadPartsFile`, then `PrinterFileSystem::GetPickImages`/`GetPickImage`/`DownloadRamFile`) uses it for three members: `Metadata/pick_<plate>.png`, `Metadata/model_settings.config` and `Metadata/slice_info.config`. `<plate>` is the plate index the printer reports (`plate_idx`). This is the read #630 and #632 would use where available.
+- **`mem:/16` with `get_project_file`** reads a member of **the running job's** `.3mf` by relative name, with no path. Studio's skip-objects dialog (`PartSkipDialog::DownloadPartsFile`, then `PrinterFileSystem::GetPickImages`/`GetPickImage`/`DownloadRamFile`) uses it for three members: `Metadata/pick_<plate>.png`, `Metadata/model_settings.config` and `Metadata/slice_info.config`. `<plate>` is the plate index the printer reports (`plate_idx`). Where the service exists, this is a path-free alternative to bambino's FTPS route (`PrinterClient::job_path` and the front-of-file read, #630 and #632). It still needs the plate number, which P1/A1 telemetry doesn't send (see `PrinterClient::job_plate`).
 - **`mem:/26`** is the printer preview image. Studio's `MediaPlayCtrl::start_device_image_flow` fetches it through `FileTransferObject::DownloadMemFile`. **(OBN only)**: the stock plugin sends the same `get_project_file` blob with an empty `file_rel_path` and `sequence_id` equal to the request's `sequence`, and the X2D returned a 1920×1080 JPEG.
 
 The first reply frame carries `reply.mem_dl_param_size` and the printer's own JSON blob of that length after `\n\n`, for example `{"result":0}`. That blob is not file data. Studio treats a missing `result`, `result == 1`, or `size == 0` in it as failure. The data frames and the final `file_md5` follow as for a normal download. **(OBN only)**: on a P2S, a 73 KiB JPEG arrived as 20 KiB fragments carrying `frag_id`, with the final frame at `result` 0.
