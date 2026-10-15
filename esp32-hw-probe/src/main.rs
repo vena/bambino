@@ -1,39 +1,43 @@
-//! Current investigation: does ESP-IDF close every connection bambino drops cleanly?
+//! Current investigation: `FtpsClient::download_prefix` on ESP-IDF (GitHub issue #629).
 //!
-//! embassy-net cannot: its `TcpClient` removes a dropped socket from the stack before the FIN is
-//! sent. On ESP-IDF, the source says every teardown sends one: dropping `EspIdfTcpStream` closes
-//! its `std::net::TcpStream`, `EspTls::drop` calls `esp_tls_conn_destroy`, which calls `close()`
-//! on the socket (`esp_tls.c`), and lwIP's `close()` sends a FIN, or an RST if unread data is
-//! waiting, retrying from its timer when short of memory (`tcp.c`, `tcp_close_shutdown`). This
-//! probe checks that on hardware, and that the printer keeps accepting connections on every port
-//! afterwards.
+//! On a P1S, a FIN on an FTPS data channel does not stop a download: the printer sends the rest
+//! of the file. Only an RST does, and the printer then closes the control connection too.
+//! `download_prefix` marks the data channel with `RawStreamFactory::abort_on_drop`, which on
+//! ESP-IDF does nothing: the source says lwIP already ends the connection with an RST, because
+//! the data channel is closed with received data unread (`tcp.c`, `tcp_close_shutdown`) and any
+//! data arriving after the close is answered with one (`tcp_in.c`, `TF_RXCLOSED`). This probe
+//! checks that on hardware.
 //!
-//! Every phase is `CYCLES` cycles on port 990, `SPACING` apart. After each cycle a plain TCP
-//! connection to 990 is timed and closed cleanly, so a dial's time shows what the previous
-//! cycles left behind. After each phase all three ports (8883, 990, 6000) are checked, and
-//! rechecked every `PORT_RETRY` for up to `PORT_RECOVERY_LIMIT`; if a port is still refusing
-//! then, the remaining phases are skipped.
+//! `CYCLES` cycles, `SPACING` apart. Each cycle connects an `FtpsClient`, reads the first
+//! `PREFIX_BYTES` of `PROBE_FTPS_PATH` with `download_prefix`, drops the spent client, then times
+//! a fresh connect plus `list_directory("/")`. The printer serves one FTPS connection at a time,
+//! so that time is the signal: right after an RST it is about as fast as any login (~1 s), while
+//! a printer still sending the rest of the file after a FIN holds the next login back for as long
+//! as that takes. Cycle 1 also logs the prefix's SHA-256. After the cycles all three ports
+//! (8883, 990, 6000) are checked at +0 s, +30 s and +130 s.
 //!
-//! | Phase | Each cycle on 990 |
-//! |---|---|
-//! | Close | `EspIdfRawStreamFactory::dial`, TLS handshake, `TlsConnector::close`, drop |
-//! | DropRaw | `dial`, then drop without sending anything |
-//! | MidDrop | `dial`, TLS handshake cancelled after `CANCEL_AFTER`, drop |
+//! **Passes when** every cycle returns `PREFIX_BYTES` with the client poisoned, every follow-up
+//! login and listing succeeds in about the time of an ordinary one, and every port accepts at
+//! every check. Compare the SHA-256 with `head -c <PREFIX_BYTES> <file> | shasum -a 256` on a
+//! computer.
 //!
-//! DropRaw is also what bambino does when `EspTls::adopt` fails for lack of memory: `adopt`
-//! hands the unreleased socket back with the error, and it is dropped the same way.
-//!
-//! **Reading the result.** Every phase must leave every port accepting connections.
+//! **Running it.** Set `PROBE_ACCESS_CODE` and `PROBE_FTPS_PATH` (a `.3mf` on the card larger
+//! than `PREFIX_BYTES`; a bigger file makes a FIN-close more obvious) in `.env`, close every
+//! other FTPS client and camera viewer, then:
 //!
 //! ```sh
-//! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee teardown-1.log
+//! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee prefix-1.log
 //! ```
 //!
-//! Prior investigations (#385's out-of-memory sweep, #384/#386's trust-store check, and
-//! others) are recoverable via `git log -- esp32-hw-probe/src/main.rs`.
+//! Prior investigations (the connection teardown check, #385's out-of-memory sweep, and others)
+//! are recoverable via `git log -- esp32-hw-probe/src/main.rs`.
 
-use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTlsConnector};
-use bambino::io::{RawStreamFactory, TlsConnector};
+use bambino::ftps::{CurrentDateTime, FtpsClient, TlsVersionCheck};
+use bambino::io::esp_idf::{
+    EspIdfRawStreamFactory, EspIdfTcpStream, EspIdfTimer, EspIdfTlsConnector,
+};
+use bambino::io::RawStreamFactory;
+use bambino::PrinterIdentity;
 use core::time::Duration;
 use std::net::{SocketAddr, TcpStream};
 use std::time::Instant;
@@ -49,6 +53,8 @@ const WIFI_SSID: &str = env!("PROBE_WIFI_SSID");
 const WIFI_PASS: &str = env!("PROBE_WIFI_PASS");
 const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
+const ACCESS_CODE: Option<&str> = option_env!("PROBE_ACCESS_CODE");
+const FTPS_PATH: Option<&str> = option_env!("PROBE_FTPS_PATH");
 
 use bambino::ftps::FTPS_PORT;
 use bambino::mqtt::MQTTS_PORT as MQTT_PORT;
@@ -56,27 +62,18 @@ const CAMERA_PORT: u16 = 6000;
 
 const CYCLES: usize = 6;
 const SPACING: Duration = Duration::from_secs(3);
-/// Bound on the timed 990 dial after each cycle; long enough to time a slow dial.
-const DIAL_BOUND: Duration = Duration::from_secs(60);
-/// Bound on the port check, and on the Close phase's handshake.
+/// The same 40 KiB as `embassy-hw-probe`, so the two runs compare: it covers a Bambu Studio
+/// `.3mf`'s plate and pick images (36 864 B on the P1S file #629 measured).
+const PREFIX_BYTES: usize = 40 * 1024;
+/// When the ports are checked after the last cycle, in seconds.
+const CHECKPOINTS: [u64; 3] = [0, 30, 130];
+/// Bound on one port check's connect.
 const PORT_CHECK_BOUND: Duration = Duration::from_secs(10);
-const HANDSHAKE_BOUND: Duration = Duration::from_secs(20);
-/// Where MidDrop cuts the handshake: after the ClientHello, before the printer's answer
-/// (~800 ms) has been processed.
-const CANCEL_AFTER: Duration = Duration::from_millis(300);
-/// A healthy dial on this LAN finishes in well under a second.
-const SLOW_MS: u128 = 5_000;
-/// How long a port may refuse connections after a phase before the run stops, and how often it
-/// is rechecked meanwhile.
-const PORT_RECOVERY_LIMIT: Duration = Duration::from_secs(300);
-const PORT_RETRY: Duration = Duration::from_secs(30);
+/// The FTPS work runs on its own thread: the main task's 8 KB stack (`sdkconfig.defaults`) is
+/// too small for the FTPS connect futures (`src/io/CLAUDE.md`).
+const WORKER_STACK: usize = 32 * 1024;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Phase {
-    Close,
-    DropRaw,
-    MidDrop,
-}
+type Ftps = FtpsClient<EspIdfTcpStream, EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer>;
 
 fn addr(port: u16) -> SocketAddr {
     let ip: std::net::Ipv4Addr = PRINTER_IP
@@ -85,71 +82,104 @@ fn addr(port: u16) -> SocketAddr {
     SocketAddr::from((ip, port))
 }
 
-/// One phase cycle's teardown on 990, through bambino's own ESP-IDF types.
-fn teardown(phase: Phase) {
-    block_on(async {
-        let raw = match EspIdfRawStreamFactory.dial(PRINTER_IP, FTPS_PORT).await {
-            Ok(raw) => raw,
-            Err(e) => {
-                log::warn!("    990: dial failed {e:?}");
-                return;
-            }
-        };
-        match phase {
-            Phase::DropRaw => drop(raw),
-            Phase::Close => {
-                let connector = EspIdfTlsConnector::unverified().with_connect_timeout(HANDSHAKE_BOUND);
-                match connector.connect(PRINTER_SERIAL, raw).await {
-                    Ok(mut stream) => {
-                        if let Err(e) = connector.close(&mut stream).await {
-                            log::warn!("    990: close failed {e:?}");
-                        }
-                    }
-                    Err(e) => log::warn!("    990: handshake failed {e:?}"),
-                }
-            }
-            Phase::MidDrop => {
-                let connector = EspIdfTlsConnector::unverified();
-                let started = Instant::now();
-                match embassy_futures::select::select(
-                    connector.connect(PRINTER_SERIAL, raw),
-                    embassy_time::Timer::after(embassy_time::Duration::from_millis(
-                        CANCEL_AFTER.as_millis() as u64,
-                    )),
-                )
-                .await
-                {
-                    embassy_futures::select::Either::Second(()) => log::info!(
-                        "    990: handshake cancelled after {} ms",
-                        started.elapsed().as_millis()
-                    ),
-                    embassy_futures::select::Either::First(r) => log::warn!(
-                        "    990: handshake finished before the cancel ({:?}); this cycle does \
-                         not test a cancelled handshake",
-                        r.map(|_| ())
-                    ),
-                }
-            }
-        }
-    });
+fn listing_time() -> CurrentDateTime {
+    CurrentDateTime::new(2026, 10, 14, 12, 0)
 }
 
-/// A plain TCP connection to `port`, closed cleanly. Returns the connect time in ms, or `None`
-/// if it did not connect within `bound`.
-fn timed_connect(port: u16, bound: Duration) -> Option<u128> {
+/// SHA-256 through ESP-IDF's own mbedTLS, so the probe needs no hashing dependency.
+fn sha256_hex(data: &[u8]) -> String {
+    let mut out = [0u8; 32];
+    // SAFETY: `data` and `out` are valid for the lengths passed; 0 selects SHA-256, not -224.
+    let rc = unsafe { sys::mbedtls_sha256(data.as_ptr(), data.len(), out.as_mut_ptr(), 0) };
+    if rc != 0 {
+        return format!("<mbedtls_sha256 failed {rc}>");
+    }
+    out.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Runs one bambino call, logging how long it took.
+async fn call<T>(
+    label: &str,
+    fut: impl core::future::Future<Output = Result<T, bambino::Error>>,
+) -> Result<T, String> {
     let started = Instant::now();
-    match TcpStream::connect_timeout(&addr(port), bound) {
-        Ok(stream) => {
-            let ms = started.elapsed().as_millis();
-            drop(stream);
-            Some(ms)
+    match fut.await {
+        Ok(v) => {
+            log::info!("    {label}: ok, {} ms", started.elapsed().as_millis());
+            Ok(v)
         }
         Err(e) => {
-            log::warn!(
-                "    {port}: connect failed after {} ms: {e}",
-                started.elapsed().as_millis()
-            );
-            None
+            let e = format!("{label}: {e:?}");
+            log::warn!("    {e}");
+            Err(e)
+        }
+    }
+}
+
+async fn connect_ftps(access_code: &str) -> Result<Ftps, String> {
+    let raw = EspIdfRawStreamFactory
+        .dial(PRINTER_IP, FTPS_PORT)
+        .await
+        .map_err(|e| format!("control dial: {e:?}"))?;
+    let timer = EspIdfTimer::new().map_err(|e| format!("timer: {e:?}"))?;
+    call(
+        "FtpsClient::connect",
+        FtpsClient::connect(
+            raw,
+            EspIdfTlsConnector::unverified(),
+            EspIdfRawStreamFactory,
+            PrinterIdentity::new(PRINTER_IP, PRINTER_SERIAL, access_code),
+            timer,
+            TlsVersionCheck::Enforce,
+        ),
+    )
+    .await
+}
+
+/// One cycle: a prefix read, then a timed fresh login and listing. Returns the cycle's summary.
+async fn cycle(access_code: &str, path: &str, buf: &mut [u8], n: usize) -> Result<String, String> {
+    let mut ftps = connect_ftps(access_code).await?;
+    let got = call("download_prefix", ftps.download_prefix(path, buf)).await?;
+    let poisoned = ftps.is_poisoned();
+    if n == 1 {
+        log::info!(
+            "  prefix SHA-256 {} ({got} B, starts {:02x?})",
+            sha256_hex(&buf[..got]),
+            &buf[..got.min(8)]
+        );
+    }
+    // A poisoned client skips QUIT: the printer has already closed the control connection.
+    ftps.disconnect().await;
+
+    let started = Instant::now();
+    let mut fresh = connect_ftps(access_code).await?;
+    let listed = call("list /", fresh.list_directory("/", listing_time())).await?;
+    let relogin_ms = started.elapsed().as_millis();
+    fresh.disconnect().await;
+
+    let stopped = if got < buf.len() {
+        "FILE SHORTER THAN THE BUFFER: not an early stop"
+    } else if poisoned {
+        "stopped early, client poisoned"
+    } else {
+        "FULL BUFFER BUT CLIENT NOT POISONED"
+    };
+    Ok(format!(
+        "{got} B, {stopped}; fresh login + LIST ({} entries) {relogin_ms} ms",
+        listed.len()
+    ))
+}
+
+/// Whether `port` accepts a plain TCP connection within `PORT_CHECK_BOUND`, closed cleanly.
+fn accepts(port: u16) -> bool {
+    match TcpStream::connect_timeout(&addr(port), PORT_CHECK_BOUND) {
+        Ok(stream) => {
+            drop(stream);
+            true
+        }
+        Err(e) => {
+            log::warn!("    {port}: connect failed: {e}");
+            false
         }
     }
 }
@@ -157,42 +187,37 @@ fn timed_connect(port: u16, bound: Duration) -> Option<u128> {
 fn unreachable_ports() -> Vec<u16> {
     [MQTT_PORT, FTPS_PORT, CAMERA_PORT]
         .into_iter()
-        .filter(|port| timed_connect(*port, PORT_CHECK_BOUND).is_none())
+        .filter(|port| !accepts(*port))
         .collect()
 }
 
-/// `Ok(None)`: all ports accepted at once. `Ok(Some(ms))`: all accepted again after `ms`.
-/// `Err(ports)`: still refusing after `PORT_RECOVERY_LIMIT`.
-fn port_health(after: &str) -> Result<Option<u128>, Vec<u16>> {
+fn run(access_code: &'static str, path: &'static str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    let mut buf = vec![0u8; PREFIX_BYTES];
+    for n in 1..=CYCLES {
+        let result = match block_on(cycle(access_code, path, &mut buf, n)) {
+            Ok(r) => r,
+            Err(e) => format!("FAILED: {e}"),
+        };
+        log::info!("  cycle {n}: {result}");
+        results.push((format!("cycle {n}"), result));
+        std::thread::sleep(SPACING);
+    }
     let started = Instant::now();
-    loop {
-        let unreachable = unreachable_ports();
-        if unreachable.is_empty() {
-            if started.elapsed() < PORT_RETRY {
-                return Ok(None);
-            }
-            let ms = started.elapsed().as_millis();
-            log::warn!("    ports: all accepting again {ms} ms after {after}");
-            return Ok(Some(ms));
+    for at in CHECKPOINTS {
+        if let Some(wait) = Duration::from_secs(at).checked_sub(started.elapsed()) {
+            std::thread::sleep(wait);
         }
-        if started.elapsed() >= PORT_RECOVERY_LIMIT {
-            log::error!(
-                "    ports: {unreachable:?} still not accepting {}s after {after}",
-                PORT_RECOVERY_LIMIT.as_secs()
-            );
-            return Err(unreachable);
-        }
-        log::warn!("    ports: {unreachable:?} not accepting after {after}; retrying");
-        std::thread::sleep(PORT_RETRY);
+        let down = unreachable_ports();
+        let result = if down.is_empty() {
+            String::from("all ports accepting")
+        } else {
+            format!("PORTS NOT ACCEPTING {down:?}")
+        };
+        log::info!("  +{at}s after the last cycle: {result}");
+        results.push((format!("+{at}s"), result));
     }
-}
-
-fn describe(dial: Option<u128>) -> String {
-    match dial {
-        None => format!("990 dial >{}s", DIAL_BOUND.as_secs()),
-        Some(ms) if ms >= SLOW_MS => format!("SLOW 990 dial {ms} ms"),
-        Some(ms) => format!("990 dial {ms} ms"),
-    }
+    results
 }
 
 fn main() {
@@ -207,7 +232,15 @@ fn main() {
         log::warn!("could not raise bambino::io to debug: {e:?}");
     }
 
-    log::info!("esp32-hw-probe: connection teardown on ESP-IDF");
+    log::info!("esp32-hw-probe: FtpsClient::download_prefix on ESP-IDF (#629)");
+
+    let (Some(access_code), Some(path)) = (ACCESS_CODE, FTPS_PATH) else {
+        log::error!(
+            "STOPPED: set PROBE_ACCESS_CODE and PROBE_FTPS_PATH (a .3mf on the card larger than \
+             {PREFIX_BYTES} B) in esp32-hw-probe/.env, rebuild and flash."
+        );
+        park();
+    };
 
     let peripherals = Peripherals::take().unwrap_or_else(|e| fail_setup("Peripherals", e));
     let sysloop = EspSystemEventLoop::take().unwrap_or_else(|e| fail_setup("event loop", e));
@@ -228,44 +261,20 @@ fn main() {
     }
     log::info!("preflight: 8883, 990 and 6000 all accept connections");
 
-    let mut summary: Vec<(Phase, Vec<Option<u128>>, Result<Option<u128>, Vec<u16>>)> = Vec::new();
-    for phase in [Phase::Close, Phase::DropRaw, Phase::MidDrop] {
-        log::info!("--- phase {phase:?}: {CYCLES} cycles ---");
-        let mut dials = Vec::with_capacity(CYCLES);
-        for n in 1..=CYCLES {
-            teardown(phase);
-            let dial = timed_connect(FTPS_PORT, DIAL_BOUND);
-            log::info!("  {phase:?} cycle {n}: {}", describe(dial));
-            dials.push(dial);
-            std::thread::sleep(SPACING);
-        }
-        let health = port_health(&format!("{phase:?}"));
-        let dead = health.is_err();
-        summary.push((phase, dials, health));
-        if dead {
-            break;
-        }
-    }
+    let worker = std::thread::Builder::new()
+        .stack_size(WORKER_STACK)
+        .spawn(move || run(access_code, path));
+    let results = match worker.map(|handle| handle.join()) {
+        Ok(Ok(results)) => results,
+        Ok(Err(_)) => vec![(String::from("worker"), String::from("PANICKED"))],
+        Err(e) => vec![(String::from("worker"), format!("could not start: {e}"))],
+    };
 
-    log::info!("================ connection teardown on ESP-IDF ================");
-    for (phase, dials, health) in &summary {
-        let slow = dials
-            .iter()
-            .filter(|d| d.is_none_or(|ms| ms >= SLOW_MS))
-            .count();
-        let list: Vec<String> = dials.iter().map(|d| describe(*d)).collect();
-        log::info!("  {phase:?}: {slow}/{CYCLES} slow; {}", list.join(", "));
-        match health {
-            Ok(None) => log::info!("    after: all ports accepting"),
-            Ok(Some(ms)) => log::info!("    after: refused at first, all accepting after {ms} ms"),
-            Err(ports) => log::info!(
-                "    after: {ports:?} still refusing after {}s; later phases skipped",
-                PORT_RECOVERY_LIMIT.as_secs()
-            ),
-        }
+    log::info!("================ download_prefix on ESP-IDF ================");
+    for (step, result) in &results {
+        log::info!("  {step}: {result}");
     }
-    log::info!("RESULT: every phase must leave every port accepting connections.");
-    log::info!("==================================================================");
+    log::info!("============================================================");
     park();
 }
 

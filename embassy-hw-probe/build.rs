@@ -26,7 +26,10 @@ const REQUIRED_KEYS: [&str; 5] = [
 /// Keys forwarded when present and silently skipped when absent. Read them with
 /// `option_env!`, not `env!` — `env!` on an absent key is a compile error, which would drag
 /// the key back into being effectively required.
-const OPTIONAL_KEYS: [&str; 0] = [];
+const OPTIONAL_KEYS: [&str; 1] = [
+    // A file on the printer's card, for probes that read one (#629's `download_prefix` check).
+    "PROBE_FTPS_PATH",
+];
 
 fn main() {
     load_dotenv();

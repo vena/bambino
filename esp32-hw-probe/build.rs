@@ -27,7 +27,14 @@ const REQUIRED_KEYS: [&str; 4] = [
 ///
 /// `PROBE_RESET_LISTENER` is `<ip>:<port>` of `scripts/tls-reset-listener.py` on the LAN,
 /// for probes that need a peer to drop a handshake partway through.
-const OPTIONAL_KEYS: [&str; 2] = ["PROBE_ACCESS_CODE", "PROBE_RESET_LISTENER"];
+///
+/// `PROBE_FTPS_PATH` is a file on the printer's card, for probes that read one (#629's
+/// `download_prefix` check).
+const OPTIONAL_KEYS: [&str; 3] = [
+    "PROBE_ACCESS_CODE",
+    "PROBE_RESET_LISTENER",
+    "PROBE_FTPS_PATH",
+];
 
 fn main() {
     embuild::espidf::sysenv::output();
