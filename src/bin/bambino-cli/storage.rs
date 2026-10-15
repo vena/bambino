@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use bambino::Error;
 use bambino::ftps::CurrentDateTime;
-use bambino::ftps::project::{pick_image_member, plate_image_member};
+use bambino::ftps::project::{front_members, pick_image_member, plate_image_member};
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer};
 use clap::Subcommand;
 
@@ -70,6 +70,20 @@ pub enum FilesAction {
     Front {
         remote_path: String,
         plate: u32,
+        out_dir: String,
+        #[arg(default_value_t = 262_144)]
+        bytes: usize,
+    },
+    /// Find which plate a job's .3mf holds G-code for, and read that plate's images
+    ///
+    /// Reads the start of the file only. Exactly one plate with G-code is the plate a print of
+    /// this file runs; its plate_<N>.png and pick_<N>.png go into OUT_DIR. Several, or none,
+    /// write nothing. Stopping early ends the FTPS session, as with head.
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] job <REMOTE_PATH> <OUT_DIR> [BYTES]"
+    )]
+    Job {
+        remote_path: String,
         out_dir: String,
         #[arg(default_value_t = 262_144)]
         bytes: usize,
@@ -266,6 +280,56 @@ pub async fn run(
                         }
                         None => println!("{name}: not in the file's front section"),
                     }
+                }
+                if client.is_poisoned() {
+                    println!("Transfer stopped early; the printer has closed this FTPS session.");
+                }
+            }
+            FilesAction::Job {
+                remote_path,
+                out_dir,
+                bytes,
+            } => {
+                if bytes == 0 || bytes > bambino::ftps::MAX_TRANSFER_BYTES {
+                    return Err(CliError::InvalidArgs(format!(
+                        "BYTES must be between 1 and {}",
+                        bambino::ftps::MAX_TRANSFER_BYTES
+                    )));
+                }
+                println!("Reading the plate G-code list of '{remote_path}'...");
+                let mut buf = vec![0u8; bytes];
+                let started = Instant::now();
+                let prefix = client.read_job_prefix(&remote_path, &mut buf).await?;
+                print_transfer_time("RETR (job prefix)", started);
+                println!(
+                    "Read {} bytes; plates with G-code: {:?}",
+                    prefix.bytes.len(),
+                    prefix.gcode_plates
+                );
+                match prefix.gcode_plates.as_slice() {
+                    [plate] => {
+                        let names = [plate_image_member(*plate), pick_image_member(*plate)];
+                        let found = front_members(
+                            prefix.bytes,
+                            [names[0].as_str(), names[1].as_str()],
+                        )?;
+                        for (name, member) in names.iter().zip(found) {
+                            let file_name = name.trim_start_matches("Metadata/");
+                            match member {
+                                Some(data) => {
+                                    let local = Path::new(&out_dir).join(file_name);
+                                    fs::write(&local, data)?;
+                                    println!(
+                                        "{name}: {} bytes, written to '{}'",
+                                        data.len(),
+                                        local.display()
+                                    );
+                                }
+                                None => println!("{name}: not in the file's front section"),
+                            }
+                        }
+                    }
+                    _ => println!("Not exactly one plate: the file can't say which one prints."),
                 }
                 if client.is_poisoned() {
                     println!("Transfer stopped early; the printer has closed this FTPS session.");
