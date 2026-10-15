@@ -84,6 +84,26 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   passing host time instead costs. Entries whose year came from `now` are flagged with
   [`FtpFile::year_is_inferred`](../parser/index.md#ftpfile).
 
+  Returns at most [`FTP_MAX_LISTING_ENTRIES`](../parser/index.md#ftp-max-listing-entries) entries. To place a listing's memory yourself,
+  use [`list_directory_each`](#ftpsclient), which this collects from.
+
+- <span id="ftpsclient-list-directory-each"></span>`async fn list_directory_each(&mut self, remote_path: &str, now: impl Into<CurrentDateTime>, on_entry: impl FnMut(FtpFile)) -> Result<(), Error>` — [`CurrentDateTime`](../parser/index.md#currentdatetime), [`FtpFile`](../parser/index.md#ftpfile), [`Error`](../../error/index.md#error)
+
+  Lists a directory like [`list_directory`](#ftpsclient), handing each entry to `on_entry` as its line arrives.
+
+  Nothing is collected, so the caller decides where entries live; bambino keeps one line
+  buffer of at most 4 KiB. `now` is as for `list_directory`. The same per-line leniency
+  applies: a malformed or non-UTF-8 line skips that entry only, and so does a line over the
+  buffer, which no real entry reaches (a name is at most 255 bytes on ext4, 765 on FAT).
+  No entry cap applies; every parsed entry is delivered.
+
+  # Errors
+
+  As for `list_directory`. **Entries delivered before an error are not a complete
+  listing; discard them.** In particular a `426` final reply whose payload is empty or
+  doesn't end on a line terminator is [`Error::ProtocolViolation`](../../error/index.md#error), after the complete
+  lines before the cut were already delivered.
+
 - <span id="ftpsclient-get-file-size"></span>`async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, Error>` — [`Error`](../../error/index.md#error)
 
   Queries the exact size of a file stored on the printer's MicroSD card.
@@ -173,6 +193,35 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   # Errors
 
   [`Error::InvalidArgument`](../../error/index.md#error) for an empty `buf`, before anything is sent.
+
+- <span id="ftpsclient-read-front-members"></span>`async fn read_front_members<'b, const N: usize>(&mut self, remote_path: &str, buf: &'b mut [u8], names: [&str; N]) -> Result<[Option<&'b [u8]>; N], Error>` — [`Error`](../../error/index.md#error)
+
+  Reads named members from the front of a remote `.3mf` into `buf`, stopping once they're found.
+
+  For a job's plate and pick images: pass names from
+  [`plate_image_member`](../project/index.md#plate-image-member) and
+  [`pick_image_member`](../project/index.md#pick-image-member). Each result is a slice of
+  `buf` holding that member's bytes, or `None` when the archive's front section has no such
+  member; see [`front_members`](../project/index.md#front-members) for the layout this
+  relies on. The caller owns `buf`, so it decides where the bytes live and caps how much is
+  read; a member is never returned cut short.
+
+  The read stops at the end of the last requested member, or the end of the front section,
+  so `buf` needs room for everything up to there: about 36 KB for plate 1's images on a
+  typical single-plate file, more for later plates (every plate's `plate_N.png` comes before
+  any plate's `pick_N.png`).
+
+  **This usually ends the session**, like [`download_prefix`](#ftpsclient): the
+  read stops before the end of the file, so the client is left poisoned and
+  `PrinterClient::ftps()` reconnects.
+
+  # Errors
+
+  - [`Error::InvalidArgument`](../../error/index.md#error) for an empty `buf` (before anything is sent), or a `buf` too
+    small to reach the requested members.
+  - [`Error::ProtocolViolation`](../../error/index.md#error) when the file isn't the slicers' layout, or ends inside
+    its front section.
+  - Anything [`download_prefix`](#ftpsclient) returns.
 
 - <span id="ftpsclient-create-directory"></span>`async fn create_directory(&mut self, path: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
