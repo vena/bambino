@@ -62,7 +62,7 @@ const CAMERA_PORT: u16 = 6000;
 
 const CYCLES: usize = 6;
 const SPACING: Duration = Duration::from_secs(3);
-/// Covers a Bambu Studio `.3mf`'s plate and pick images (36 864 B on the P1S file #629 measured).
+/// Covers a `.3mf`'s plate and pick images (36 864 B on the OrcaSlicer-sliced file #629 measured).
 /// `embassy-hw-probe` reads less: its heap can't hold this beside two TLS sessions.
 const PREFIX_BYTES: usize = 40 * 1024;
 /// When the ports are checked after the last cycle, in seconds.
