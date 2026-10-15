@@ -188,20 +188,22 @@ The first reply frame carries `reply.mem_dl_param_size` and the printer's own JS
 
 ### 8.5 Which Printers Serve It
 
-**Known to serve it:** P2S and X2D (open-bamboo-networking captures, X2D `01.02.00.00`). H2D and H2S are the printers ha-bambulab's client exists for, because their FTPS hides internal storage.
+**Serves it:** P2S and X2D (open-bamboo-networking captures, X2D `01.02.00.00`). H2D and H2S are the printers ha-bambulab's client exists for, because their FTPS hides internal storage. **Unconfirmed:** X1, X1C, X1E, H2C, H2D Pro.
 
-**Studio's gate** (`MachineObject::parse_json`, `MediaFilePanel::fetchUrl`). The file browser opens a LAN session only when the MQTT report has `print.ipcam.file.local == "local"`. Its siblings are `file.remote` (`none`/`tutk`/`agora`/`tutk_agaro`) and `file.model_download` (`enabled`/`disabled`). With neither `local` nor a remote protocol, Studio shows "Browsing file in storage is not supported in current firmware" and never dials. The gate isn't reliable in either direction: open-bamboo-networking found that P2S and newer A-series firmware omit `ipcam.file` and serve the service anyway, and it injects the block (`try_inject_ipcam_file_local` in `src/agent.cpp`).
+**Doesn't serve it: every chamber-image printer (A1, A1 Mini, A2L, P1P, P1S).** On a P1S running `01.10.00.00` (2026-10-15), with no camera client attached:
 
-**Skip objects** is gated differently. The button depends on `fun` bit 49 (`is_support_partskip`, `MachineObject::parse_new_info`). In LAN mode, `PartSkipDialog::fetchUrl` dials port 6000 without checking `ipcam.file`, then falls back to TUTK on failure.
+| Sent after TLS | Printer's response |
+|---|---|
+| The 8.2 login frame alone | Nothing within 5 s |
+| Login and setup back to back (155 bytes) | Nothing within 10 s, connection held open |
+| Login and setup back to back, long wait | Closed 60 s after the TLS handshake, having sent nothing |
+| The 80-byte `0x3000` chamber auth, before and after the runs above | A JPEG frame within about 1 s |
 
-**A1, A1 Mini, A2L, P1P, P1S: unknown.** Their port 6000 serves the chamber-image stream with the `0x3000` 80-byte auth [REF-CAM-BINARY]. No source has tried the file-service login on them:
+The P1S's port 6000 is the chamber-image server only. It doesn't recognise the file-service login, and it doesn't send the `0x0003013F` reject the P2S file service uses. It just holds the connection until its 60 s idle close. The other chamber-image models are recorded as not serving it without a probe of their own. They share the P1S's port-6000 server: the same `0x3000` auth, the same one-connection limit and redial stall (bambuddy `fix(camera) #2521`, recorded in `src/camera/binary.rs`), and the same `ipcam` key set in every capture (below). The P2S file service, by contrast, accepts several simultaneous sessions **(OBN only)**.
 
-- bambino's P1S captures (`tests/mocks/P1S.json`, `tests/mocks/P1S_print_sequence.ndjson`) carry `ipcam` with no `file` block and no `liveview` block. Studio would refuse the file browser on that printer. The skip-objects path doesn't consult that block.
-- open-bamboo-networking's `cover_cache.cpp` `fetch_worker` has a TODO for "A1 Mini and other printers that don't expose the BambuTunnel port". This is a comment, not a recorded test.
-- OpenBambuAPI says A1 and possibly P1 serve MJPEG on 6000 "instead". It gives no test of the file-service login either.
-- The two port-6000 servers behave differently. The A1/P1 chamber-image socket accepts one connection at a time, and redialing before the old FIN completes can stall it for about 20 minutes (bambuddy `fix(camera) #2521`, recorded in `src/camera/binary.rs`). The P2S file service accepts several simultaneous sessions **(OBN only)**. So the P2S result can't be carried over to A1/P1.
+**Telemetry can't detect it, and Studio's gate doesn't match the wire.** The file browser opens a LAN session only when the MQTT report has `print.ipcam.file.local == "local"` (`MachineObject::parse_json`, `MediaFilePanel::fetchUrl`). Its siblings are `file.remote` (`none`/`tutk`/`agora`/`tutk_agaro`) and `file.model_download`. Without them, Studio shows "Browsing file in storage is not supported in current firmware" and never dials. **No LAN capture of any model carries `ipcam.file`.** That covers ha-bambulab's mocks for A1, A2L, P1P, P2S, X1C, X2D, H2C, H2D, H2D Pro and H2S, bambino's P1S captures, OpenBambuAPI's `mqtt.md` example, and bambuddy's virtual-printer report. The P2S and X2D omit it and serve the service anyway, which is why open-bamboo-networking injects the block (`try_inject_ipcam_file_local` in `src/agent.cpp`). The `ipcam` key that does split the two groups in those captures is `rtsp_url`. It is present (a URL or `"disable"`) on every RTSPS model and absent on every chamber-image model. That is the camera split bambino's quirks already carry as `camera_protocol()`.
 
-Settling it needs a hardware probe (#633). Send the 8.2 login to an A1/P1 printer and record the reply: a login ack, a `0x0003013F` reject, a TLS alert, a close, or silence. Then send setup, `REQUEST_MEDIA_ABILITY` and the `mem:/16` read during a print. Do this with no camera client attached, because of the single-connection limit.
+**Skip objects** is gated differently. The button depends on `fun` bit 49 (`is_support_partskip`, `MachineObject::parse_new_info`). In LAN mode, `PartSkipDialog::fetchUrl` dials port 6000 without checking `ipcam.file`, then falls back to TUTK on failure. On a chamber-image printer that dial gets the silent 60 s hold measured above, unless the client times out first.
 
 ---
 
@@ -213,4 +215,4 @@ These follow from the sections above. They are design inputs, not decisions.
 - **Allocation.** Replies interleave JSON and binary in one length-prefixed frame. On `no_std`, a client should bound `payload_len` as `BinaryCameraStream` does, and stream fragments to a sink rather than buffering a whole file. Upload fragments are up to `chunk_size` KiB (255 KiB seen).
 - **Integrity.** Check `total` and `file_md5` on every download. An MD5 implementation is a new dependency for the library.
 - **Sequencing.** One request in flight per session, matched on `sequence` and `cmdtype`, gives Studio's ordering plus the stale-reply protection the other two clients add.
-- **Capability detection.** Neither `ipcam.file` nor the printer model settles availability. Try the handshake, and treat a reject, a close or a timeout as "not served". On A1/P1 that probe must not overlap a chamber-image session (8.5).
+- **Capability detection.** Don't dial a model whose `camera_protocol()` is `BinaryJpeg`. It never serves the service, and a dial ties up its single port-6000 connection for 60 s. On RTSPS models, try the handshake and treat a `0x0003013F` reject, a close or a timeout as "not served". A chamber-image server sends nothing at all, so a timeout of a few seconds after the login is what detects it. `ipcam.file` is never sent, so it can't be used.
