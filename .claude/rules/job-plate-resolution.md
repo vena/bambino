@@ -10,4 +10,6 @@ A running job's plate number is resolved through a chain (`src/client/job.rs` mo
 
 The cached inputs must never describe a different job. `plate_idx` is dropped when `gcode_file` changes. A recorded start applies only to the `gcode_file` it named, only on the connection it was seen on, and only until that job ends. Loosening any of these trades a `None` for a possible wrong plate.
 
+`job_path` follows the same rule for the file: the echoed `url`, else `/` + a bare `.3mf` `gcode_file`, confirmed by `SIZE`, else `None`. A screen start reports no folder (`reference/02_ftps.md` [REF-FTPS-OPS]). The card is deliberately not searched for the name: that costs one `LIST` per folder and only helps hand-placed files (owner decision, 2026-10-15).
+
 New sources (the port-6000 file service, GitHub issue #633) join the chain as a `PlateSource` variant. They are gated per model through a `ModelQuirks` method, never a model match.

@@ -47,6 +47,14 @@ The physical storage architecture utilizes a flat folder structure under the roo
 *   `/data`: Core calibration parameters and logs.
 *   `/data/Metadata`: Stores parsed metadata (previews, model structures) extracted by the firmware.
 
+**Where a running job's file is.** Measured on a P1S (2026-10-15):
+
+*   **Sent from Bambu Studio over LAN:** the file lands at the card root, and the start command says so (`url: "ftp://<name>"`, `file: "<name>"`). Telemetry's `gcode_file` is the bare name: `benchy-multiobject-test.gcode.3mf`, `632-multiplate-test_plate_2.gcode.3mf`. In `/cache` the printer keeps only its own extracts for the job (`<name>_plate_N.gcode`, `1_<name>.gcode.bbl`), not a `.3mf`.
+*   **Started from the printer's screen:** no `project_file` frame appears on the report topic. `gcode_file` and `subtask_name` are both the file's bare name, extension included, **with no folder**: a file at `/test632/deeper/level/multi2.gcode.3mf` reported `gcode_file: "multi2.gcode.3mf"`. The screen's file list shows every folder except `cache` flattened into one list, so the folder is gone there too.
+*   The screen's file list also persisted a deleted file for minutes, across leaving and re-entering the list, until a power cycle.
+
+So `/` + `gcode_file` names the job's file whenever it is at the root, which is where both slicers put it. A file placed in a folder by hand has no telemetry route to its path. `PrinterClient::job_path` uses the start command's `url` when it saw one, else `/` + `gcode_file`, confirmed with one `SIZE`, and `None` otherwise. It deliberately doesn't search the card: one `LIST` per folder (0.47 s for `/`, 2.13 s for `/cache` on this card) to cover hand-placed files only. If a hand-placed file is printed while a different file with the same name sits at the root, `job_path` returns the root file.
+
 ---
 
 ### 2.2 Over-the-Wire Telemetry Payload Schema (The Read Stream) [REF-FTPS-OPS]

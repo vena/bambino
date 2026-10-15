@@ -112,6 +112,90 @@ async fn test_job_plate_from_plate_idx_until_the_file_changes() {
     assert_eq!(client.job_plate(), None);
 }
 
+/// Runs `job_path()` after `frames`, with an FTPS mock answering `SIZE expected_path` with `reply`.
+///
+/// `expected_path` `None` means `job_path()` must not touch FTPS at all.
+async fn job_path_after(
+    frames: Vec<Vec<u8>>,
+    size: Option<(&'static str, &'static [u8])>,
+) -> Option<String> {
+    let client = client_after(frames).await;
+    let (control, server_control) = tokio::io::duplex(8192);
+    let server = size.map(|(path, reply)| {
+        tokio::spawn(mock_ftps::run_mock_server_size(server_control, path, reply))
+    });
+    let mut client = match server {
+        Some(_) => {
+            let ftps = FtpsClient::connect(
+                TokioIo::new(control),
+                DummyTlsConnector,
+                MockDataStreamFactory::empty(),
+                test_identity(PrinterModel::P1S),
+                DummyTimer,
+                TlsVersionCheck::Enforce,
+            )
+            .await
+            .expect("FTPS handshake");
+            client.with_attached_ftps(ftps)
+        }
+        // Never connected: a `job_path()` that dialed FTPS would fail instead of returning.
+        None => client.with_ftps(
+            DummyTlsConnector,
+            MockDataStreamFactory::empty(),
+            DummyTimer,
+        ),
+    };
+    let path = client.job_path().await.expect("job_path");
+    if let Some(server) = server {
+        server.await.expect("FTPS mock panicked");
+    }
+    path
+}
+
+#[tokio::test]
+async fn test_job_path_from_the_start_command_url() {
+    let path = job_path_after(
+        vec![start_echo(), status("RUNNING", FILE)],
+        Some(("/632-multiplate-test_plate_2.gcode.3mf", b"213 75230\r\n")),
+    )
+    .await;
+    assert_eq!(
+        path.as_deref(),
+        Some("/632-multiplate-test_plate_2.gcode.3mf")
+    );
+}
+
+#[tokio::test]
+async fn test_job_path_from_a_bare_gcode_file_at_the_root() {
+    // A screen start: no echo, and `gcode_file` is the bare name.
+    let path = job_path_after(
+        vec![status("RUNNING", "multi2.gcode.3mf")],
+        Some(("/multi2.gcode.3mf", b"213 75230\r\n")),
+    )
+    .await;
+    assert_eq!(path.as_deref(), Some("/multi2.gcode.3mf"));
+}
+
+#[tokio::test]
+async fn test_job_path_is_none_for_a_file_not_at_the_root() {
+    // The screen-started file was in a folder: `/` + its bare name isn't there.
+    let path = job_path_after(
+        vec![status("RUNNING", "multi2.gcode.3mf")],
+        Some(("/multi2.gcode.3mf", b"550 Could not get file size.\r\n")),
+    )
+    .await;
+    assert_eq!(path, None);
+}
+
+#[tokio::test]
+async fn test_job_path_is_none_without_a_card_file_name() {
+    // X1 reports a path on internal storage; idle reports nothing.
+    for gcode_file in ["/data/Metadata/plate_1.gcode", ""] {
+        let path = job_path_after(vec![status("RUNNING", gcode_file)], None).await;
+        assert_eq!(path, None, "{gcode_file:?}");
+    }
+}
+
 /// A sent two-plate file: both plates' images, G-code for `sliced` only.
 fn two_plate_file(sliced: &[u32]) -> Vec<u8> {
     let mut file = Vec::new();

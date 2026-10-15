@@ -27,6 +27,8 @@
 //! [`read_job_images`]: super::PrinterClient::read_job_images
 
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 use serde::Deserialize;
@@ -35,6 +37,7 @@ use crate::error::Error;
 use crate::ftps::project::{
     front_members, pick_image_member, plate_image_member, plate_of_gcode_param,
 };
+use crate::ftps::protocol::FTP_FILE_NOT_FOUND;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::control::PrintStatus;
 use crate::types::telemetry::PrinterTelemetry;
@@ -80,6 +83,8 @@ pub struct JobImages<'b> {
 pub(crate) struct JobStart {
     /// Last path segment of the echoed `file` (or `url`), matched against `gcode_file`'s.
     file: String,
+    /// The card path an `ftp://` `url` names; `None` for any other scheme or no `url`.
+    path: Option<String>,
     plate: u32,
     /// `PrinterClient::connection_generation` when it was seen: a job can end and another start
     /// while disconnected, so a start from an earlier connection is not trusted.
@@ -98,6 +103,11 @@ struct StartEchoFields {
     file: Option<String>,
     url: Option<String>,
 }
+
+/// The `url` scheme of a start command whose file is on the card (`ftp://<name>`, the card root).
+const FTP_URL_SCHEME: &str = "ftp://";
+/// The extension of a job file `job_path` accepts from a bare `gcode_file` name.
+const PROJECT_FILE_EXTENSION: &str = ".3mf";
 
 /// The names of plate `plate`'s image and pick image, in that order.
 fn plate_member_names(plate: u32) -> [String; 2] {
@@ -161,14 +171,68 @@ where
                 source: PlateSource::Telemetry,
             });
         }
+        self.running_job_start().map(|start| JobPlate {
+            plate: start.plate,
+            source: PlateSource::StartCommand,
+        })
+    }
+
+    /// The recorded start command, when it started the job now running on this connection.
+    fn running_job_start(&self) -> Option<&JobStart> {
+        let cache = &self.core.cache;
         let start = cache.last_job_start.as_ref()?;
         let running = cache.last_gcode_file.as_deref().map(last_segment)?;
-        (start.generation == self.core.connection_generation && start.file == running).then_some(
-            JobPlate {
-                plate: start.plate,
-                source: PlateSource::StartCommand,
-            },
-        )
+        (start.generation == self.core.connection_generation && start.file == running)
+            .then_some(start)
+    }
+
+    /// Returns the running job's `.3mf` path on the printer's card, or `None` when it can't be found exactly.
+    ///
+    /// The path comes from the `url` of the start command the printer echoed for this job, when
+    /// this client saw one, and otherwise from `/` followed by `gcode_file`. One `SIZE` request
+    /// confirms the file is there; a file that isn't is `None`, not an error.
+    ///
+    /// That second rule covers every file Bambu Studio and OrcaSlicer send, which go to the card
+    /// root (`url: "ftp://<name>"`), and a print started from the printer's screen of a file at
+    /// the root. **A file placed in a folder by hand** and printed from the screen reports only
+    /// its bare name (the P1S screen lists every folder but `cache` flattened into one list), so
+    /// it gives `None`, unless a *different* file of the same name sits at the root: that one is
+    /// returned, and its images are not the job's. `reference/02_ftps.md` [REF-FTPS-OPS] has the
+    /// capture. A `gcode_file` that is a path rather than a bare `.3mf` name, as X1 firmware's
+    /// `/data/Metadata/plate_1.gcode` on internal storage, is `None`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever connecting FTPS or the `SIZE` request returns, except the `550` of a missing
+    /// file.
+    pub async fn job_path(&mut self) -> Result<Option<String>, Error> {
+        let path = match self.running_job_start() {
+            Some(start) => start.path.clone(),
+            None => self
+                .core
+                .cache
+                .last_gcode_file
+                .as_deref()
+                .filter(|name| {
+                    !name.contains('/')
+                        && name.len() > PROJECT_FILE_EXTENSION.len()
+                        && name
+                            .get(name.len() - PROJECT_FILE_EXTENSION.len()..)
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case(PROJECT_FILE_EXTENSION))
+                })
+                .map(|name| format!("/{name}")),
+        };
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        match self.ftps().await?.get_file_size(&path).await {
+            Ok(_) => Ok(Some(path)),
+            Err(Error::FtpReply {
+                code: FTP_FILE_NOT_FOUND,
+                ..
+            }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Reads the running job's plate and pick images from the start of its `.3mf` at `remote_path`, into `buf`.
@@ -178,9 +242,7 @@ where
     /// With no answer from either, the result's `plate` and both images are `None`: the images
     /// of a guessed plate would look right and be wrong.
     ///
-    /// `remote_path` is the job's file on the printer's storage. For a print sent over LAN to a
-    /// P1S it was `/` followed by `gcode_file` (`reference/02_ftps.md`); mapping a job to its
-    /// file in general is GitHub issue #630.
+    /// `remote_path` is the job's file on the printer's card, from [`job_path`](Self::job_path).
     ///
     /// One FTPS read, which usually ends the session: see
     /// [`FtpsClient::download_prefix`](crate::ftps::FtpsClient::download_prefix). `buf` needs room
@@ -244,8 +306,14 @@ where
         ) else {
             return;
         };
+        let path = fields
+            .url
+            .as_deref()
+            .and_then(|url| url.strip_prefix(FTP_URL_SCHEME))
+            .map(|rest| format!("/{}", rest.trim_start_matches('/')));
         self.core.cache.last_job_start = Some(JobStart {
             file: String::from(last_segment(file)),
+            path,
             plate,
             generation: self.core.connection_generation,
         });

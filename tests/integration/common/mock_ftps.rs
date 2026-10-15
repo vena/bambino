@@ -499,6 +499,17 @@ pub async fn run_mock_server_avbl_unsupported(server_control: tokio::io::DuplexS
         .await;
 }
 
+/// Mock server answering one `SIZE path` with `reply`, for `PrinterClient::job_path()`.
+pub async fn run_mock_server_size(
+    server_control: tokio::io::DuplexStream,
+    path: &'static str,
+    reply: &'static [u8],
+) {
+    let mut ctl = Control::control_only(server_control);
+    ctl.handshake(true).await;
+    ctl.expect(&format!("SIZE {path}\r\n"), reply).await;
+}
+
 /// Mock server for `modification_time()` (`MDTM`) success — a well-formed `213 YYYYMMDDHHMMSS`
 /// reply.
 pub async fn run_mock_server_mdtm_success(server_control: tokio::io::DuplexStream) {
