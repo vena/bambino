@@ -131,7 +131,7 @@ The physical printer exposes a dedicated set of network interfaces on the local 
 | **990** | TCP | Implicit TLS (FTPS) Only | MicroSD Storage Traversal, 3MF Print Transfer, Logs | All Models |
 | **322** | TCP | TLS (RTSPS) | H.264 video stream extraction via RTSPS over TLS (disabled by default on H2 series*) | X1, X1C, X1E, X2D, P2S, H2C, H2D, H2D Pro, H2S |
 | **6000** | TCP | TLS Socket | Direct chunked JPEG frame-buffer extraction [REF-CAM-BINARY] | A1, A1 Mini, A2L, P1P, P1S |
-| **6000** | TCP | TLS Socket | File service: list, read, upload, and read members of the running job [REF-FILESVC] | P2S, X2D, H2D, H2S; not the chamber-image models |
+| **6000** | TCP | TLS Socket | File service: list, read, upload, and read members of the running job [REF-FILESVC] | Printers advertising `fun` bit 31: P2S, X2D, H2 series, X1C; not the chamber-image models |
 
 \*Note: For the H2 series (H2S, H2D, H2C, H2D Pro), Port 322 is closed by default (`ECONNREFUSED`) in factory firmware. Telemetry reports `"rtsp_url": "disable"` until manually enabled via the physical touchscreen interface.
 
