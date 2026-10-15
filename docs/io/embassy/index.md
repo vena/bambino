@@ -60,6 +60,8 @@ resolver, and Bambu printers are addressed by IPv4 in practice.
 
 - <span id="embassyrawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<EmbassyTcpStream, SocketError>` — [`EmbassyTcpStream`](#embassytcpstream), [`SocketError`](../index.md#socketerror)
 
+- <span id="embassyrawstreamfactory-rawstreamfactory-abort-on-drop"></span>`fn abort_on_drop(&self, stream: &mut EmbassyTcpStream)` — [`EmbassyTcpStream`](#embassytcpstream)
+
 ### `EmbassySocketBuffers<const N: usize, const TX_SZ: usize, const RX_SZ: usize>`
 
 ```rust
@@ -114,6 +116,10 @@ instead of stalling on a full receive window. A connection still closing 10 s af
 gets an RST. The pool enforces that bound itself rather than with `TcpSocket::set_timeout`: on
 smoltcp 0.13.1, `close()` doesn't restart the timeout clock, so an idle connection would get
 an RST in place of its FIN.
+
+The one exception is a stream marked by [`EmbassyRawStreamFactory`](#embassyrawstreamfactory)'s `abort_on_drop`, for a
+download stopped early: its socket gets an RST at once, with no drain, because the printer
+answers a FIN on a data channel by sending the rest of the file (GitHub issue #629).
 
 **Waiting its turn.** A dial waits while any connection of this pool is still closing, so the
 printer, which caps concurrent connections, never holds an old bambino connection alongside a
@@ -174,7 +180,8 @@ struct EmbassyTcpStream {
 A raw TCP connection from [`EmbassyRawStreamFactory`](#embassyrawstreamfactory), on a socket borrowed from an [`EmbassySocketPool`](#embassysocketpool).
 
 Dropping it ends the connection with a FIN and returns the socket to the pool, which keeps it
-registered until the printer has closed its side too (see [`EmbassySocketPool`](#embassysocketpool)).
+registered until the printer has closed its side too (see [`EmbassySocketPool`](#embassysocketpool)). After
+[`EmbassyRawStreamFactory`](#embassyrawstreamfactory)'s `abort_on_drop`, dropping it sends an RST instead.
 
 #### Trait Implementations
 
@@ -191,6 +198,8 @@ registered until the printer has closed its side too (see [`EmbassySocketPool`](
 ##### `impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory`
 
 - <span id="embassyrawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<EmbassyTcpStream, SocketError>` — [`EmbassyTcpStream`](#embassytcpstream), [`SocketError`](../index.md#socketerror)
+
+- <span id="embassyrawstreamfactory-rawstreamfactory-abort-on-drop"></span>`fn abort_on_drop(&self, stream: &mut EmbassyTcpStream)` — [`EmbassyTcpStream`](#embassytcpstream)
 
 ##### `impl Read for EmbassyTcpStream`
 
@@ -323,6 +332,10 @@ serve every `PrinterClient` channel.
   The ESP-IDF backend can do this only because `esp_tls_get_ssl_context` hands out that
   pointer. Return `None` honestly — a consumer pinning certificates cannot do so on this
   backend today, and must fail closed rather than be handed a fabricated empty chain.
+
+- <span id="embassytlsconnector-tlsconnector-raw-stream-mut"></span>`fn raw_stream_mut<'s>(&self, stream: &'s mut <Self as >::Stream) -> Option<&'s mut RawStream>` — [`TlsConnector`](../index.md#tlsconnector)
+
+  The stream under the session, via `mbedtls-rs` 0.3's `Session::stream()`.
 
 ### `EmbassyTlsStream<'a, T: AsyncIo>`
 

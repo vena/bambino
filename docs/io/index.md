@@ -119,6 +119,14 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokiorawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError>` — [`TokioIo`](tokio/index.md#tokioio), [`SocketError`](#socketerror)
 
+- <span id="tokiorawstreamfactory-rawstreamfactory-abort-on-drop"></span>`fn abort_on_drop(&self, stream: &mut TokioIo<::tokio::net::TcpStream>)` — [`TokioIo`](tokio/index.md#tokioio)
+
+  Sets a zero linger, so dropping the stream sends an RST whatever is left unread.
+
+  Reaches only a stream this factory hands out directly (the plaintext data channel):
+  `TokioTlsConnector` keeps the default `raw_stream_mut`, so under TLS the OS's own RST on a
+  close with unread data does the job (see `RawStreamFactory::abort_on_drop`).
+
 ##### `impl<T: ::tokio::io::AsyncRead + Unpin> Read for TokioIo<T>`
 
 - <span id="tokioio-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
@@ -707,6 +715,24 @@ persistently and call it on every lazy (re)connect, mirroring `TlsConnector::con
   A backend may accept only some address forms and reject the rest with
   [`SocketError::InvalidInput`]: embassy takes IPv4 literals only.
 
+#### Provided Methods 
+
+- `fn abort_on_drop(&self, _stream: &mut RawIO)`
+
+  Arranges for `stream`'s connection to end with a TCP RST, not a FIN, when it is dropped.
+
+  Only for a download stopped early (`FtpsClient::download_prefix`): a Bambu printer ignores
+  a FIN on a data channel and sends the rest of the file, but stops at once on an RST (P1S,
+  GitHub issue #629). Every other teardown keeps its FIN, which protects data the printer
+  has not read yet.
+
+  The default does nothing. That is enough where the stack already ends such a connection
+  with an RST once it is closed with received data unread: lwIP (ESP-IDF) sends one from
+  `tcp_close_shutdown` in that case, and answers data arriving after the close with another
+  from `tcp_input`; Linux does the same on close (RFC 2525), and macOS was seen to on the
+  P1S. The embassy pool closes with a FIN and then drains, so its factory overrides this;
+  tokio's sets a zero linger so the RST doesn't depend on what was left unread.
+
 #### Implementors
 
 - [`EmbassyRawStreamFactory`](embassy/index.md#embassyrawstreamfactory)
@@ -858,6 +884,14 @@ without enforcing a static library provider.
 
   The returned DER is copied out of the live session: on ESP-IDF the chain is owned by the
   SSL context and is freed on drop or renegotiation, so borrowing it would dangle.
+
+- `fn raw_stream_mut<'s>(&self, _stream: &'s mut <Self as >::Stream) -> Option<&'s mut RawStream>`
+
+  Returns the raw stream under `stream`'s TLS session, for [`RawStreamFactory::abort_on_drop`](#rawstreamfactory) only.
+
+  Never read or write through it: bytes that bypass the session corrupt it. `None` (the
+  default) where the backend can't hand the raw stream out; an abort then relies on the
+  stack's own close, as [`RawStreamFactory::abort_on_drop`](#rawstreamfactory) describes.
 
 #### Implementors
 

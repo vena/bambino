@@ -199,6 +199,14 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokiorawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError>` — [`TokioIo`](#tokioio), [`SocketError`](../index.md#socketerror)
 
+- <span id="tokiorawstreamfactory-rawstreamfactory-abort-on-drop"></span>`fn abort_on_drop(&self, stream: &mut TokioIo<::tokio::net::TcpStream>)` — [`TokioIo`](#tokioio)
+
+  Sets a zero linger, so dropping the stream sends an RST whatever is left unread.
+
+  Reaches only a stream this factory hands out directly (the plaintext data channel):
+  `TokioTlsConnector` keeps the default `raw_stream_mut`, so under TLS the OS's own RST on a
+  close with unread data does the job (see `RawStreamFactory::abort_on_drop`).
+
 ##### `impl<T: ::tokio::io::AsyncRead + Unpin> Read for TokioIo<T>`
 
 - <span id="tokioio-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
@@ -247,6 +255,14 @@ FTPS passive-mode data transfers alike (the Tokio counterpart to
 ##### `impl RawStreamFactory<TokioIo<TcpStream>> for TokioRawStreamFactory`
 
 - <span id="tokiorawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError>` — [`TokioIo`](#tokioio), [`SocketError`](../index.md#socketerror)
+
+- <span id="tokiorawstreamfactory-rawstreamfactory-abort-on-drop"></span>`fn abort_on_drop(&self, stream: &mut TokioIo<::tokio::net::TcpStream>)` — [`TokioIo`](#tokioio)
+
+  Sets a zero linger, so dropping the stream sends an RST whatever is left unread.
+
+  Reaches only a stream this factory hands out directly (the plaintext data channel):
+  `TokioTlsConnector` keeps the default `raw_stream_mut`, so under TLS the OS's own RST on a
+  close with unread data does the job (see `RawStreamFactory::abort_on_drop`).
 
 ### `TokioTimer`
 
