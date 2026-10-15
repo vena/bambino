@@ -31,6 +31,8 @@ Status telemetry structures, string emission anomalies, and task-ID overflow lim
 
 **It is authoritative over the 3MF's own `slice_info`.** A printer can retain or reuse a 3MF whose embedded `slice_info` names a different plate, so a consumer that trusts the archive over this field renders a stale thumbnail. Prefer `plate_idx` whenever it is present and non-zero. *(Verification source: ha-bambulab PR #2067, whose cover-image path takes `plate_idx` over the archive's index metadata for exactly this reason.)*
 
+**P1 and A1 printers don't send `plate_idx`.** A P1S printing a job sent from Bambu Studio over LAN reported `gcode_file` and `subtask_name` but no `plate_idx` in its `pushall` (2026-10-15). ha-bambulab's mock reports agree: present for H2C/H2D/H2S, P2S, X1C and X2D, absent for A1, A2L and P1P. Without it, BambuStudio's `MachineObject::parse_json` takes a local job's plate from `gcode_file`, as the number between its last `_` and last `.` (`snaps_plate_3.gcode.3mf` → 3), and `PartSkipDialog::DownloadPartsFile` falls back to plate 1 when that fails too. A file named without `_plate_N`, like the P1S job above (`benchy-multiobject-test.gcode.3mf`), gives no number. Whether the archive of a plate sent from a multi-plate project still names its plate `N`, or renumbers it 1, has not been checked.
+
 **`subtask_name` also carries the printer's own internal jobs.** A consumer asking "is this a real user print?" must filter these four names out:
 
 *   `auto_cali_for_user`
