@@ -319,6 +319,49 @@ pub async fn run_mock_server_download_prefix(
         .expect("data write");
 }
 
+/// Appends one `.3mf` entry as the slicers write it: flag bit 3, then a signed data descriptor.
+///
+/// `method` is the ZIP method recorded (0 stored, 8 deflate); `data` goes in as given, since
+/// nothing under test inflates. CRC-32 is computed bitwise here so the tests don't share the
+/// library's.
+pub fn zip_entry(out: &mut Vec<u8>, name: &str, method: u16, data: &[u8]) {
+    let crc = !data.iter().fold(!0u32, |mut crc, &b| {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+        }
+        crc
+    });
+    out.extend_from_slice(b"PK\x03\x04\x14\x00\x08\x08");
+    out.extend_from_slice(&method.to_le_bytes());
+    out.extend_from_slice(&[0; 16]);
+    out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(name.as_bytes());
+    out.extend_from_slice(data);
+    out.extend_from_slice(b"PK\x07\x08");
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+}
+
+/// [`zip_entry`] for a stored member.
+pub fn stored_entry(out: &mut Vec<u8>, name: &str, data: &[u8]) {
+    zip_entry(out, name, 0, data);
+}
+
+/// A PNG of `pixels` IDAT bytes: signature, IDAT, IEND (chunk CRCs zeroed).
+pub fn test_png(pixels: &[u8]) -> Vec<u8> {
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    for (kind, data) in [(&b"IDAT"[..], pixels), (b"IEND", &[])] {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&[0; 4]);
+    }
+    out
+}
+
 /// Mock server for `read_front_members`: `RETR` of `file`, which the client stops reading early.
 ///
 /// Like [`run_mock_server_download_prefix`], nothing follows the `150`. The write is allowed to

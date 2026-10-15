@@ -18,6 +18,8 @@
 use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
 use crate::error::Error;
 
@@ -194,6 +196,109 @@ pub(crate) fn walk_front<'a, const N: usize>(
         }
         pos = next;
     }
+}
+
+/// Prefix of a plate's G-code member: `Metadata/plate_<N>.gcode`.
+const PLATE_GCODE_PREFIX: &str = "Metadata/plate_";
+/// Suffix of a plate's G-code member, after its number.
+const PLATE_GCODE_SUFFIX: &str = ".gcode";
+/// Suffix of the checksum member both slicers write for each plate's G-code.
+const PLATE_GCODE_MD5_SUFFIX: &str = ".gcode.md5";
+
+/// Returns the plates whose G-code a `.3mf` holds, read from the start of the file, in archive order.
+///
+/// Both slicers' exporters (`_BBS_3MF_Exporter::_save_model_to_file`) write one
+/// `Metadata/plate_<N>.gcode.md5` for every plate with G-code, all in one loop and before the
+/// first `Metadata/plate_<N>.gcode`. A file sent to a printer stores no meshes
+/// (`SaveStrategy::SkipModel`), so that list sits just past the front section: within the first
+/// 30–55 KB on the files measured (`reference/02_ftps.md` [REF-FTPS-3MF-FRONT]). The printer can
+/// only print G-code the file holds, so when this returns exactly one plate, that is the plate
+/// being printed. Several mean the file alone can't say which.
+///
+/// The walk ends at the first plate's G-code member, or at the central directory.
+///
+/// # Errors
+///
+/// As [`front_members`]: [`Error::InvalidArgument`] when `prefix` ends before the list does,
+/// [`Error::ProtocolViolation`] for a file the walk can't follow, such as one that stores its
+/// meshes uncompressed before the list.
+pub fn gcode_plates(prefix: &[u8]) -> Result<Vec<u32>, Error> {
+    match walk_gcode_plates(prefix)? {
+        GcodeWalk::Done(plates) => Ok(plates),
+        GcodeWalk::NeedMore => Err(Error::InvalidArgument(
+            "the .3mf prefix ends before its list of plate G-code does; read more of the file"
+                .into(),
+        )),
+    }
+}
+
+/// The start of a job's `.3mf` and the plates it holds G-code for, from [`FtpsClient::read_job_prefix`](crate::ftps::FtpsClient::read_job_prefix).
+#[derive(Debug)]
+pub struct JobPrefix<'a> {
+    /// The bytes read, from offset 0. Pass them to [`front_members`] for plate images.
+    pub bytes: &'a [u8],
+    /// What [`gcode_plates`] returns for these bytes.
+    pub gcode_plates: Vec<u32>,
+}
+
+/// Where a walk for the G-code plate list over a partial buffer got to.
+pub(crate) enum GcodeWalk {
+    /// The list is complete.
+    Done(Vec<u32>),
+    /// The buffer ends before it is.
+    NeedMore,
+}
+
+/// Walks local headers from offset 0 to the first plate G-code member, collecting the plates of the checksum members before it.
+pub(crate) fn walk_gcode_plates(buf: &[u8]) -> Result<GcodeWalk, Error> {
+    let mut plates = Vec::new();
+    let mut pos = 0;
+    loop {
+        let Some(sig) = buf.get(pos..pos + 4) else {
+            return Ok(GcodeWalk::NeedMore);
+        };
+        if sig == ZIP_CENTRAL_HEADER_SIG {
+            return Ok(GcodeWalk::Done(plates));
+        }
+        if sig != ZIP_LOCAL_HEADER_SIG {
+            return Err(violation(
+                "no ZIP local header where the previous entry ended",
+            ));
+        }
+        let Some(entry) = LocalHeader::parse(buf, pos)? else {
+            return Ok(GcodeWalk::NeedMore);
+        };
+        if plate_of(entry.name, PLATE_GCODE_SUFFIX).is_some() {
+            return Ok(GcodeWalk::Done(plates));
+        }
+        if let Some(plate) = plate_of(entry.name, PLATE_GCODE_MD5_SUFFIX) {
+            plates.push(plate);
+        }
+        let Some((_, next)) = entry.find_end(buf)? else {
+            return Ok(GcodeWalk::NeedMore);
+        };
+        pos = next;
+    }
+}
+
+/// Returns `N` when `name` is exactly `Metadata/plate_<N><suffix>`, `N` a positive decimal.
+fn plate_of(name: &[u8], suffix: &str) -> Option<u32> {
+    let digits = name
+        .strip_prefix(PLATE_GCODE_PREFIX.as_bytes())?
+        .strip_suffix(suffix.as_bytes())?;
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    core::str::from_utf8(digits)
+        .ok()?
+        .parse()
+        .ok()
+        .filter(|&plate| plate > 0)
+}
+
+/// Returns `N` for a start command's `param`, `Metadata/plate_<N>.gcode`, the plate it prints.
+pub(crate) fn plate_of_gcode_param(param: &str) -> Option<u32> {
+    plate_of(param.as_bytes(), PLATE_GCODE_SUFFIX)
 }
 
 /// The parts of a local file header the walk needs.

@@ -23,6 +23,7 @@ mod connect;
 pub mod drying;
 pub mod dummy;
 mod hardware;
+mod job;
 mod motion;
 mod print;
 mod print_options;
@@ -48,6 +49,7 @@ pub use command::{
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
+pub use job::{JobImages, JobPlate, PlateSource};
 pub use motion::HOMING_WAIT_TIMEOUT;
 pub use thermal::PreheatHandles;
 #[doc(inline)]

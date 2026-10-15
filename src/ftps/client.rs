@@ -19,7 +19,7 @@ use crate::ftps::parser::{
     CurrentDateTime, FTP_MAX_LISTING_ENTRIES, FtpFile, FtpTimestamp, parse_listing_line,
     parse_mdtm_timestamp,
 };
-use crate::ftps::project::{Walk, walk_front};
+use crate::ftps::project::{GcodeWalk, JobPrefix, Walk, walk_front, walk_gcode_plates};
 use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::PrinterModel;
@@ -1035,6 +1035,55 @@ where
             Walk::NeedMore => Err(Error::InvalidArgument(
                 format!(
                     "a {capacity}-byte buffer ends before the requested .3mf members do; pass a larger one"
+                )
+                .into(),
+            )),
+        }
+    }
+
+    /// Reads the start of a remote `.3mf` into `buf` until its list of plate G-code is complete, returning the bytes and the list.
+    ///
+    /// The list is [`gcode_plates`](crate::ftps::project::gcode_plates)': exactly one plate
+    /// there is the plate being printed. Every plate image comes before the list, so
+    /// [`front_members`](crate::ftps::project::front_members) over the returned bytes yields any
+    /// plate's images with no second read. About 30–55 KB on the files measured.
+    ///
+    /// **This usually ends the session**, like [`download_prefix`](Self::download_prefix).
+    ///
+    /// # Errors
+    ///
+    /// As [`read_front_members`](Self::read_front_members): [`Error::InvalidArgument`] for an
+    /// empty `buf` or one too small to reach the end of the list, and
+    /// [`Error::ProtocolViolation`] for a file the walk can't follow or one that ends inside it.
+    pub async fn read_job_prefix<'b>(
+        &mut self,
+        remote_path: &str,
+        buf: &'b mut [u8],
+    ) -> Result<JobPrefix<'b>, Error> {
+        if buf.is_empty() {
+            return Err(Error::InvalidArgument(
+                "read_job_prefix needs a non-empty buffer".into(),
+            ));
+        }
+        let capacity = buf.len();
+        let (filled, eof) = self
+            .download_prefix_until(remote_path, &mut *buf, |read| {
+                !matches!(walk_gcode_plates(read), Ok(GcodeWalk::NeedMore))
+            })
+            .await?;
+        let buf: &'b [u8] = buf;
+        let bytes = &buf[..filled];
+        match walk_gcode_plates(bytes)? {
+            GcodeWalk::Done(gcode_plates) => Ok(JobPrefix {
+                bytes,
+                gcode_plates,
+            }),
+            GcodeWalk::NeedMore if eof => Err(Error::ProtocolViolation(
+                "the .3mf ends before its list of plate G-code does".into(),
+            )),
+            GcodeWalk::NeedMore => Err(Error::InvalidArgument(
+                format!(
+                    "a {capacity}-byte buffer ends before the .3mf's list of plate G-code does; pass a larger one"
                 )
                 .into(),
             )),

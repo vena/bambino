@@ -30,7 +30,7 @@ use super::command::{
 };
 use super::print_options::ReplySettings;
 use super::types::{PrintProgress, TelemetryEvent};
-use crate::mqtt::commands::PromptSoundRequest;
+use crate::mqtt::commands::{ProjectFileRequest, PromptSoundRequest};
 use crate::types::control::{PrintSpeed, PrintStatus};
 
 /// Cached "last-observed" telemetry values, updated by `PrinterClient::poll_telemetry()`.
@@ -118,6 +118,12 @@ pub(crate) struct TelemetryCache {
     // `quirk_context()`: neither is on every incremental frame.
     pub(crate) last_support_flow_calibration: Option<bool>,
     pub(crate) last_cali_version: Option<i32>,
+    // The running job's identity for `job_plate()` (`client/job.rs`): `gcode_file`, the
+    // `plate_idx` reported for that file (dropped when the file changes), and the plate of the
+    // start command the printer echoed for it.
+    pub(crate) last_gcode_file: Option<String>,
+    pub(crate) last_plate_idx: Option<u32>,
+    pub(crate) last_job_start: Option<super::job::JobStart>,
 }
 
 impl<
@@ -310,6 +316,12 @@ where
             {
                 self.apply_print_option_reply(&msg.payload);
             }
+            // Whichever client sent it: the printer echoes every start on the report topic.
+            if echo.command() == ProjectFileRequest::COMMAND
+                && matches!(decode_verdict(&echo), CommandOutcome::Accepted)
+            {
+                self.record_job_start(&msg.payload);
+            }
             return match self.core.commands.take_answered(&echo) {
                 Some(handle) => {
                     let resolution = CommandResolution {
@@ -373,6 +385,8 @@ where
         let Some(print) = report.print.as_ref() else {
             return;
         };
+        // Before `update_state_cache`: it compares against the previous `gcode_state`.
+        self.update_job_cache(print);
         self.update_state_cache(print);
         self.update_progress_cache(print);
         self.update_temperature_cache(print);

@@ -32,6 +32,7 @@ mod camera_test;
 mod client_command_outcome_test;
 mod client_core_test;
 mod client_gcode_test;
+mod client_job_test;
 mod client_negative_test;
 mod client_reconnect_test;
 mod client_session_test;

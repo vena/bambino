@@ -208,6 +208,144 @@ fn test_front_members_refuses_other_layouts() {
     );
 }
 
+/// The rest of a sent file after its front section, as both exporters write it: the mesh-less
+/// model, the project settings, one checksum per sliced plate, then the first plate's G-code.
+fn with_gcode(mut file: Vec<u8>, plates: &[u32]) -> Vec<u8> {
+    entry(
+        &mut file,
+        "3D/3dmodel.model",
+        8,
+        FAKE_DEFLATE,
+        Desc::Signed,
+        None,
+    );
+    entry(
+        &mut file,
+        "Metadata/project_settings.config",
+        8,
+        FAKE_DEFLATE,
+        Desc::Signed,
+        None,
+    );
+    for plate in plates {
+        let name = format!("Metadata/plate_{plate}.gcode.md5");
+        entry(&mut file, &name, 8, FAKE_DEFLATE, Desc::Signed, None);
+    }
+    if let Some(first) = plates.first() {
+        let name = format!("Metadata/plate_{first}.gcode");
+        entry(&mut file, &name, 8, FAKE_DEFLATE, Desc::Signed, None);
+    }
+    file.extend_from_slice(b"PK\x01\x02");
+    file
+}
+
+/// The front section of a two-plate file, as captured on a P1S.
+fn two_plate_front() -> Vec<u8> {
+    let mut file = Vec::new();
+    entry(
+        &mut file,
+        "[Content_Types].xml",
+        8,
+        FAKE_DEFLATE,
+        Desc::Signed,
+        None,
+    );
+    for name in [
+        "Metadata/plate_1.png",
+        "Metadata/plate_2.png",
+        "Metadata/pick_1.png",
+        "Metadata/pick_2.png",
+    ] {
+        entry(
+            &mut file,
+            name,
+            0,
+            &png(name.as_bytes()),
+            Desc::Signed,
+            None,
+        );
+    }
+    entry(
+        &mut file,
+        "Metadata/plate_1.json",
+        8,
+        FAKE_DEFLATE,
+        Desc::Signed,
+        None,
+    );
+    entry(
+        &mut file,
+        "Metadata/plate_2.json",
+        8,
+        FAKE_DEFLATE,
+        Desc::Signed,
+        None,
+    );
+    file
+}
+
+#[test]
+fn test_gcode_plates_names_the_one_sliced_plate() {
+    // Plate 2 sent from a two-plate project: both plates' images, only plate 2's G-code.
+    let file = with_gcode(two_plate_front(), &[2]);
+    assert_eq!(gcode_plates(&file).expect("walk"), [2]);
+    // The images of the named plate come out of the same bytes.
+    let [pick] = front_members(&file, ["Metadata/pick_2.png"]).expect("walk");
+    assert_eq!(pick, Some(&png(b"Metadata/pick_2.png")[..]));
+}
+
+#[test]
+fn test_gcode_plates_reports_every_sliced_plate() {
+    let file = with_gcode(two_plate_front(), &[1, 2]);
+    assert_eq!(gcode_plates(&file).expect("walk"), [1, 2]);
+    let file = with_gcode(two_plate_front(), &[]);
+    assert!(gcode_plates(&file).expect("walk").is_empty());
+}
+
+#[test]
+fn test_gcode_plates_needs_the_whole_list() {
+    let file = with_gcode(two_plate_front(), &[2]);
+    let gcode_at = file
+        .windows(b"Metadata/plate_2.gcode".len())
+        .rposition(|w| w == b"Metadata/plate_2.gcode")
+        .expect("gcode entry")
+        - ZIP_LOCAL_HEADER_LEN;
+    // The checksum list is complete once the G-code entry's header is readable.
+    let ends_at = gcode_at + ZIP_LOCAL_HEADER_LEN + "Metadata/plate_2.gcode".len();
+    assert_eq!(gcode_plates(&file[..ends_at]).expect("walk"), [2]);
+    let short = gcode_plates(&file[..gcode_at]);
+    assert!(matches!(short, Err(Error::InvalidArgument(_))), "{short:?}");
+}
+
+#[test]
+fn test_plate_of_accepts_only_exact_names() {
+    assert_eq!(
+        plate_of(b"Metadata/plate_12.gcode.md5", PLATE_GCODE_MD5_SUFFIX),
+        Some(12)
+    );
+    assert_eq!(
+        plate_of(b"Metadata/plate_3.gcode", PLATE_GCODE_SUFFIX),
+        Some(3)
+    );
+    // A checksum member is not a G-code member, and neither is anything else.
+    assert_eq!(
+        plate_of(b"Metadata/plate_3.gcode.md5", PLATE_GCODE_SUFFIX),
+        None
+    );
+    for name in [
+        &b"Metadata/plate_.gcode"[..],
+        b"Metadata/plate_0.gcode",
+        b"Metadata/plate_-1.gcode",
+        b"Metadata/plate_1a.gcode",
+        b"Metadata/plate_99999999999.gcode",
+        b"x/Metadata/plate_1.gcode",
+    ] {
+        assert_eq!(plate_of(name, PLATE_GCODE_SUFFIX), None, "{name:?}");
+    }
+    assert_eq!(plate_of_gcode_param("Metadata/plate_2.gcode"), Some(2));
+    assert_eq!(plate_of_gcode_param("/data/Metadata/plate_2.gcode"), None);
+}
+
 #[test]
 fn test_member_names() {
     assert_eq!(plate_image_member(2), "Metadata/plate_2.png");
