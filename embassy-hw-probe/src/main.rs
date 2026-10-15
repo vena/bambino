@@ -94,12 +94,13 @@ const RX_SZ: usize = 2048;
 /// An FTPS transfer holds two connections, control and data.
 const POOL_N: usize = 2;
 
-/// Stage P: cycles, spacing, and how much of the file each reads. 40 KiB covers a Bambu Studio
-/// `.3mf`'s plate and pick images (36 864 B on the P1S file #629 measured) and fits beside two
-/// TLS sessions (~48 KB each) in a C6's ~174 KB heap.
+/// Stage P: cycles, spacing, and how much of the file each reads. Any size below the file's tests
+/// the early stop. 40 KiB (a `.3mf`'s plate and pick images) did not fit: with 128 KB free at
+/// startup and 87 KB after the buffer, the data channel's TLS session failed to allocate
+/// (`MBEDTLS_ERR_SSL_ALLOC_FAILED`) beside the control channel's.
 const CYCLES: usize = 6;
 const SPACING: Duration = Duration::from_secs(3);
-const PREFIX_BYTES: usize = 40 * 1024;
+const PREFIX_BYTES: usize = 16 * 1024;
 /// When the ports are checked after the last cycle, in seconds.
 const CHECKPOINTS: [u64; 3] = [0, 30, 130];
 

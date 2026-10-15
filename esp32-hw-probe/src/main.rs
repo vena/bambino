@@ -62,16 +62,18 @@ const CAMERA_PORT: u16 = 6000;
 
 const CYCLES: usize = 6;
 const SPACING: Duration = Duration::from_secs(3);
-/// The same 40 KiB as `embassy-hw-probe`, so the two runs compare: it covers a Bambu Studio
-/// `.3mf`'s plate and pick images (36 864 B on the P1S file #629 measured).
+/// Covers a Bambu Studio `.3mf`'s plate and pick images (36 864 B on the P1S file #629 measured).
+/// `embassy-hw-probe` reads less: its heap can't hold this beside two TLS sessions.
 const PREFIX_BYTES: usize = 40 * 1024;
 /// When the ports are checked after the last cycle, in seconds.
 const CHECKPOINTS: [u64; 3] = [0, 30, 130];
 /// Bound on one port check's connect.
 const PORT_CHECK_BOUND: Duration = Duration::from_secs(10);
 /// The FTPS work runs on its own thread: the main task's 8 KB stack (`sdkconfig.defaults`) is
-/// too small for the FTPS connect futures (`src/io/CLAUDE.md`).
-const WORKER_STACK: usize = 32 * 1024;
+/// too small for the FTPS connect futures (`src/io/CLAUDE.md`). 32 KB overflowed in the first
+/// TLS handshake (`mbedtls_entropy_func`, under `esp_tls_conn_new_sync`) while the whole cycle
+/// future sat on the stack too; it is boxed now, and this is the margin on top.
+const WORKER_STACK: usize = 48 * 1024;
 
 type Ftps = FtpsClient<EspIdfTcpStream, EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer>;
 
@@ -195,7 +197,9 @@ fn run(access_code: &'static str, path: &'static str) -> Vec<(String, String)> {
     let mut results = Vec::new();
     let mut buf = vec![0u8; PREFIX_BYTES];
     for n in 1..=CYCLES {
-        let result = match block_on(cycle(access_code, path, &mut buf, n)) {
+        // Boxed: `block_on` keeps its future on this thread's stack, and the cycle future holds
+        // room for the connect, prefix-read and listing futures at once.
+        let result = match block_on(Box::pin(cycle(access_code, path, &mut buf, n))) {
             Ok(r) => r,
             Err(e) => format!("FAILED: {e}"),
         };
