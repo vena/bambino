@@ -366,6 +366,14 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   The same answer as
   [`supports_ams_drying_while_printing`](capabilities/index.md#capabilities).
 
+- <span id="capabilities-file-tunnel-support"></span>`fn file_tunnel_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Port-6000 file tunnel support — see [`ModelQuirks::file_tunnel_support`](../quirks/index.md#modelquirks).
+
+  Gate [`PrinterClient::file_tunnel`](#printerclient) and anything
+  built on it on this; an `Assumed(true)` printer may still fail the handshake, which is the
+  signal to use FTPS instead.
+
 - <span id="capabilities-prompt-sound-support"></span>`fn prompt_sound_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
   Prompt sound support — see [`ModelQuirks::prompt_sound_support`](../quirks/index.md#modelquirks).
@@ -1401,12 +1409,26 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Configures the binary-JPEG camera for lazy connection on first camera method call.
 
   Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
-  parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
+  parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`. The
+  same slot serves the file tunnel on printers that have one; see
+  [`with_file_tunnel()`](#printerclient).
 
-  Call [`disconnect_camera()`](#printerclient) first on a client with a connected
-  camera session, for the same reason as `.with_ftps()`. On a
+  Call [`disconnect_camera()`](#printerclient) (or
+  [`disconnect_file_tunnel()`](#printerclient)) first on a client with a
+  connected session, for the same reason as `.with_ftps()`. On a
   [`from_mqtt()`](#printerclient) client the first camera call returns
   [`Error::NotConfigured`](../error/index.md#error); use [`with_attached_camera()`](#printerclient) there.
+
+- <span id="superprinterclient-with-file-tunnel"></span>`fn with_file_tunnel<NewRawIO, NewTls, NewFactory>(self, tls: NewTls, factory: NewFactory) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, NewRawIO, NewTls, NewFactory>` — [`PrinterClient`](#printerclient)
+
+  Configures the port-6000 file tunnel for lazy connection on first use.
+
+  The same builder as [`with_camera()`](#printerclient), under the name that fits a
+  printer serving the file tunnel: no printer serves both the binary camera and the tunnel
+  on port 6000, so one connector and dialer cover whichever applies. A connector already
+  cloned for MQTT or FTPS serves here too. Call
+  [`disconnect_file_tunnel()`](#printerclient) first on a client with a
+  connected tunnel, for the same reason as `.with_ftps()`.
 
 - <span id="superprinterclient-with-attached-camera"></span>`fn with_attached_camera<NewCameraRawIO, NewCameraTls>(self, tls: NewCameraTls, camera: BinaryCameraStream<<NewCameraTls as >::Stream>) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, NewCameraRawIO, NewCameraTls, super::PreConnected<NewCameraRawIO>>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`PrinterClient`](#printerclient)
 
@@ -1475,6 +1497,41 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp`) exactly —
   every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
+
+- <span id="superprinterclient-file-tunnel"></span>`async fn file_tunnel(&mut self) -> Result<FileTunnel<'_, <CameraTls as >::Stream, Timer>, Error>` — [`FileTunnel`](../file_tunnel/client/index.md#filetunnel), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
+
+  Returns the port-6000 file tunnel, connecting first if needed.
+
+  Requires [`.with_file_tunnel()`](#printerclient). Refuses with
+  [`Error::ModelMismatch`](../error/index.md#error) without dialing when the printer doesn't serve the tunnel (see
+  [`Capabilities::file_tunnel_support`](capabilities/index.md#capabilities)): every
+  chamber-image model, and any printer that reported `fun` bit 31 clear. A printer assumed to
+  serve it that fails the handshake returns that error, which is the signal to use FTPS.
+
+  The returned handle borrows this client and bounds every call with its timer; chain
+  [`.with_timer()`](#printerclient), or a printer that ignores the login is only detected
+  when it closes the connection after 60 s. The session stays open after the call; close it
+  with [`disconnect_file_tunnel()`](#printerclient) when done, since each live
+  TLS session costs memory on embedded targets.
+
+- <span id="superprinterclient-connect-file-tunnel"></span>`async fn connect_file_tunnel(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+
+  Eagerly establishes the file tunnel session.
+
+  Idempotent: returns `Ok(())` if already connected. Not part of
+  [`connect_all()`](#printerclient), which already opens three TLS sessions.
+
+- <span id="superprinterclient-is-file-tunnel-connected"></span>`fn is_file_tunnel_connected(&self) -> bool`
+
+  Returns whether a usable file tunnel session is open (a poisoned one is not).
+
+- <span id="superprinterclient-disconnect-file-tunnel"></span>`async fn disconnect_file_tunnel(&mut self)`
+
+  Closes and drops the file tunnel session, if one is open.
+
+  Sends `close_notify` through the configured connector, then drops the stream, which is what
+  frees its memory (`.claude/rules/tls-session-teardown.md`); a poisoned session is dropped
+  without the close. Idempotent, and the next file tunnel call redials.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 

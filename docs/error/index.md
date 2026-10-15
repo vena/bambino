@@ -40,6 +40,10 @@ enum Error {
         code: u16,
         text: std::borrow::Cow<'static, str>,
     },
+    TunnelReply {
+        command: &'static str,
+        result: i64,
+    },
     ModelMismatch(std::borrow::Cow<'static, str>),
     Backpressure,
     InvalidArgument(std::borrow::Cow<'static, str>),
@@ -121,6 +125,14 @@ This enum wraps all protocol, serialization, and transport-level failures. `Netw
   Carries the server's own code and text, so a `550 No such file` and a `553 Permission
   denied` stay distinguishable. The control channel is still in sync after this error (the
   reply was read in full), so the client remains usable.
+
+- **`TunnelReply`**
+
+  The printer's port-6000 file tunnel answered a request with a failure `result`.
+  
+  Carries the printer's code; [`file_tunnel::result_name`](../file_tunnel/index.md#result-name)
+  names the ones BambuStudio defines (`10` is `FILE_NO_EXIST`, `17` `STORAGE_UNAVAILABLE`).
+  The reply was read in full, so the tunnel session is still in sync and usable.
 
 - **`ModelMismatch`**
 

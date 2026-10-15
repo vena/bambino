@@ -76,6 +76,7 @@ async fn example() -> Result<(), bambino::Error> {
   one coordinated interface with methods for thermal control, motion, print jobs, etc.
 - [`mqtt`](mqtt/index.md) — Low-level MQTT v3.1.1 client and command serialization.
 - [`ftps`](ftps/index.md) — Implicit FTPS client for SD card file operations.
+- [`file_tunnel`](file_tunnel/index.md) — Port-6000 file service on newer printers: internal storage and the running job's files.
 - [`discovery`](discovery/index.md) — SSDP-based printer discovery on the local network.
 - [`types`](client/types/index.md#types) — Telemetry schemas, version info, and shared data types.
 - [`models`](models/index.md) — Printer model identification from serial numbers.
@@ -95,6 +96,7 @@ async fn example() -> Result<(), bambino::Error> {
   - [`diagnostics`](diagnostics/index.md)
   - [`discovery`](discovery/index.md)
   - [`error`](#error)
+  - [`file_tunnel`](file_tunnel/index.md)
   - [`ftps`](ftps/index.md)
   - [`identity`](identity/index.md)
   - [`io`](io/index.md)
@@ -115,6 +117,7 @@ async fn example() -> Result<(), bambino::Error> {
 | [`diagnostics`](diagnostics/index.md) | mod | # Diagnostics & Calibration |
 | [`discovery`](discovery/index.md) | mod | # Printer Discovery (SSDP) |
 | [`error`](#error) | mod | # Error Types |
+| [`file_tunnel`](file_tunnel/index.md) | mod | # Port-6000 File Tunnel |
 | [`ftps`](ftps/index.md) | mod | # FTPS File Transfer Client |
 | [`identity`](identity/index.md) | mod | # Printer Identity |
 | [`io`](io/index.md) | mod | # Transport Abstraction Layer |
@@ -131,6 +134,7 @@ async fn example() -> Result<(), bambino::Error> {
 - [`diagnostics`](diagnostics/index.md) — # Diagnostics & Calibration
 - [`discovery`](discovery/index.md) — # Printer Discovery (SSDP)
 - [`error`](error/index.md#error) — # Error Types
+- [`file_tunnel`](file_tunnel/index.md) — # Port-6000 File Tunnel
 - [`ftps`](ftps/index.md) — # FTPS File Transfer Client
 - [`identity`](identity/index.md) — # Printer Identity
 - [`io`](io/index.md) — # Transport Abstraction Layer
@@ -238,6 +242,10 @@ enum Error {
         code: u16,
         text: std::borrow::Cow<'static, str>,
     },
+    TunnelReply {
+        command: &'static str,
+        result: i64,
+    },
     ModelMismatch(std::borrow::Cow<'static, str>),
     Backpressure,
     InvalidArgument(std::borrow::Cow<'static, str>),
@@ -319,6 +327,14 @@ This enum wraps all protocol, serialization, and transport-level failures. `Netw
   Carries the server's own code and text, so a `550 No such file` and a `553 Permission
   denied` stay distinguishable. The control channel is still in sync after this error (the
   reply was read in full), so the client remains usable.
+
+- **`TunnelReply`**
+
+  The printer's port-6000 file tunnel answered a request with a failure `result`.
+  
+  Carries the printer's code; [`file_tunnel::result_name`](file_tunnel/index.md#result-name)
+  names the ones BambuStudio defines (`10` is `FILE_NO_EXIST`, `17` `STORAGE_UNAVAILABLE`).
+  The reply was read in full, so the tunnel session is still in sync and usable.
 
 - **`ModelMismatch`**
 

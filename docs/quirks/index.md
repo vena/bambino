@@ -538,6 +538,22 @@ must adapt to.
   Reported by `fun` bit 62 (`DevPrintOptions.cpp`). No model rule exists, so nothing
   reported means `Assumed(false)` — always the case on P1 and A1, which send no `fun`.
 
+- <span id="modelquirks-file-tunnel-support"></span>`fn file_tunnel_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer serves the port-6000 file tunnel, with its provenance [REF-FILESVC].
+
+  Reported by `fun` bit 31, BambuStudio's `is_support_brtc` ("support tcp and upload
+  protocol"). Studio uses that bit to choose the tunnel over FTPS for uploads
+  (`SendToPrinterDialog`) and to enable its skip-objects button
+  (`PrintingTaskPanel::enable_partskip_button`).
+
+  Without a reported bit: a chamber-image model ([`CameraProtocol::BinaryJpeg`](../camera/index.md#cameraprotocol)) is
+  `Inferred(false)`. Those printers send no `fun`, and their port 6000 is the camera server,
+  which ignores the tunnel's login (P1S, `01.10.00.00`). Any other model is `Assumed(true)`,
+  unlike Studio, which defaults the flag to false until telemetry arrives: every captured
+  RTSPS model that sends `fun` sets the bit, and a client that tries and fails the handshake
+  falls back to FTPS.
+
 - <span id="modelquirks-supports-store-sent-files"></span>`fn supports_store_sent_files(&self) -> bool`
 
   Returns true if the model can keep sent print files on external storage: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C.

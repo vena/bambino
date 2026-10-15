@@ -112,6 +112,14 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   The same answer as
   [`supports_ams_drying_while_printing`](#capabilities).
 
+- <span id="capabilities-file-tunnel-support"></span>`fn file_tunnel_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Port-6000 file tunnel support — see [`ModelQuirks::file_tunnel_support`](../../quirks/index.md#modelquirks).
+
+  Gate [`PrinterClient::file_tunnel`](../index.md#printerclient) and anything
+  built on it on this; an `Assumed(true)` printer may still fail the handshake, which is the
+  signal to use FTPS instead.
+
 - <span id="capabilities-prompt-sound-support"></span>`fn prompt_sound_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 
   Prompt sound support — see [`ModelQuirks::prompt_sound_support`](../../quirks/index.md#modelquirks).
