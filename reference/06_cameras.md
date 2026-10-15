@@ -40,7 +40,7 @@ The packet is structured in little-endian byte ordering as follows:
 
 Once authenticated, the printer continuously streams JPEG payloads back over the socket. Each frame is preceded by a **16-byte header**:
 *   **Bytes 0-3**: `uint32` payload size `N` (little-endian). This represents the size of the subsequent raw JPEG data.
-*   **Bytes 4-15**: Padding / Metadata (zeros).
+*   **Bytes 4-15**: Padding / metadata. Not always zero: a P1S on `01.10.00.00` sends `01` at byte 8 (2026-10-15). Its meaning is unknown, and `src/camera/binary.rs` reads only bytes 0-3.
 
 The client must parse the size `N`, validate that `N` does not exceed a sanity limit of 10MB (to guard against malformed headers causing unbounded allocation), read exactly `N` bytes of data, and verify that the payload starts with the JPEG magic marker `\xff\xd8` and ends with `\xff\xd9` before displaying the frame.
 
