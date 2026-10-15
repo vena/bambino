@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use bambino::Error;
 use bambino::ftps::CurrentDateTime;
+use bambino::ftps::project::{pick_image_member, plate_image_member};
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer};
 use clap::Subcommand;
 
@@ -57,6 +58,20 @@ pub enum FilesAction {
         remote_path: String,
         local_path: String,
         #[arg(default_value_t = 65536)]
+        bytes: usize,
+    },
+    /// Read a plate's image and pick image from the front of a job's .3mf, then stop the transfer
+    ///
+    /// Writes plate_<PLATE>.png and pick_<PLATE>.png into OUT_DIR. BYTES caps how much of the
+    /// file may be read. Stopping early ends the FTPS session, as with head.
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] front <REMOTE_PATH> <PLATE> <OUT_DIR> [BYTES]"
+    )]
+    Front {
+        remote_path: String,
+        plate: u32,
+        out_dir: String,
+        #[arg(default_value_t = 262_144)]
         bytes: usize,
     },
     /// Remove a file from the remote filesystem path
@@ -212,6 +227,47 @@ pub async fn run(
                 fs::write(&local_path, &buf[..n])?;
                 println!("Success: {n} bytes written to '{local_path}'.");
                 if n == bytes {
+                    println!("Transfer stopped early; the printer has closed this FTPS session.");
+                }
+            }
+            FilesAction::Front {
+                remote_path,
+                plate,
+                out_dir,
+                bytes,
+            } => {
+                if bytes == 0 || bytes > bambino::ftps::MAX_TRANSFER_BYTES {
+                    return Err(CliError::InvalidArgs(format!(
+                        "BYTES must be between 1 and {}",
+                        bambino::ftps::MAX_TRANSFER_BYTES
+                    )));
+                }
+                let names = [plate_image_member(plate), pick_image_member(plate)];
+                println!("Reading {} and {} from '{remote_path}'...", names[0], names[1]);
+                let mut buf = vec![0u8; bytes];
+                let base = buf.as_ptr() as usize;
+                let started = Instant::now();
+                let found = client
+                    .read_front_members(&remote_path, &mut buf, [names[0].as_str(), names[1].as_str()])
+                    .await?;
+                print_transfer_time("RETR (front members)", started);
+                for (name, member) in names.iter().zip(found) {
+                    let file_name = name.trim_start_matches("Metadata/");
+                    match member {
+                        Some(data) => {
+                            let end = data.as_ptr() as usize - base + data.len();
+                            let local = Path::new(&out_dir).join(file_name);
+                            fs::write(&local, data)?;
+                            println!(
+                                "{name}: {} bytes, ends at file offset {end}, written to '{}'",
+                                data.len(),
+                                local.display()
+                            );
+                        }
+                        None => println!("{name}: not in the file's front section"),
+                    }
+                }
+                if client.is_poisoned() {
                     println!("Transfer stopped early; the printer has closed this FTPS session.");
                 }
             }
