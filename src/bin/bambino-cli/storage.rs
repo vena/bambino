@@ -88,6 +88,12 @@ pub enum FilesAction {
         #[arg(default_value_t = 262_144)]
         bytes: usize,
     },
+    /// Create a directory on the remote card
+    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] mkdir <REMOTE_PATH>")]
+    Mkdir { remote_path: String },
+    /// Remove an empty directory from the remote card
+    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] rmdir <REMOTE_PATH>")]
+    Rmdir { remote_path: String },
     /// Remove a file from the remote filesystem path
     #[command(
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>"
@@ -334,6 +340,14 @@ pub async fn run(
                 if client.is_poisoned() {
                     println!("Transfer stopped early; the printer has closed this FTPS session.");
                 }
+            }
+            FilesAction::Mkdir { remote_path } => {
+                client.create_directory(&remote_path).await?;
+                println!("Success: directory '{remote_path}' created.");
+            }
+            FilesAction::Rmdir { remote_path } => {
+                client.remove_directory(&remote_path).await?;
+                println!("Success: directory '{remote_path}' removed.");
             }
             FilesAction::Delete { remote_path } => {
                 println!("Deleting file from remote path '{}'...", remote_path);
