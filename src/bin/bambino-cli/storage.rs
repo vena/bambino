@@ -6,6 +6,7 @@
 //! connection via `.with_ftps()`. The FTPS session is established on first use.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
@@ -39,13 +40,18 @@ pub enum FilesAction {
         local_path: String,
         remote_path: String,
     },
-    /// Download a remote card file to a local path
+    /// Download a remote card file to a local path, writing it as it arrives
+    ///
+    /// --stop-after BYTES stops the transfer once that many bytes are written, leaving a partial
+    /// file. The printer then closes the FTPS session, so the next command reconnects.
     #[command(
-        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH>"
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH> [--stop-after <BYTES>]"
     )]
     Download {
         remote_path: String,
         local_path: String,
+        #[arg(long, value_name = "BYTES")]
+        stop_after: Option<u64>,
     },
     /// Download only the first BYTES of a remote card file, then stop the transfer
     ///
@@ -216,17 +222,45 @@ pub async fn run(
             FilesAction::Download {
                 remote_path,
                 local_path,
+                stop_after,
             } => {
                 println!("Downloading remote file '{}'...", remote_path);
+                let mut out = fs::File::create(&local_path)?;
+                let mut written = 0u64;
+                let mut stopped = false;
+                let mut write_error = None;
                 let started = Instant::now();
-                let payload = client.download_file(&remote_path).await?;
+                let result = client
+                    .download_file_each(&remote_path, |chunk| {
+                        if stop_after.is_some_and(|limit| written >= limit) {
+                            stopped = true;
+                            return Err(Error::InvalidState("--stop-after reached".into()));
+                        }
+                        out.write_all(chunk).map_err(|e| {
+                            write_error = Some(e);
+                            Error::InvalidState("local write failed".into())
+                        })?;
+                        written += chunk.len() as u64;
+                        Ok(())
+                    })
+                    .await;
                 print_transfer_time("RETR", started);
-                fs::write(&local_path, &payload)?;
-                println!(
-                    "Success: {} bytes written to '{}'.",
-                    payload.len(),
-                    local_path
-                );
+                if let Some(e) = write_error {
+                    return Err(e.into());
+                }
+                if stopped {
+                    println!(
+                        "Stopped after {written} bytes (--stop-after); '{local_path}' is partial."
+                    );
+                    if client.is_poisoned() {
+                        println!("The data channel was reset; the printer has closed this FTPS session.");
+                    } else {
+                        println!("Unexpected: the FTPS session is still usable after the stop.");
+                    }
+                } else {
+                    let n = result?;
+                    println!("Success: {n} bytes written to '{local_path}'.");
+                }
             }
             FilesAction::Head {
                 remote_path,
