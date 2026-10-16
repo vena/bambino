@@ -233,6 +233,32 @@ async fn test_read_thumbnail_is_none_for_a_print_file_without_a_request() {
 }
 
 #[tokio::test]
+async fn test_read_plate_images_is_none_for_a_timelapse_without_a_request() {
+    let mut fx = Fixture::new();
+    // The script ends after the listing: a RETR would find the session closed and fail.
+    let server = fx.session(vec![list("/timelapse", TIMELAPSES)]).await;
+    let video = fx
+        .client
+        .list_files(FileKind::Timelapse)
+        .await
+        .expect("list")
+        .remove(0);
+    let mut buf = [0u8; 64];
+    let images = fx
+        .client
+        .read_plate_images(&video, Some(1), &mut buf)
+        .await
+        .expect("read");
+    assert_eq!(images.plate, None);
+    assert!(!images.from_file);
+    assert_eq!(
+        [images.plate_image, images.small_image, images.pick_image],
+        [None, None, None]
+    );
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
 async fn test_list_timelapses_skips_the_thumbnail_directory() {
     let mut fx = Fixture::new();
     let server = fx
