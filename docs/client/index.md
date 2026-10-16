@@ -813,6 +813,50 @@ client
 
 #### Trait Implementations
 
+### `PlateImages<'b>`
+
+```rust
+struct PlateImages<'b> {
+    pub plate: Option<u32>,
+    pub from_file: bool,
+    pub plate_image: Option<&'b [u8]>,
+    pub small_image: Option<&'b [u8]>,
+    pub pick_image: Option<&'b [u8]>,
+}
+```
+
+A plate's images from the front of a print file's `.3mf`, from [`PrinterClient::read_plate_images`](#printerclient).
+
+#### Fields
+
+- **`plate`**: `Option<u32>`
+
+  The 1-based plate read, or `None` when none could be told, and then every image is `None`.
+
+- **`from_file`**: `bool`
+
+  `true` when `plate` came from the file's own G-code list rather than the argument.
+
+- **`plate_image`**: `Option<&'b [u8]>`
+
+  `Metadata/plate_<N>.png`, or `None` when the file has none for this plate.
+
+- **`small_image`**: `Option<&'b [u8]>`
+
+  `Metadata/plate_<N>_small.png`, the 128×128 thumbnail a file browser shows, or `None`
+  when the file has none for this plate.
+
+- **`pick_image`**: `Option<&'b [u8]>`
+
+  `Metadata/pick_<N>.png`, or `None` when the file has none for this plate. Decode its
+  pixels with [`pick_identify_id`](../ftps/project/index.md#pick-identify-id).
+
+#### Trait Implementations
+
+##### `impl Debug for PlateImages<'b>`
+
+- <span id="plateimages-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
 ### `PrinterFile`
 
 ```rust
@@ -826,11 +870,11 @@ struct PrinterFile {
 }
 ```
 
-One file from [`PrinterClient::list_files`](#printerclient).
+One file from [`PrinterClient::list_files`](#printerclient) or [`PrinterClient::job_file`](#printerclient).
 
-Pass it back to [`PrinterClient::download_file`](#printerclient), [`PrinterClient::delete_file`](#printerclient) or
-[`PrinterClient::read_thumbnail`](#printerclient). It
-can't be built by hand: it carries the service and address it was listed from, which aren't
+Pass it back to [`PrinterClient::download_file`](#printerclient), [`PrinterClient::delete_file`](#printerclient),
+[`PrinterClient::read_thumbnail`](#printerclient) or [`PrinterClient::read_plate_images`](#printerclient). It can't be built
+by hand: it carries the service and address it was listed from, which aren't
 public, so a file is always reached the way it was found.
 
 #### Fields
@@ -885,23 +929,36 @@ public, so a file is always reached the way it was found.
 ```rust
 struct JobImages<'b> {
     pub plate: Option<JobPlate>,
+    pub file: Option<super::files::PrinterFile>,
     pub plate_image: Option<&'b [u8]>,
+    pub small_image: Option<&'b [u8]>,
     pub pick_image: Option<&'b [u8]>,
 }
 ```
 
-A running job's plate and its images, from [`PrinterClient::read_job_images`](#printerclient).
+A running job's plate and its images, from [`PrinterClient::read_running_job_images`](#printerclient).
 
 #### Fields
 
 - **`plate`**: `Option<JobPlate>`
 
-  The plate the images belong to; `None` when no source could tell, and then both images
-  are `None` too.
+  The plate the images belong to; `None` when no source could tell, and then every image
+  is `None` too.
+
+- **`file`**: `Option<super::files::PrinterFile>`
+
+  The job's file the images were read from on the FTPS route; `None` on the file tunnel
+  route, which reads the running job's members without learning its file, and when no
+  file was found.
 
 - **`plate_image`**: `Option<&'b [u8]>`
 
   `Metadata/plate_<N>.png`, or `None` when the file has none for this plate.
+
+- **`small_image`**: `Option<&'b [u8]>`
+
+  `Metadata/plate_<N>_small.png`, the 128×128 thumbnail, or `None` when the file has none
+  for this plate.
 
 - **`pick_image`**: `Option<&'b [u8]>`
 
@@ -1685,6 +1742,29 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   closing `SIZE` check) is an error, not `None`. The read and its `sink` behave as
   [`download_file`](#printerclient)'s.
 
+- <span id="superprinterclient-read-plate-images"></span>`async fn read_plate_images<'b>(&mut self, file: &PrinterFile, plate: Option<u32>, buf: &'b mut [u8]) -> Result<PlateImages<'b>, Error>` — [`PrinterFile`](#printerfile), [`PlateImages`](#plateimages), [`Error`](../error/index.md#error)
+
+  Reads one plate's image, thumbnail and pick image from the front of a print file's `.3mf`, into `buf`.
+
+  `Some(n)` reads plate `n`'s images. `None` takes the plate from the file's own list of
+  plate G-code when it holds G-code for exactly one plate, and otherwise returns no plate
+  and no images: the images of a guessed plate would look right and be wrong. Either way the
+  plate is never taken from the running job: for its images, use
+  [`read_running_job_images`](#printerclient).
+
+  Only a [`FileKind::Model`](../file_tunnel/index.md#filekind) file has plate images; any other kind returns none without a
+  request.
+
+  One FTPS read, which usually ends the session: see
+  [`FtpsClient::download_prefix`](../ftps/client/index.md#ftpsclient). `buf` needs room for the file's front section and, when
+  the plate isn't given, its list of plate G-code after it: about 30–55 KB on the files
+  measured.
+
+  # Errors
+
+  As [`FtpsClient::read_front_members`](../ftps/client/index.md#ftpsclient) and [`FtpsClient::read_job_prefix`](../ftps/client/index.md#ftpsclient), plus whatever
+  connecting FTPS returns.
+
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
@@ -1717,16 +1797,20 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Returns the running job's plate from the sources that need no file read, or `None` when none of them knows it.
 
   Reads cached telemetry only. `None` is common on P1/A1 for a print started before this
-  client connected; [`read_job_images`](#printerclient) then falls back to the
-  job's file. See the module doc for the chain.
+  client connected; [`read_running_job_images`](#printerclient) then falls
+  back to the job's file. See the module doc for the chain.
 
-- <span id="superprinterclient-job-path"></span>`async fn job_path(&mut self) -> Result<Option<String>, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-job-file"></span>`async fn job_file(&mut self) -> Result<Option<PrinterFile>, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
-  Returns the running job's `.3mf` path on the printer's card, or `None` when it can't be found exactly.
+  Returns the running job's `.3mf` on the printer's card, or `None` when it can't be found exactly.
 
   The path comes from the `url` of the start command the printer echoed for this job, when
-  this client saw one, and otherwise from `/` followed by `gcode_file`. One `SIZE` request
-  confirms the file is there; a file that isn't is `None`, not an error.
+  this client saw one, and otherwise from `/` followed by `gcode_file`. A `SIZE` request
+  confirms the file is there and gives its size; a file that isn't is `None`, not an error.
+  An `MDTM` request then gives its modification time, with an explicit year
+  ([`FileTime::Calendar`](files/index.md#filetime) with `year_inferred: false`), or [`FileTime::Unknown`](files/index.md#filetime) on firmware
+  without `MDTM`. No directory is listed. Pass the result to
+  [`read_plate_images`](#printerclient) or any other call taking a [`PrinterFile`](#printerfile).
 
   That second rule covers every file Bambu Studio and OrcaSlicer send, which go to the card
   root (`url: "ftp://<name>"`), and a print started from the printer's screen of a file at
@@ -1739,49 +1823,31 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   # Errors
 
-  Whatever connecting FTPS or the `SIZE` request returns, except the `550` of a missing
-  file.
-
-- <span id="superprinterclient-read-job-images"></span>`async fn read_job_images<'b>(&mut self, remote_path: &str, buf: &'b mut [u8]) -> Result<JobImages<'b>, Error>` — [`JobImages`](#jobimages), [`Error`](../error/index.md#error)
-
-  Reads the running job's plate and pick images from the start of its `.3mf` at `remote_path`, into `buf`.
-
-  The plate comes from [`job_plate`](#printerclient) when it knows, and otherwise from the
-  file itself, in the same read: a file holding G-code for exactly one plate names it.
-  With no answer from either, the result's `plate` and both images are `None`: the images
-  of a guessed plate would look right and be wrong.
-
-  `remote_path` is the job's file on the printer's card, from [`job_path`](#printerclient).
-
-  One FTPS read, which usually ends the session: see
-  [`FtpsClient::download_prefix`](../ftps/index.md). `buf` needs room
-  for the file's front section and, when the plate isn't known beforehand, its list of
-  plate G-code after it: about 30–55 KB on the files measured.
-
-  # Errors
-
-  As [`FtpsClient::read_front_members`](../ftps/index.md) and
-  [`FtpsClient::read_job_prefix`](../ftps/index.md), plus whatever
-  connecting FTPS returns.
+  Whatever connecting FTPS or the `SIZE` and `MDTM` requests return, except the `550` of a
+  missing file from `SIZE`.
 
 - <span id="superprinterclient-read-running-job-images"></span>`async fn read_running_job_images<'b>(&mut self, buf: &'b mut [u8]) -> Result<JobImages<'b>, Error>` — [`JobImages`](#jobimages), [`Error`](../error/index.md#error)
 
-  Reads the running job's plate and pick images into `buf`, through the file tunnel where the printer serves it and over FTPS otherwise.
+  Reads the running job's plate images into `buf`, through the file tunnel where the printer serves it and over FTPS otherwise.
 
-  The tunnel route asks the printer for `Metadata/plate_<N>.png` and
-  `Metadata/pick_<N>.png` of the running job by name (`mem:/16`, the read Bambu Studio's
-  skip-objects dialog makes), so it needs no file path and reaches internal storage. It is
-  taken when [`Capabilities::file_tunnel_support`](capabilities/index.md#capabilities)
-  allows, `.with_file_tunnel()` is configured, and [`job_plate`](#printerclient) knows the
-  plate. The session is disconnected afterwards, so no TLS session lingers; that includes a
-  session the caller had opened with [`file_tunnel()`](#printerclient).
+  The tunnel route asks the printer for `Metadata/plate_<N>.png`,
+  `Metadata/plate_<N>_small.png` and `Metadata/pick_<N>.png` of the running job by name
+  (`mem:/16`, the read Bambu Studio's skip-objects dialog makes), so it needs no file path
+  and reaches internal storage. It is taken when
+  [`Capabilities::file_tunnel_support`](capabilities/index.md#capabilities) allows,
+  `.with_file_tunnel()` is configured, and [`job_plate`](#printerclient) knows the plate.
+  The session is disconnected afterwards, so no TLS session lingers; that includes a session
+  the caller had opened with [`file_tunnel()`](#printerclient). This route never learns
+  the job's file, so [`JobImages::file`](job/index.md#jobimages) is `None`.
 
-  The FTPS route ([`job_path`](#printerclient), then
-  [`read_job_images`](#printerclient)) is used otherwise, and also when the tunnel
-  fails to connect, fails mid-read, or has neither image. A failed connect is remembered
-  until the next MQTT connection, so a printer that ignores the tunnel costs its 8 s
-  handshake timeout once rather than on every call. With no job file on the card either,
-  both images are `None`.
+  The FTPS route ([`job_file`](#printerclient), then
+  [`read_plate_images`](#printerclient) with [`job_plate`](#printerclient)'s
+  plate) is used otherwise, and also when the tunnel fails to connect, fails mid-read, or has
+  none of the images. A failed connect is remembered until the next MQTT connection, so a
+  printer that ignores the tunnel costs its 8 s handshake timeout once rather than on every
+  call. Without a plate from `job_plate`, the plate comes from the file when it holds G-code
+  for exactly one plate ([`PlateSource::ProjectFile`](job/index.md#platesource)), and otherwise every image is `None`.
+  With no job file on the card either, every image is `None`.
 
   The tunnel route has not been run against a printer that serves the tunnel; see
   `reference/08_file_service.md`.
@@ -4138,7 +4204,7 @@ LAN mode often run months behind real time (see [`CurrentDateTime`](../ftps/pars
 
 - **`Calendar`**
 
-  A calendar time from an FTPS listing, with no seconds.
+  A calendar time from FTPS: a listing's, with no seconds, or an `MDTM` reply's, to the second.
 
 - **`NoYear`**
 
