@@ -882,9 +882,10 @@ It is the printer's clock, not real time: in LAN mode it runs months behind (see
 [`CurrentDateTime`](../ftps/parser/index.md#currentdatetime)).
 
 **Only for the client that read it.** `read_at_ms` is on that client's FTPS timer, whose
-epoch is its own: `TokioTimer`'s starts when it is built, so a reading handed to
-another client, or to one given a new FTPS timer through
-[`attach_ftps`](#printerclient), is advanced by the wrong amount.
+epoch is its own: `TokioTimer`'s starts when it is built, so a reading handed to another
+client is advanced by the wrong amount. Giving the client a new FTPS timer
+([`with_ftps`](#printerclient), [`with_attached_ftps`](#printerclient)
+or [`attach_ftps`](#printerclient)) clears a supplied reading for the same reason.
 
 #### Fields
 
@@ -1859,7 +1860,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Takes precedence over [`with_printer_clock_probe`](#printerclient): with a
   reading set, no listing probes, so nothing is written to the card. Kept across FTPS
-  sessions until replaced or cleared.
+  sessions until replaced, cleared, or the client is given a new FTPS timer.
 
   **You own the reboot rule.** The printer's clock restarts on every boot, so clear the
   reading when the printer may have rebooted, or listings rebuild years against a stale
