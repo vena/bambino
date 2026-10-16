@@ -813,6 +813,63 @@ client
 
 #### Trait Implementations
 
+### `PrinterFile`
+
+```rust
+struct PrinterFile {
+    pub name: String,
+    pub size: u64,
+    pub modified: FileTime,
+    pub kind: crate::file_tunnel::FileKind,
+    pub storage: StorageKind,
+    // [REDACTED: Private Fields]
+}
+```
+
+One file from [`PrinterClient::list_files`](#printerclient).
+
+Pass it back to [`PrinterClient::download_file`](#printerclient) or [`PrinterClient::delete_file`](#printerclient). It
+can't be built by hand: it carries the service and address it was listed from, which aren't
+public, so a file is always reached the way it was found.
+
+#### Fields
+
+- **`name`**: `String`
+
+  The file name, without its directory.
+
+- **`size`**: `u64`
+
+  Size in bytes.
+
+- **`modified`**: `FileTime`
+
+  Modification time.
+
+- **`kind`**: `crate::file_tunnel::FileKind`
+
+  What kind of file this is: the kind the listing asked for.
+
+- **`storage`**: `StorageKind`
+
+  Where the file is stored.
+
+#### Trait Implementations
+
+##### `impl Clone for PrinterFile`
+
+- <span id="printerfile-clone"></span>`fn clone(&self) -> PrinterFile` — [`PrinterFile`](#printerfile)
+
+##### `impl Debug for PrinterFile`
+
+- <span id="printerfile-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PrinterFile`
+
+##### `impl PartialEq for PrinterFile`
+
+- <span id="printerfile-partialeq-eq"></span>`fn eq(&self, other: &PrinterFile) -> bool` — [`PrinterFile`](#printerfile)
+
 ### `JobImages<'b>`
 
 ```rust
@@ -1539,6 +1596,66 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Sends `close_notify` through the configured connector, then drops the stream, which is what
   frees its memory (`.claude/rules/tls-session-teardown.md`); a poisoned session is dropped
   without the close. Idempotent, and the next file tunnel call redials.
+
+- <span id="superprinterclient-with-printer-clock-probe"></span>`fn with_printer_clock_probe(self, enabled: bool) -> Self`
+
+  Has [`list_files`](#printerclient) read the printer's clock before an FTPS listing, so rebuilt years are the printer's.
+
+  An FTPS listing leaves the year out for recent files, and the year can only be rebuilt
+  against the printer's clock, which in LAN mode runs months behind and restarts on every
+  boot. By default `list_files` uses the host's clock and flags each rebuilt year
+  ([`FileTime::Calendar`](files/index.md#filetime)'s `year_inferred`), or reports [`FileTime::NoYear`](files/index.md#filetime) without one.
+
+  When on, the first `list_files` of each FTPS session uploads a throwaway file
+  (`/bambino_clock_probe.txt`), reads its mtime with `MDTM`, and deletes it. The reading is
+  kept for that session, advanced by the time since, and dropped when the session ends,
+  since a reboot both ends the session and resets the clock. If the probe fails (no `MDTM`,
+  a full or read-only card, any error), that session uses the default and the failure is
+  logged; the listing itself goes ahead.
+
+  Off by default because it writes to the card as a side effect of a listing: the file is
+  briefly visible on the printer's screen, and every new FTPS session probes again, including
+  the one after a stopped download ends a session. It runs only inside `list_files`, on the
+  session the listing uses.
+
+- <span id="superprinterclient-list-files"></span>`async fn list_files(&mut self, kind: FileKind) -> Result<Vec<PrinterFile>, Error>` — [`FileKind`](../file_tunnel/index.md#filekind), [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Lists the printer's files of one kind.
+
+  Served over FTPS, so only external storage (card or USB stick) is listed; internal storage
+  arrives with the port-6000 file tunnel (#636). One `LIST` of one directory, never
+  recursive:
+
+  - [`FileKind::Timelapse`]: the files in `/timelapse`, not its `thumbnail` covers.
+  - [`FileKind::Model`]: the `.3mf` files at the card root, where a slicer's LAN send puts them.
+  - [`FileKind::Video`]: always empty. No source says where FTPS keeps recorded videos.
+
+  **Which clock rebuilds a missing year.** A listing leaves the year out for recent files.
+  By default it is rebuilt against the host's clock (with `std`) and flagged
+  ([`FileTime::Calendar`](files/index.md#filetime)'s `year_inferred`); without `std`, or with a host clock that was
+  never set, it isn't rebuilt ([`FileTime::NoYear`](files/index.md#filetime)). The printer's clock is the right
+  reference and the host's can put a file in the wrong year: turn on
+  [`with_printer_clock_probe`](#printerclient) to read it, at the cost of an
+  upload, an `MDTM` and a delete once per FTPS session.
+
+  Returns at most [`FTP_MAX_LISTING_ENTRIES`](../ftps/parser/index.md#ftp-max-listing-entries) files.
+
+  # Errors
+
+  [`Error::NotConfigured`](../error/index.md#error) without FTPS, and whatever
+  [`FtpsClient::list_directory`](../ftps/client/index.md#ftpsclient) returns.
+
+- <span id="superprinterclient-download-file"></span>`async fn download_file(&mut self, file: &PrinterFile, sink: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<u64, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Downloads a listed file, passing each read to `sink` in order, and returns its size.
+
+  Checked against the printer's `SIZE` once the transfer ends, so treat what `sink` received
+  as provisional until this returns `Ok`. **An error from `sink` ends the FTPS session**
+  (see [`FtpsClient::download_file_each`](../ftps/client/index.md#ftpsclient)); the next FTPS call reconnects.
+
+- <span id="superprinterclient-delete-file"></span>`async fn delete_file(&mut self, file: &PrinterFile) -> Result<(), Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Deletes a listed file. Deleting one that is already gone succeeds.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -2775,6 +2892,56 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 #### Trait Implementations
 
+### `FileKind`
+
+```rust
+enum FileKind {
+    Timelapse,
+    Video,
+    Model,
+}
+```
+
+Which kind of file a listing asks for: `LIST_INFO`'s `type`, and the kind `PrinterClient::list_files` lists over either service.
+
+Re-exported as `bambino::client::FileKind`.
+
+#### Variants
+
+- **`Timelapse`**
+
+  Timelapse videos.
+
+- **`Video`**
+
+  Recorded videos.
+
+- **`Model`**
+
+  Print files (`.3mf`).
+
+#### Trait Implementations
+
+##### `impl Clone for FileKind`
+
+- <span id="filekind-clone"></span>`fn clone(&self) -> FileKind` — [`FileKind`](../file_tunnel/index.md#filekind)
+
+##### `impl Copy for FileKind`
+
+##### `impl Debug for FileKind`
+
+- <span id="filekind-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FileKind`
+
+##### `impl Hash for FileKind`
+
+- <span id="filekind-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for FileKind`
+
+- <span id="filekind-partialeq-eq"></span>`fn eq(&self, other: &FileKind) -> bool` — [`FileKind`](../file_tunnel/index.md#filekind)
+
 ### `AirductMode`
 
 ```rust
@@ -3914,6 +4081,116 @@ The terminal outcome of one published command.
 ##### `impl PartialEq for CommandOutcome`
 
 - <span id="commandoutcome-partialeq-eq"></span>`fn eq(&self, other: &CommandOutcome) -> bool` — [`CommandOutcome`](command/index.md#commandoutcome)
+
+### `FileTime`
+
+```rust
+enum FileTime {
+    Calendar {
+        at: crate::ftps::FtpTimestamp,
+        year_inferred: bool,
+    },
+    NoYear {
+        month: u8,
+        day: u8,
+        hour: u8,
+        minute: u8,
+    },
+    Unix(u64),
+    Unknown,
+}
+```
+
+When a [`PrinterFile`](#printerfile) was last modified, in the form the service that listed it gives.
+
+Every form is the printer's own clock at the time it wrote the file, and Bambu printers in
+LAN mode often run months behind real time (see [`CurrentDateTime`](../ftps/parser/index.md#currentdatetime)).
+
+#### Variants
+
+- **`Calendar`**
+
+  A calendar time from an FTPS listing, with no seconds.
+
+- **`NoYear`**
+
+  A calendar time from an FTPS listing that left the year out, with no reference clock to rebuild it.
+  
+  Happens without `std`, where there is no host clock, or with a host clock that was never
+  set. Turn on [`with_printer_clock_probe`](#printerclient) to get
+  the year from the printer's clock.
+
+- **`Unix`**
+
+  Unix seconds, as the file tunnel reports them.
+
+- **`Unknown`**
+
+  The listing gave no time.
+
+#### Trait Implementations
+
+##### `impl Clone for FileTime`
+
+- <span id="filetime-clone"></span>`fn clone(&self) -> FileTime` — [`FileTime`](#filetime)
+
+##### `impl Copy for FileTime`
+
+##### `impl Debug for FileTime`
+
+- <span id="filetime-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FileTime`
+
+##### `impl PartialEq for FileTime`
+
+- <span id="filetime-partialeq-eq"></span>`fn eq(&self, other: &FileTime) -> bool` — [`FileTime`](#filetime)
+
+### `StorageKind`
+
+```rust
+enum StorageKind {
+    External,
+    Internal,
+}
+```
+
+Where a [`PrinterFile`](#printerfile) is stored.
+
+#### Variants
+
+- **`External`**
+
+  The removable card or USB stick: everything FTPS serves [REF-FTPS-OPS].
+
+- **`Internal`**
+
+  The printer's internal storage, which only the port-6000 file tunnel reaches.
+  
+  No listing returns it yet; it arrives with the file tunnel's support in
+  [`PrinterClient::list_files`](#printerclient) (#636).
+
+#### Trait Implementations
+
+##### `impl Clone for StorageKind`
+
+- <span id="storagekind-clone"></span>`fn clone(&self) -> StorageKind` — [`StorageKind`](#storagekind)
+
+##### `impl Copy for StorageKind`
+
+##### `impl Debug for StorageKind`
+
+- <span id="storagekind-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for StorageKind`
+
+##### `impl Hash for StorageKind`
+
+- <span id="storagekind-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for StorageKind`
+
+- <span id="storagekind-partialeq-eq"></span>`fn eq(&self, other: &StorageKind) -> bool` — [`StorageKind`](#storagekind)
 
 ### `PlateSource`
 

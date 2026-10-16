@@ -96,7 +96,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   when deciding to omit it. Bambu printers in LAN mode routinely never sync time, so the two
   clocks can be years apart; see [`CurrentDateTime`](parser/index.md#currentdatetime) for how to recover the printer's and what
   passing host time instead costs. Entries whose year came from `now` are flagged with
-  [`FtpFile::year_is_inferred`](parser/index.md#ftpfile).
+  [`FtpFile::year_is_inferred`](parser/index.md#ftpfile). To have the reference handled for you, list through
+  [`PrinterClient::list_files`](../client/index.md#printerclient), which can read the
+  printer's clock itself
+  ([`with_printer_clock_probe`](../client/index.md#printerclient)).
 
   Returns at most [`FTP_MAX_LISTING_ENTRIES`](parser/index.md#ftp-max-listing-entries) entries. To reuse a vector's capacity across
   listings, use [`list_directory_into`](client/index.md#ftpsclient); to place a listing's
@@ -195,6 +198,23 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   bytes. Unconditionally verifies the downloaded length against the `SIZE` command after
   transfer completes — a clean `226` reply alone doesn't prove the data channel didn't
   close early [REF-FTPS-CONN].
+
+- <span id="ftpsclient-download-file-each"></span>`async fn download_file_each(&mut self, remote_path: &str, sink: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<u64, Error>` — [`Error`](../error/index.md#error)
+
+  Downloads a remote file like [`download_file`](client/index.md#ftpsclient), handing each read to `sink` as it arrives, and returns the byte count.
+
+  Nothing is collected, so a file larger than the heap can be written out as it arrives.
+  The same `SIZE` recheck runs once the transfer ends, so treat what `sink` received as
+  provisional until this returns `Ok`.
+
+  **An error from `sink` ends this session**, as a full buffer does for
+  [`download_prefix`](client/index.md#ftpsclient): the printer can only be stopped mid-file with
+  an RST, after which it closes the control connection. The client is left poisoned and
+  `PrinterClient::ftps()` reconnects. The sink's error is returned.
+
+  # Errors
+
+  As for `download_file`, plus the sink's own error.
 
 - <span id="ftpsclient-download-prefix"></span>`async fn download_prefix(&mut self, remote_path: &str, buf: &mut [u8]) -> Result<usize, Error>` — [`Error`](../error/index.md#error)
 

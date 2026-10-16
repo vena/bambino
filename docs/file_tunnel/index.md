@@ -38,7 +38,7 @@ path against a storage label plus the `path` a listing returns), so neither wrap
 |------|------|-------------|
 | [`client`](client/index.md) | mod | A connected port-6000 file tunnel session [REF-FILESVC]. |
 | [`TunnelFile`](#tunnelfile) | struct | One file from a [`FileTunnelClient::list_files`](client/index.md#filetunnelclient) listing. |
-| [`FileKind`](#filekind) | enum | Which kind of file a listing asks for (`LIST_INFO`'s `type`). |
+| [`FileKind`](#filekind) | enum | Which kind of file a listing asks for: `LIST_INFO`'s `type`, and the kind `PrinterClient::list_files` lists over either service. |
 | [`result_name`](#result-name) | fn | Names a file tunnel `result` code as BambuStudio's `PrinterFileSystem.h` does, or `None` for a code it doesn't define. |
 | [`DEFAULT_MAX_FRAME_PAYLOAD`](#default-max-frame-payload) | const | Default largest frame payload [`FileTunnelClient`](client/index.md#filetunnelclient) accepts, in bytes (4 MiB). |
 | [`FILE_TUNNEL_PORT`](#file-tunnel-port) | const | Port the file tunnel listens on, shared with the chamber-image stream of P1/A1 printers. |
@@ -310,7 +310,9 @@ enum FileKind {
 }
 ```
 
-Which kind of file a listing asks for (`LIST_INFO`'s `type`).
+Which kind of file a listing asks for: `LIST_INFO`'s `type`, and the kind `PrinterClient::list_files` lists over either service.
+
+Re-exported as `bambino::client::FileKind`.
 
 #### Variants
 
