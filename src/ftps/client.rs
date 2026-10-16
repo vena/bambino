@@ -134,14 +134,14 @@ where
     /// read — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing with a spurious
     /// `ConnectionReset` when scoped too narrowly.
     control_fill_buf: Vec<u8>,
-    /// The printer's clock as `PrinterClient::list_files`' probe read it on this session.
+    /// The printer's clock as `PrinterClient`'s listing probe (`with_printer_clock_probe`) read it on this session.
     ///
     /// Kept here so it ends with the session: the printer's clock restarts on a reboot, and a
     /// reboot ends the session.
     pub(crate) printer_clock: PrinterClockProbe,
 }
 
-/// What `PrinterClient::list_files`' printer-clock probe has learned on one FTPS session.
+/// What `PrinterClient`'s listing printer-clock probe (`with_printer_clock_probe`) has learned on one FTPS session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrinterClockProbe {
     /// Not run on this session.

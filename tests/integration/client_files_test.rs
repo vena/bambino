@@ -1,4 +1,4 @@
-//! # `PrinterClient::list_files`, `download_file` and `delete_file` over FTPS
+//! # `PrinterClient::list_files`, `list_files_each`, `download_file` and `delete_file` over FTPS
 //!
 //! Each test dials FTPS lazily through one [`MockDataStreamFactory`], whose slot serves the
 //! control stream first and then each passive data stream the script hands it.

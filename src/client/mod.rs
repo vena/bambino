@@ -202,7 +202,7 @@ pub(crate) struct ClientCore {
     /// feature; on `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead.
     /// Default `false`.
     pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
-    /// Whether `list_files` reads the printer's clock over FTPS; see `with_printer_clock_probe`.
+    /// Whether `list_files` and `list_files_each` read the printer's clock over FTPS; see `with_printer_clock_probe`.
     pub(crate) ftps_clock_probe: bool,
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,

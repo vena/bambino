@@ -332,14 +332,14 @@ where
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
-    /// Has [`list_files`](Self::list_files) read the printer's clock before an FTPS listing, so rebuilt years are the printer's.
+    /// Has [`list_files`](Self::list_files) and [`list_files_each`](Self::list_files_each) read the printer's clock before an FTPS listing, so rebuilt years are the printer's.
     ///
     /// An FTPS listing leaves the year out for recent files, and the year can only be rebuilt
     /// against the printer's clock, which in LAN mode runs months behind and restarts on every
-    /// boot. By default `list_files` uses the host's clock and flags each rebuilt year
+    /// boot. By default a listing uses the host's clock and flags each rebuilt year
     /// ([`FileTime::Calendar`]'s `year_inferred`), or reports [`FileTime::NoYear`] without one.
     ///
-    /// When on, the first `list_files` of each FTPS session uploads a throwaway file
+    /// When on, the first listing of each FTPS session uploads a throwaway file
     /// (`/bambino_clock_probe.txt`), reads its mtime with `MDTM`, and deletes it. The reading is
     /// kept for that session, advanced by the time since, and dropped when the session ends,
     /// since a reboot both ends the session and resets the clock. If the probe fails (no `MDTM`,
@@ -348,8 +348,8 @@ where
     ///
     /// Off by default because it writes to the card as a side effect of a listing: the file is
     /// briefly visible on the printer's screen, and every new FTPS session probes again, including
-    /// the one after a stopped download ends a session. It runs only inside `list_files`, on the
-    /// session the listing uses.
+    /// the one after a stopped download ends a session. It runs only inside `list_files` and
+    /// `list_files_each`, on the session the listing uses.
     #[must_use]
     pub fn with_printer_clock_probe(mut self, enabled: bool) -> Self {
         self.core.ftps_clock_probe = enabled;
