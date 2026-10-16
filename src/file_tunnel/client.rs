@@ -31,6 +31,8 @@ pub(crate) const FILE_TUNNEL_WRITE_TIMEOUT_SECS: u64 = 30;
 const MAX_SKIPPED_FRAMES: usize = 64;
 /// `mem:/` index of a member of the running job's `.3mf` (Studio's `PrinterFileSystem::GetPickImage`).
 pub(crate) const MEM_PROJECT_FILE_INDEX: u32 = 16;
+/// The command name a running-job member read reports in its errors.
+const MEM_DOWNLOAD_COMMAND: &str = "FILE_DOWNLOAD mem:/16";
 /// Largest frame accepted during the handshake: the login ack is 4 bytes and the setup reply a short JSON object.
 const HANDSHAKE_MAX_FRAME_PAYLOAD: usize = 1024;
 
@@ -463,13 +465,67 @@ impl<S: AsyncIo> FileTunnelClient<S> {
     /// This is the read BambuStudio's skip-objects dialog makes for `Metadata/pick_<plate>.png`,
     /// `Metadata/model_settings.config` and `Metadata/slice_info.config`
     /// (`PartSkipDialog::DownloadPartsFile`). A member larger than `max_bytes` is refused before
-    /// any of it is buffered.
+    /// any of it is buffered. A member the printer doesn't have is refused with
+    /// [`Error::TunnelReply`], and that refusal also poisons the session, since the printer may
+    /// go on sending; Studio treats every refusal here as "no such file".
     pub async fn read_running_job_member<T: TimerProvider>(
         &mut self,
         timer: &T,
         member: &str,
         max_bytes: usize,
     ) -> Result<Vec<u8>, Error> {
+        let sequence = self.request_running_job_member(timer, member).await?;
+        let mut out = Vec::new();
+        self.receive_download(
+            timer,
+            MEM_DOWNLOAD_COMMAND,
+            sequence,
+            Some(max_bytes as u64),
+            &mut |chunk: &[u8]| {
+                out.extend_from_slice(chunk);
+                Ok(())
+            },
+        )
+        .await?;
+        Ok(out)
+    }
+
+    /// Like [`read_running_job_member`](Self::read_running_job_member), but fills `out` instead of allocating, and returns the member's length.
+    ///
+    /// A member longer than `out` is refused before any of it is written.
+    pub async fn read_running_job_member_into<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        member: &str,
+        out: &mut [u8],
+    ) -> Result<usize, Error> {
+        let sequence = self.request_running_job_member(timer, member).await?;
+        let mut filled = 0usize;
+        self.receive_download(
+            timer,
+            MEM_DOWNLOAD_COMMAND,
+            sequence,
+            Some(out.len() as u64),
+            &mut |chunk: &[u8]| {
+                // `receive_download` keeps the running total within `out.len()`.
+                let dest = out
+                    .get_mut(filled..filled + chunk.len())
+                    .ok_or_else(|| Error::ProtocolViolation("fragment past the buffer".into()))?;
+                dest.copy_from_slice(chunk);
+                filled += chunk.len();
+                Ok(())
+            },
+        )
+        .await?;
+        Ok(filled)
+    }
+
+    /// Sends a `mem:/16` `get_project_file` request for `member` and returns its `sequence`.
+    async fn request_running_job_member<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        member: &str,
+    ) -> Result<u32, Error> {
         self.check_poisoned()?;
         if member.is_empty() {
             return Err(Error::InvalidArgument(
@@ -492,22 +548,8 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             offset: 0,
             mem_dl_param_size: Some(param.len()),
         };
-        let sequence = self
-            .send_request(timer, cmd::FILE_DOWNLOAD, &req, &param)
-            .await?;
-        let mut out = Vec::new();
-        self.receive_download(
-            timer,
-            "FILE_DOWNLOAD mem:/16",
-            sequence,
-            Some(max_bytes as u64),
-            &mut |chunk: &[u8]| {
-                out.extend_from_slice(chunk);
-                Ok(())
-            },
-        )
-        .await?;
-        Ok(out)
+        self.send_request(timer, cmd::FILE_DOWNLOAD, &req, &param)
+            .await
     }
 
     /// Receives a streamed `FILE_DOWNLOAD` reply, checking offsets, `total` and `file_md5`.
@@ -722,6 +764,17 @@ impl<S: AsyncIo, T: TimerProvider> FileTunnel<'_, S, T> {
     ) -> Result<Vec<u8>, Error> {
         self.client
             .read_running_job_member(self.timer, member, max_bytes)
+            .await
+    }
+
+    /// See [`FileTunnelClient::read_running_job_member_into`].
+    pub async fn read_running_job_member_into(
+        &mut self,
+        member: &str,
+        out: &mut [u8],
+    ) -> Result<usize, Error> {
+        self.client
+            .read_running_job_member_into(self.timer, member, out)
             .await
     }
 

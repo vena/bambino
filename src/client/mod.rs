@@ -202,6 +202,9 @@ pub(crate) struct ClientCore {
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,
     pub(crate) file_tunnel_max_frame_size: Option<usize>,
+    /// The `connection_generation` on which a file tunnel connect last failed, so routed
+    /// operations stop paying the handshake timeout on a printer that doesn't answer.
+    pub(crate) file_tunnel_failed_generation: Option<u32>,
 }
 
 impl ClientCore {
@@ -222,6 +225,7 @@ impl ClientCore {
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             file_tunnel_max_frame_size: None,
+            file_tunnel_failed_generation: None,
         }
     }
 }

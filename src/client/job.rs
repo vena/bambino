@@ -19,17 +19,25 @@
 //! that is not a breaking change). A source that needs no I/O goes in [`job_plate`]'s chain. One
 //! that reads from the printer goes in [`read_job_images`], in priority order beside the FTPS
 //! read, and if it only works on some models, it is gated by a `ModelQuirks` method, never a
-//! model match. The port-6000 file service (GitHub issue #633) would be such a source: the
-//! printer resolves the running job itself there, so it needs no path and reaches internal
-//! storage FTPS can't.
+//! model match.
+//!
+//! **Two routes to the images.** [`read_job_images`] reads the file over FTPS at a path from
+//! [`job_path`]. [`read_running_job_images`] first asks the port-6000 file tunnel for the
+//! running job's members by name ([REF-FILESVC]), which needs no path and reaches internal
+//! storage FTPS can't, and falls back to the FTPS route. The tunnel route needs the plate from
+//! [`job_plate`]: it reads one plate's members and cannot tell which plate is printing.
 //!
 //! [`job_plate`]: super::PrinterClient::job_plate
+//! [`job_path`]: super::PrinterClient::job_path
 //! [`read_job_images`]: super::PrinterClient::read_job_images
+//! [`read_running_job_images`]: super::PrinterClient::read_running_job_images
 
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
+
+use core::ops::Range;
 
 use serde::Deserialize;
 
@@ -292,6 +300,108 @@ where
             plate_image,
             pick_image,
         })
+    }
+
+    /// Reads the running job's plate and pick images into `buf`, through the file tunnel where the printer serves it and over FTPS otherwise.
+    ///
+    /// The tunnel route asks the printer for `Metadata/plate_<N>.png` and
+    /// `Metadata/pick_<N>.png` of the running job by name (`mem:/16`, the read Bambu Studio's
+    /// skip-objects dialog makes), so it needs no file path and reaches internal storage. It is
+    /// taken when [`Capabilities::file_tunnel_support`](super::Capabilities::file_tunnel_support)
+    /// allows, `.with_file_tunnel()` is configured, and [`job_plate`](Self::job_plate) knows the
+    /// plate. The session is disconnected afterwards, so no TLS session lingers; that includes a
+    /// session the caller had opened with [`file_tunnel()`](Self::file_tunnel).
+    ///
+    /// The FTPS route ([`job_path`](Self::job_path), then
+    /// [`read_job_images`](Self::read_job_images)) is used otherwise, and also when the tunnel
+    /// fails to connect, fails mid-read, or has neither image. A failed connect is remembered
+    /// until the next MQTT connection, so a printer that ignores the tunnel costs its 8 s
+    /// handshake timeout once rather than on every call. With no job file on the card either,
+    /// both images are `None`.
+    ///
+    /// The tunnel route has not been run against a printer that serves the tunnel; see
+    /// `reference/08_file_service.md`.
+    ///
+    /// # Errors
+    ///
+    /// Those of the FTPS route, when it runs.
+    pub async fn read_running_job_images<'b>(
+        &mut self,
+        buf: &'b mut [u8],
+    ) -> Result<JobImages<'b>, Error> {
+        if let Some(plate) = self.job_plate()
+            && self.file_tunnel_worth_trying()
+            && let Some([plate_range, pick_range]) =
+                self.read_tunnel_job_images(plate.plate, buf).await
+            && (plate_range.is_some() || pick_range.is_some())
+        {
+            let buf: &'b [u8] = buf;
+            return Ok(JobImages {
+                plate: Some(plate),
+                plate_image: plate_range.map(|r| &buf[r]),
+                pick_image: pick_range.map(|r| &buf[r]),
+            });
+        }
+        match self.job_path().await? {
+            Some(path) => self.read_job_images(&path, buf).await,
+            None => Ok(JobImages {
+                plate: self.job_plate(),
+                plate_image: None,
+                pick_image: None,
+            }),
+        }
+    }
+
+    /// Whether a routed operation should try the file tunnel before FTPS.
+    fn file_tunnel_worth_trying(&self) -> bool {
+        self.capabilities().file_tunnel_support().is_supported()
+            && self.camera_config.is_some()
+            && self.core.file_tunnel_failed_generation != Some(self.core.connection_generation)
+    }
+
+    /// Reads plate `plate`'s images through the file tunnel into `buf`, returning where each landed, or `None` when the tunnel couldn't be used.
+    ///
+    /// A member the printer refuses is `None` in the result: Studio treats every refusal of this
+    /// read as "no such file". The refusal poisons the session, so the next member reconnects.
+    async fn read_tunnel_job_images(
+        &mut self,
+        plate: u32,
+        buf: &mut [u8],
+    ) -> Option<[Option<Range<usize>>; 2]> {
+        let names = plate_member_names(plate);
+        let mut ranges = [None, None];
+        let mut used = 0;
+        for (slot, name) in ranges.iter_mut().zip(names.iter()) {
+            if let Err(e) = self.ensure_file_tunnel().await {
+                log::debug!("file tunnel unavailable, using FTPS: {e}");
+                self.core.file_tunnel_failed_generation = Some(self.core.connection_generation);
+                self.disconnect_file_tunnel().await;
+                return None;
+            }
+            let tunnel = self
+                .file_tunnel
+                .as_mut()
+                .expect("ensure_file_tunnel() just connected the file tunnel");
+            match tunnel
+                .read_running_job_member_into(&self.timer, name, &mut buf[used..])
+                .await
+            {
+                Ok(len) => {
+                    *slot = Some(used..used + len);
+                    used += len;
+                }
+                Err(Error::TunnelReply { result, .. }) => {
+                    log::debug!("file tunnel has no {name} for the running job (result {result})");
+                }
+                Err(e) => {
+                    log::debug!("file tunnel read of {name} failed, using FTPS: {e}");
+                    self.disconnect_file_tunnel().await;
+                    return None;
+                }
+            }
+        }
+        self.disconnect_file_tunnel().await;
+        Some(ranges)
     }
 
     /// Records an accepted `project_file` echo as the start of the job it names.
