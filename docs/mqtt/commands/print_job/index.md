@@ -107,7 +107,7 @@ defaults for calibration flags.
 
 - **`job_filename`**: `String`
 
-  Filename of the `.3mf` file on SD card storage (e.g. "job.3mf").
+  Filename of the `.3mf` file (e.g. "job.3mf"), on the card unless [`file_location`](#printjobconfig) says otherwise.
 
 - **`plate_gcode_path`**: `String`
 
@@ -385,7 +385,7 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 
 - **`file`**: `String`
 
-  Sliced compilation container file path residing on the SD card (e.g., "job.3mf").
+  The job's `.3mf` file name (e.g., "job.3mf"); `url` says where it is stored.
 
 - **`url`**: `String`
 

@@ -366,7 +366,7 @@ defaults for calibration flags.
 
 - **`job_filename`**: `String`
 
-  Filename of the `.3mf` file on SD card storage (e.g. "job.3mf").
+  Filename of the `.3mf` file (e.g. "job.3mf"), on the card unless [`file_location`](print_job/index.md#printjobconfig) says otherwise.
 
 - **`plate_gcode_path`**: `String`
 

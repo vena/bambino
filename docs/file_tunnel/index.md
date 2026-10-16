@@ -116,11 +116,12 @@ struct FileTunnelClient<S: AsyncIo> {
 A session with a printer's port-6000 file tunnel.
 
 **Poisoning.** Requests run one at a time, and each reply is matched by `sequence`. A
-transport failure, a frame that can't be parsed, or a stream abandoned before its last frame
-leaves frames on the wire that a later request would misread. The client then sets
-`poisoned`; every public method returns [`Error::ProtocolViolation`](../error/index.md#error) after that, and the only
-way back is a new connection. A failure `result` the printer sends in full (`FILE_NO_EXIST`)
-is [`Error::TunnelReply`](../error/index.md#error) and leaves the session usable.
+transport failure or a frame that can't be parsed can leave frames on the wire that a later
+request would misread. The client then sets `poisoned`; every public method returns
+[`Error::ProtocolViolation`](../error/index.md#error) after that, and the only way back is a new connection. A stream
+the client stops itself (a sink error, a size limit) is cancelled with `TASK_CANCEL` instead,
+and poisons the session only if the cancel gets no answer. A failure `result` the printer
+sends in full (`FILE_NO_EXIST`) is [`Error::TunnelReply`](../error/index.md#error) and leaves the session usable.
 
 **Timer.** Every method takes the timer that bounds its reads and writes, as the camera
 stream's `read_next_frame_with_timer` does, so the client holds only its TLS stream `S`.
@@ -232,7 +233,8 @@ header is refused above [`DEFAULT_MAX_FRAME_PAYLOAD`](#default-max-frame-payload
   per-chunk read with `-9203`.
 
   **Not yet run against a printer.** The pipelining rests on open-bamboo-networking's P2S
-  captures alone.
+  captures alone. Which print URL finds a file uploaded to a storage other than `emmc`
+  (`udisk`) is also unchecked.
 
 - <span id="filetunnelclient-disconnect"></span>`async fn disconnect<RawIO, Tls, T>(self, tls_connector: &Tls, timer: &T)`
 
