@@ -870,7 +870,7 @@ struct PrinterFile {
 }
 ```
 
-One file from [`PrinterClient::list_files`](#printerclient) or [`PrinterClient::job_file`](#printerclient).
+One file from [`PrinterClient::list_files`](#printerclient), [`PrinterClient::list_files_each`](#printerclient) or [`PrinterClient::job_file`](#printerclient).
 
 Pass it back to [`PrinterClient::download_file`](#printerclient), [`PrinterClient::delete_file`](#printerclient),
 [`PrinterClient::read_thumbnail`](#printerclient) or [`PrinterClient::read_plate_images`](#printerclient). It can't be built
@@ -1708,12 +1708,27 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`with_printer_clock_probe`](#printerclient) to read it, at the cost of an
   upload, an `MDTM` and a delete once per FTPS session.
 
-  Returns at most [`FTP_MAX_LISTING_ENTRIES`](../ftps/parser/index.md#ftp-max-listing-entries) files.
+  Returns at most [`FTP_MAX_LISTING_ENTRIES`](../ftps/parser/index.md#ftp-max-listing-entries) files. To place a listing's memory yourself,
+  use [`list_files_each`](#printerclient).
 
   # Errors
 
   [`Error::NotConfigured`](../error/index.md#error) without FTPS, and whatever
   [`FtpsClient::list_directory`](../ftps/client/index.md#ftpsclient) returns.
+
+- <span id="superprinterclient-list-files-each"></span>`async fn list_files_each(&mut self, kind: FileKind, on_file: impl FnMut(PrinterFile)) -> Result<(), Error>` — [`FileKind`](../file_tunnel/index.md#filekind), [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Lists the printer's files of one kind like [`list_files`](#printerclient), handing each file to `on_file` as it is listed.
+
+  Nothing is collected, so the caller decides where files live, and can keep only the ones
+  it needs. Directories, filters, order and clock reference are `list_files`'. No entry cap
+  applies; every listed file is delivered.
+
+  # Errors
+
+  As for `list_files`. **Files delivered before an error are not a complete listing;
+  discard them.** That includes files from `/cache` when listing the card root then fails,
+  for [`FileKind::Model`](../file_tunnel/index.md#filekind).
 
 - <span id="superprinterclient-download-file"></span>`async fn download_file(&mut self, file: &PrinterFile, sink: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<u64, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
