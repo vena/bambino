@@ -11,10 +11,13 @@ use std::path::Path;
 use std::time::Instant;
 
 use bambino::Error;
+use bambino::client::{FileKind, FileTime, PrinterClient, PrinterFile};
 use bambino::ftps::CurrentDateTime;
 use bambino::ftps::project::{front_members, pick_image_member, plate_image_member};
+use bambino::io::TokioIo;
+use bambino::io::tokio::TokioTlsConnector;
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer};
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 
 use crate::connection::Target;
 use crate::error::CliError;
@@ -119,6 +122,136 @@ pub enum FilesAction {
     /// Query available MicroSD card capacity
     #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space")]
     Space,
+    /// List, download or delete print files or timelapses by kind, through PrinterClient::list_files
+    ///
+    /// Without get or rm, lists the files of KIND. --probe-clock reads the printer's clock first
+    /// (an upload, MDTM and delete of /bambino_clock_probe.txt), so a year the listing leaves out
+    /// is rebuilt against the printer's clock rather than the host's.
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> [--probe-clock]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> get <NAME> <LOCAL_PATH> [--stop-after <BYTES>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> rm <NAME>"
+    )]
+    Catalog {
+        kind: CatalogKind,
+        /// Read the printer's clock before listing (with_printer_clock_probe)
+        #[arg(long)]
+        probe_clock: bool,
+        #[command(subcommand)]
+        op: Option<CatalogOp>,
+    },
+}
+
+/// Which files `catalog` works on.
+#[derive(Clone, Copy, ValueEnum, Debug)]
+pub enum CatalogKind {
+    /// Print files (.3mf)
+    Model,
+    /// Timelapse videos
+    Timelapse,
+    /// Recorded videos (none over FTPS)
+    Video,
+}
+
+impl From<CatalogKind> for FileKind {
+    fn from(kind: CatalogKind) -> Self {
+        match kind {
+            CatalogKind::Model => FileKind::Model,
+            CatalogKind::Timelapse => FileKind::Timelapse,
+            CatalogKind::Video => FileKind::Video,
+        }
+    }
+}
+
+/// What `catalog` does with one listed file.
+#[derive(Subcommand, Debug)]
+pub enum CatalogOp {
+    /// Download a listed file by name, writing it as it arrives
+    Get {
+        /// The file's name as the listing shows it
+        name: String,
+        local_path: String,
+        /// Stop once this many bytes are written; the printer then closes the FTPS session
+        #[arg(long, value_name = "BYTES")]
+        stop_after: Option<u64>,
+    },
+    /// Delete a listed file by name
+    Rm {
+        /// The file's name as the listing shows it
+        name: String,
+    },
+}
+
+/// `PrinterClient` as `run` configures it, with FTPS.
+type FtpsPrinter = PrinterClient<
+    TokioIo<::tokio::net::TcpStream>,
+    TokioTlsConnector,
+    TokioRawStreamFactory,
+    TokioTimer,
+    TokioIo<::tokio::net::TcpStream>,
+    TokioTlsConnector,
+    TokioRawStreamFactory,
+    TokioTimer,
+>;
+
+/// Writes a download to a local file as it arrives, stopping at `--stop-after` if given.
+struct LocalSink {
+    out: fs::File,
+    written: u64,
+    stop_after: Option<u64>,
+    stopped: bool,
+    write_error: Option<std::io::Error>,
+}
+
+impl LocalSink {
+    fn create(local_path: &str, stop_after: Option<u64>) -> Result<Self, CliError> {
+        Ok(Self {
+            out: fs::File::create(local_path)?,
+            written: 0,
+            stop_after,
+            stopped: false,
+            write_error: None,
+        })
+    }
+
+    /// The download sink: refuses the next read once `stop_after` bytes are written.
+    fn accept(&mut self, chunk: &[u8]) -> Result<(), Error> {
+        if self.stop_after.is_some_and(|limit| self.written >= limit) {
+            self.stopped = true;
+            return Err(Error::InvalidState("--stop-after reached".into()));
+        }
+        if let Err(e) = self.out.write_all(chunk) {
+            self.write_error = Some(e);
+            return Err(Error::InvalidState("local write failed".into()));
+        }
+        self.written += chunk.len() as u64;
+        Ok(())
+    }
+
+    /// Reports the download's outcome; `session_closed` is whether FTPS ended with it.
+    fn report(
+        self,
+        result: Result<u64, Error>,
+        session_closed: bool,
+        local_path: &str,
+    ) -> Result<(), CliError> {
+        if let Some(e) = self.write_error {
+            return Err(e.into());
+        }
+        if !self.stopped {
+            let n = result?;
+            println!("Success: {n} bytes written to '{local_path}'.");
+            return Ok(());
+        }
+        println!(
+            "Stopped after {} bytes (--stop-after); '{local_path}' is partial.",
+            self.written
+        );
+        if session_closed {
+            println!("The data channel was reset; the printer has closed this FTPS session.");
+        } else {
+            println!("Unexpected: the FTPS session is still usable after the stop.");
+        }
+        Ok(())
+    }
 }
 
 /// Prints how long a transfer call took, from the command through the final `226` and any
@@ -154,6 +287,20 @@ pub async fn run(
         target.ip,
         bambino::ftps::FTPS_PORT
     );
+
+    let action = match action {
+        FilesAction::Catalog {
+            kind,
+            probe_clock,
+            op,
+        } => {
+            let mut printer = printer.with_printer_clock_probe(probe_clock);
+            let result = run_catalog(&mut printer, kind.into(), op).await;
+            printer.disconnect_ftps().await;
+            return result;
+        }
+        other => other,
+    };
 
     let client = printer.ftps().await?;
 
@@ -225,42 +372,13 @@ pub async fn run(
                 stop_after,
             } => {
                 println!("Downloading remote file '{}'...", remote_path);
-                let mut out = fs::File::create(&local_path)?;
-                let mut written = 0u64;
-                let mut stopped = false;
-                let mut write_error = None;
+                let mut sink = LocalSink::create(&local_path, stop_after)?;
                 let started = Instant::now();
                 let result = client
-                    .download_file_each(&remote_path, |chunk| {
-                        if stop_after.is_some_and(|limit| written >= limit) {
-                            stopped = true;
-                            return Err(Error::InvalidState("--stop-after reached".into()));
-                        }
-                        out.write_all(chunk).map_err(|e| {
-                            write_error = Some(e);
-                            Error::InvalidState("local write failed".into())
-                        })?;
-                        written += chunk.len() as u64;
-                        Ok(())
-                    })
+                    .download_file_each(&remote_path, |chunk| sink.accept(chunk))
                     .await;
                 print_transfer_time("RETR", started);
-                if let Some(e) = write_error {
-                    return Err(e.into());
-                }
-                if stopped {
-                    println!(
-                        "Stopped after {written} bytes (--stop-after); '{local_path}' is partial."
-                    );
-                    if client.is_poisoned() {
-                        println!("The data channel was reset; the printer has closed this FTPS session.");
-                    } else {
-                        println!("Unexpected: the FTPS session is still usable after the stop.");
-                    }
-                } else {
-                    let n = result?;
-                    println!("Success: {n} bytes written to '{local_path}'.");
-                }
+                sink.report(result, client.is_poisoned(), &local_path)?;
             }
             FilesAction::Head {
                 remote_path,
@@ -398,6 +516,8 @@ pub async fn run(
                 println!("  - Free Space (Bytes) : {}", space_bytes);
                 println!("  - Free Space         : {}\n", format_size(space_bytes));
             }
+            // Dispatched to `run_catalog` above, before this session was opened.
+            FilesAction::Catalog { .. } => unreachable!("catalog runs through run_catalog"),
         }
         Ok(())
     }
@@ -405,6 +525,93 @@ pub async fn run(
 
     let _ = printer.disconnect_ftps().await;
     result
+}
+
+/// Lists files of `kind` through `PrinterClient::list_files`, then downloads or deletes one by name if `op` says to.
+async fn run_catalog(
+    printer: &mut FtpsPrinter,
+    kind: FileKind,
+    op: Option<CatalogOp>,
+) -> Result<(), CliError> {
+    let started = Instant::now();
+    let files = printer.list_files(kind).await?;
+    print_transfer_time("list_files", started);
+    let find = |name: &str| {
+        files
+            .iter()
+            .find(|f| f.name == name)
+            .ok_or_else(|| CliError::InvalidArgs(format!("no {kind:?} file named '{name}'")))
+    };
+    match op {
+        None if files.is_empty() => println!("No {kind:?} files."),
+        None => print_catalog_table(&files),
+        Some(CatalogOp::Get {
+            name,
+            local_path,
+            stop_after,
+        }) => {
+            let file = find(&name)?.clone();
+            println!("Downloading '{name}'...");
+            let mut sink = LocalSink::create(&local_path, stop_after)?;
+            let started = Instant::now();
+            let result = printer
+                .download_file(&file, |chunk| sink.accept(chunk))
+                .await;
+            print_transfer_time("download_file", started);
+            sink.report(result, !printer.is_ftps_connected(), &local_path)?;
+        }
+        Some(CatalogOp::Rm { name }) => {
+            let file = find(&name)?.clone();
+            printer.delete_file(&file).await?;
+            println!("Success: '{name}' deleted.");
+        }
+    }
+    Ok(())
+}
+
+/// Prints a `catalog` listing; a rebuilt year is marked `*`, a missing one `????`.
+fn print_catalog_table(files: &[PrinterFile]) {
+    let mut table = crate::table::Table::new(vec!["Size", "Modified", "Storage", "Name"]);
+    let mut any_inferred = false;
+    for file in files {
+        let modified = match file.modified {
+            FileTime::Calendar { at, year_inferred } => {
+                any_inferred |= year_inferred;
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}{}",
+                    at.year,
+                    at.month,
+                    at.day,
+                    at.hour,
+                    at.minute,
+                    if year_inferred { " *" } else { "" }
+                )
+            }
+            FileTime::NoYear {
+                month,
+                day,
+                hour,
+                minute,
+            } => format!("????-{month:02}-{day:02} {hour:02}:{minute:02}"),
+            FileTime::Unix(secs) => format!("unix {secs}"),
+            _ => String::from("-"),
+        };
+        let storage = format!("{:?}", file.storage);
+        table.add_row(vec![
+            &format_size(file.size),
+            &modified,
+            &storage,
+            &file.name,
+        ]);
+    }
+    table.print();
+    if any_inferred {
+        println!(
+            "\n* year rebuilt against a reference clock: the printer's with --probe-clock when \
+             its probe succeeds, otherwise the host's."
+        );
+    }
+    println!();
 }
 
 /// Uploads a tiny probe file, diffs its printer-reported mtime against host UTC wall-clock
