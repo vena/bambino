@@ -45,8 +45,10 @@ pub enum FilesAction {
     },
     /// Download a remote card file to a local path, writing it as it arrives
     ///
-    /// --stop-after BYTES stops the transfer once that many bytes are written, leaving a partial
-    /// file. The printer then closes the FTPS session, so the next command reconnects.
+    /// The file is written to LOCAL_PATH.part and renamed to LOCAL_PATH once the download
+    /// succeeds; a failed download leaves LOCAL_PATH as it was. --stop-after BYTES stops the
+    /// transfer once that many bytes are written and keeps the partial file. The printer then
+    /// closes the FTPS session, so the next command reconnects.
     #[command(
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH> [--stop-after <BYTES>]"
     )]
@@ -113,10 +115,11 @@ pub enum FilesAction {
     ///
     /// Confirmed unreliable on ESP32/FreeRTOS-class printers (e.g. P1S) — no RTC
     /// battery, and absent a successful LAN-mode NTP sync (observed unreliable), the clock
-    /// falls back to the firmware build date on boot. `list_directory`'s year-rollover math
-    /// can't be trusted whenever this is the case, since the raw `LIST` HH:MM timestamps come
-    /// from the printer's own wrong clock. Unconfirmed on printers with more capable AP
-    /// controllers (X1/H2 series).
+    /// restarts from a fixed base on every boot (on a P1S, about two months before its
+    /// firmware's release; reference/02_ftps.md, "Absolute Timestamps via MDTM").
+    /// `list_directory`'s year-rollover math can't be trusted whenever this is the case, since
+    /// the raw `LIST` HH:MM timestamps come from the printer's own wrong clock. Unconfirmed on
+    /// printers with more capable AP controllers (X1/H2 series).
     #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check")]
     ClockCheck,
     /// Query available MicroSD card capacity
@@ -124,9 +127,10 @@ pub enum FilesAction {
     Space,
     /// List, download or delete print files or timelapses by kind, through PrinterClient::list_files
     ///
-    /// Without get or rm, lists the files of KIND. --probe-clock reads the printer's clock first
-    /// (an upload, MDTM and delete of /bambino_clock_probe.txt), so a year the listing leaves out
-    /// is rebuilt against the printer's clock rather than the host's.
+    /// Without get, thumb or rm, lists the files of KIND, by path. get, thumb and rm take a name
+    /// or, where a name is in both /cache and the root, a path. --probe-clock reads the
+    /// printer's clock first (an upload, MDTM and delete of /bambino_clock_probe.txt), so a year
+    /// the listing leaves out is rebuilt against the printer's clock rather than the host's.
     #[command(
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> [--probe-clock]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> get <NAME> <LOCAL_PATH> [--stop-after <BYTES>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> rm <NAME>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog timelapse thumb <NAME> <LOCAL_PATH>"
     )]
@@ -164,7 +168,10 @@ impl From<CatalogKind> for FileKind {
 /// What `catalog` does with one listed file.
 #[derive(Subcommand, Debug)]
 pub enum CatalogOp {
-    /// Download a listed file by name, writing it as it arrives
+    /// Download a listed file, writing it as it arrives
+    ///
+    /// The file is written to LOCAL_PATH.part and renamed to LOCAL_PATH once the download
+    /// succeeds or --stop-after stops it; a failed download leaves LOCAL_PATH as it was.
     Get {
         /// The file's name or path, as the listing shows it
         name: String,
@@ -173,13 +180,13 @@ pub enum CatalogOp {
         #[arg(long, value_name = "BYTES")]
         stop_after: Option<u64>,
     },
-    /// Download a listed timelapse's cover image by name
+    /// Download a listed timelapse's cover image
     Thumb {
         /// The timelapse's name or path, as the listing shows it
         name: String,
         local_path: String,
     },
-    /// Delete a listed file by name
+    /// Delete a listed file
     Rm {
         /// The file's name or path, as the listing shows it
         name: String,
@@ -198,24 +205,44 @@ type FtpsPrinter = PrinterClient<
     TokioTimer,
 >;
 
-/// Writes a download to a local file as it arrives, stopping at `--stop-after` if given.
+/// Writes a download to `<LOCAL_PATH>.part` as it arrives, stopping at `--stop-after` if given.
+///
+/// The file takes `LOCAL_PATH`'s name only once the download succeeds or `--stop-after` stops it,
+/// so a download that fails (a missing remote file, a broken transfer, a `SIZE` mismatch) never
+/// replaces a file already at `LOCAL_PATH`. The library leaves this choice to its consumer: the
+/// sink is where the bytes go, and this is the CLI's.
 struct LocalSink {
-    out: fs::File,
+    local_path: String,
+    part_path: String,
+    /// Opened on the first chunk, so a request that sends nothing creates nothing.
+    out: Option<fs::File>,
     written: u64,
     stop_after: Option<u64>,
     stopped: bool,
     write_error: Option<std::io::Error>,
 }
 
+/// How a [`LocalSink`] download ended, once its file is in place.
+enum Outcome {
+    /// The whole file, this many bytes, is at `LOCAL_PATH`.
+    Written(u64),
+    /// `--stop-after` stopped it; this many bytes are at `LOCAL_PATH`.
+    Stopped(u64),
+    /// There was nothing to download, and nothing was written.
+    Nothing,
+}
+
 impl LocalSink {
-    fn create(local_path: &str, stop_after: Option<u64>) -> Result<Self, CliError> {
-        Ok(Self {
-            out: fs::File::create(local_path)?,
+    fn new(local_path: &str, stop_after: Option<u64>) -> Self {
+        Self {
+            local_path: local_path.to_string(),
+            part_path: format!("{local_path}.part"),
+            out: None,
             written: 0,
             stop_after,
             stopped: false,
             write_error: None,
-        })
+        }
     }
 
     /// The download sink: refuses the next read once `stop_after` bytes are written.
@@ -224,7 +251,15 @@ impl LocalSink {
             self.stopped = true;
             return Err(Error::InvalidState("--stop-after reached".into()));
         }
-        if let Err(e) = self.out.write_all(chunk) {
+        let written = match &mut self.out {
+            Some(out) => out.write_all(chunk),
+            None => fs::File::create(&self.part_path).and_then(|mut out| {
+                let written = out.write_all(chunk);
+                self.out = Some(out);
+                written
+            }),
+        };
+        if let Err(e) = written {
             self.write_error = Some(e);
             return Err(Error::InvalidState("local write failed".into()));
         }
@@ -232,31 +267,53 @@ impl LocalSink {
         Ok(())
     }
 
-    /// Reports the download's outcome; `session_closed` is whether FTPS ended with it.
-    fn report(
-        self,
-        result: Result<u64, Error>,
-        session_closed: bool,
-        local_path: &str,
-    ) -> Result<(), CliError> {
+    /// Moves the file into place or removes it, given the download's result (`None`: nothing to download).
+    fn finish(mut self, result: Result<Option<u64>, Error>) -> Result<Outcome, CliError> {
+        let had_part = self.out.take().is_some();
+        let discard = |part_path: &str| {
+            if had_part {
+                let _ = fs::remove_file(part_path);
+            }
+        };
         if let Some(e) = self.write_error {
+            discard(&self.part_path);
             return Err(e.into());
         }
-        if !self.stopped {
-            let n = result?;
-            println!("Success: {n} bytes written to '{local_path}'.");
-            return Ok(());
-        }
-        println!(
-            "Stopped after {} bytes (--stop-after); '{local_path}' is partial.",
-            self.written
-        );
-        if session_closed {
-            println!("The data channel was reset; the printer has closed this FTPS session.");
+        let outcome = match result {
+            _ if self.stopped => Outcome::Stopped(self.written),
+            Ok(Some(n)) => Outcome::Written(n),
+            Ok(None) => {
+                discard(&self.part_path);
+                return Ok(Outcome::Nothing);
+            }
+            Err(e) => {
+                discard(&self.part_path);
+                return Err(e.into());
+            }
+        };
+        if had_part {
+            fs::rename(&self.part_path, &self.local_path)?;
         } else {
-            println!("Unexpected: the FTPS session is still usable after the stop.");
+            // An empty file, or a stop before the first chunk.
+            fs::File::create(&self.local_path)?;
         }
-        Ok(())
+        Ok(outcome)
+    }
+}
+
+/// Prints how a download ended; `session_closed` is whether FTPS ended with it.
+fn report_download(outcome: Outcome, local_path: &str, session_closed: bool) {
+    match outcome {
+        Outcome::Written(n) => println!("Success: {n} bytes written to '{local_path}'."),
+        Outcome::Stopped(n) => {
+            println!("Stopped after {n} bytes (--stop-after); '{local_path}' is partial.");
+            if session_closed {
+                println!("The data channel was reset; the printer has closed this FTPS session.");
+            } else {
+                println!("Unexpected: the FTPS session is still usable after the stop.");
+            }
+        }
+        Outcome::Nothing => println!("Nothing to download; nothing written."),
     }
 }
 
@@ -378,13 +435,14 @@ pub async fn run(
                 stop_after,
             } => {
                 println!("Downloading remote file '{}'...", remote_path);
-                let mut sink = LocalSink::create(&local_path, stop_after)?;
+                let mut sink = LocalSink::new(&local_path, stop_after);
                 let started = Instant::now();
                 let result = client
                     .download_file_each(&remote_path, |chunk| sink.accept(chunk))
                     .await;
                 print_transfer_time("RETR", started);
-                sink.report(result, client.is_poisoned(), &local_path)?;
+                let outcome = sink.finish(result.map(Some))?;
+                report_download(outcome, &local_path, client.is_poisoned());
             }
             FilesAction::Head {
                 remote_path,
@@ -568,28 +626,24 @@ async fn run_catalog(
         }) => {
             let file = find(&name)?.clone();
             println!("Downloading '{name}'...");
-            let mut sink = LocalSink::create(&local_path, stop_after)?;
+            let mut sink = LocalSink::new(&local_path, stop_after);
             let started = Instant::now();
             let result = printer
                 .download_file(&file, |chunk| sink.accept(chunk))
                 .await;
             print_transfer_time("download_file", started);
-            sink.report(result, !printer.is_ftps_connected(), &local_path)?;
+            let outcome = sink.finish(result.map(Some))?;
+            report_download(outcome, &local_path, !printer.is_ftps_connected());
         }
         Some(CatalogOp::Thumb { name, local_path }) => {
             let file = find(&name)?.clone();
-            let mut sink = LocalSink::create(&local_path, None)?;
-            match printer
+            let mut sink = LocalSink::new(&local_path, None);
+            let result = printer
                 .read_thumbnail(&file, |chunk| sink.accept(chunk))
-                .await
-            {
-                Ok(Some(n)) => println!("Success: {n} bytes written to '{local_path}'."),
-                Ok(None) => {
-                    drop(sink);
-                    fs::remove_file(&local_path)?;
-                    println!("'{name}' has no cover image.");
-                }
-                Err(e) => sink.report(Err(e), !printer.is_ftps_connected(), &local_path)?,
+                .await;
+            match sink.finish(result)? {
+                Outcome::Nothing => println!("'{name}' has no cover image."),
+                outcome => report_download(outcome, &local_path, !printer.is_ftps_connected()),
             }
         }
         Some(CatalogOp::Rm { name }) => {

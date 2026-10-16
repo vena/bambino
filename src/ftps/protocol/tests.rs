@@ -154,6 +154,53 @@ async fn test_read_to_eof_rejects_oversized_transfer() {
 }
 
 #[tokio::test]
+async fn test_read_each_hands_every_chunk_to_the_sink() {
+    let mut stream = MockIo::with_chunks(&[b"PK\x03\x04", b"abc", b"defg"]);
+    let mut got = Vec::new();
+    let read = read_each_to_eof(&mut stream, &DummyTimer, 30_000, 1024, |chunk| {
+        got.extend_from_slice(chunk);
+        Ok(())
+    })
+    .await;
+    assert!(matches!(read, Ok(11)));
+    assert_eq!(got, b"PK\x03\x04abcdefg");
+}
+
+#[tokio::test]
+async fn test_read_each_stops_at_the_cap_without_passing_it_on() {
+    // Past the cap is a stop, like a sink error: the rest of the stream is still coming.
+    const TEST_MAX_BYTES: u64 = FTPS_DATA_READ_BUF_SIZE as u64 * 4;
+    let mut stream = MockIo::infinite();
+    let mut delivered = 0u64;
+    let read = read_each_to_eof(&mut stream, &DummyTimer, 30_000, TEST_MAX_BYTES, |chunk| {
+        delivered += chunk.len() as u64;
+        Ok(())
+    })
+    .await;
+    assert!(matches!(
+        read,
+        Err(EachStop::Stopped(Error::ProtocolViolation(_)))
+    ));
+    assert!(delivered <= TEST_MAX_BYTES);
+}
+
+#[tokio::test]
+async fn test_read_each_stops_on_a_sink_error() {
+    let mut stream = MockIo::infinite();
+    let mut calls = 0;
+    let read = read_each_to_eof(&mut stream, &DummyTimer, 30_000, u64::MAX, |_| {
+        calls += 1;
+        Err(Error::InvalidArgument("full".into()))
+    })
+    .await;
+    assert!(matches!(
+        read,
+        Err(EachStop::Stopped(Error::InvalidArgument(_)))
+    ));
+    assert_eq!(calls, 1);
+}
+
+#[tokio::test]
 async fn test_read_prefix_stops_at_a_full_buffer() {
     // A stream that never ends: the read must stop once `buf` is full, not keep going.
     let mut stream = MockIo::infinite();

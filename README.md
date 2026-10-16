@@ -421,7 +421,7 @@ if let Some(t) = printer_now {
 
 Feed that into `list_directory`'s `now: CurrentDateTime` parameter, and it automatically reconstructs missing years against the best reference available.
 
-`PrinterClient::list_files` can do this for you. Build the client with `.with_printer_clock_probe(true)` and the first `list_files` on each FTPS session runs this probe, then rebuilds years against the printer's clock, advanced by the time since the probe. A new session probes again, since a reboot ends the session and resets the clock. Without it, `list_files` uses the host's clock (or, without `std`, reports `FileTime::NoYear` for a file whose year is missing). The probe is off by default because it writes to the card: the file shows briefly on the printer's screen. Turn it on when you display or compare file dates. If the probe fails (no `MDTM`, a full card), that session falls back to the host's clock and the listing still succeeds.
+`PrinterClient::list_files` can do this for you. Build the client with `.with_printer_clock_probe(true)` and the first `list_files` on each FTPS session runs this probe, then rebuilds years against the printer's clock, advanced by the time since the probe. A new session probes again, since a reboot ends the session and resets the clock. Without it, `list_files` uses the host's clock (or, without `std` or with a host clock reading before 2000, reports `FileTime::NoYear` for a file whose year is missing). The probe is off by default because it writes to the card: the file shows briefly on the printer's screen. Turn it on when you display or compare file dates. If the probe fails (no `MDTM`, a full card), that session falls back to the host's clock and the listing still succeeds.
 
 > Without `MDTM`, a similar probe could be done with `list_directory` (upload, fetch list, read time of the file name you uploaded), but only partly since recent files in a `LIST` return lack the year.
 
@@ -733,7 +733,7 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   passed, and bypasses all model safety checks; see its --help.
                   ams (dry | dry-stop)
 Files actions:    list  upload  download  head  front  job  mkdir  rmdir  delete  space
-                  clock-check
+                  clock-check  catalog (get | thumb | rm)
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
 Ack-probe:        -o/--output  -t/--tests  --window

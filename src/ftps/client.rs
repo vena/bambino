@@ -86,8 +86,9 @@ impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
 /// widest such window; now on every `write_command`/`read_response` failure in every method,
 /// including the single-reply metadata/filesystem commands); every public method checks the
 /// flag first and returns [`Error::ProtocolViolation`] immediately if set.
-/// [`download_prefix`](Self::download_prefix) also sets it on purpose when it stops a transfer
-/// early, because the printer then closes the control connection. A poisoned client
+/// [`download_prefix`](Self::download_prefix) and
+/// [`download_file_each`](Self::download_file_each) also set it on purpose when they stop a
+/// transfer early, because the printer then closes the control connection. A poisoned client
 /// must be replaced: [`disconnect`](Self::disconnect) returns its parts for a fresh
 /// [`FtpsClient::connect`], and `PrinterClient::ftps()` does that by itself.
 ///
@@ -967,7 +968,8 @@ where
     /// **An error from `sink` ends this session**, as a full buffer does for
     /// [`download_prefix`](Self::download_prefix): the printer can only be stopped mid-file with
     /// an RST, after which it closes the control connection. The client is left poisoned and
-    /// `PrinterClient::ftps()` reconnects. The sink's error is returned.
+    /// `PrinterClient::ftps()` reconnects. The sink's error is returned. Reaching
+    /// [`MAX_TRANSFER_BYTES`](crate::ftps::MAX_TRANSFER_BYTES) stops the transfer the same way.
     ///
     /// # Errors
     ///

@@ -1,4 +1,4 @@
-//! Listing, downloading and deleting a printer's print files and timelapses, whichever service holds them.
+//! Listing, downloading and deleting a printer's print files and timelapses, and reading timelapse covers, whichever service holds them.
 //!
 //! Only FTPS backs these calls today, so every file is on external storage. The port-6000 file
 //! tunnel (#636) will add a second [`FileAddress`] arm for internal storage without changing
@@ -84,8 +84,9 @@ pub enum FileTime {
     /// A calendar time from an FTPS listing that left the year out, with no reference clock to rebuild it.
     ///
     /// Happens without `std`, where there is no host clock, or with a host clock that was never
-    /// set. Turn on [`with_printer_clock_probe`](PrinterClient::with_printer_clock_probe) to get
-    /// the year from the printer's clock.
+    /// set (one reading before 2000, as an embedded clock that never synced does). Turn on
+    /// [`with_printer_clock_probe`](PrinterClient::with_printer_clock_probe) to get the year
+    /// from the printer's clock.
     NoYear {
         /// Calendar month (1-12).
         month: u8,
@@ -104,7 +105,8 @@ pub enum FileTime {
 
 /// One file from [`PrinterClient::list_files`].
 ///
-/// Pass it back to [`PrinterClient::download_file`] or [`PrinterClient::delete_file`]. It
+/// Pass it back to [`PrinterClient::download_file`], [`PrinterClient::delete_file`] or
+/// [`PrinterClient::read_thumbnail`]. It
 /// can't be built by hand: it carries the service and address it was listed from, which aren't
 /// public, so a file is always reached the way it was found.
 #[non_exhaustive]
@@ -321,8 +323,8 @@ where
     /// **Which clock rebuilds a missing year.** A listing leaves the year out for recent files.
     /// By default it is rebuilt against the host's clock (with `std`) and flagged
     /// ([`FileTime::Calendar`]'s `year_inferred`); without `std`, or with a host clock that was
-    /// never set, it isn't rebuilt ([`FileTime::NoYear`]). The printer's clock is the right
-    /// reference and the host's can put a file in the wrong year: turn on
+    /// never set (before 2000), it isn't rebuilt ([`FileTime::NoYear`]). The printer's clock is
+    /// the right reference and the host's can put a file in the wrong year: turn on
     /// [`with_printer_clock_probe`](Self::with_printer_clock_probe) to read it, at the cost of an
     /// upload, an `MDTM` and a delete once per FTPS session.
     ///
@@ -393,12 +395,14 @@ where
     /// `#thumbnail` member. Only a [`FileKind::Timelapse`] file has a cover; any other kind
     /// returns `None` without a request. A print file's images are inside its `.3mf`.
     ///
-    /// A cover the printer refuses with `550` is `None`; FTPS can't tell a missing file from an
-    /// unreadable one. The read and its `sink` behave as [`download_file`](Self::download_file)'s.
+    /// A cover the printer refuses with `550` before sending anything is `None`; FTPS can't tell
+    /// a missing file from an unreadable one. A `550` after bytes reached `sink` (from the
+    /// closing `SIZE` check) is an error, not `None`. The read and its `sink` behave as
+    /// [`download_file`](Self::download_file)'s.
     pub async fn read_thumbnail(
         &mut self,
         file: &PrinterFile,
-        sink: impl FnMut(&[u8]) -> Result<(), Error>,
+        mut sink: impl FnMut(&[u8]) -> Result<(), Error>,
     ) -> Result<Option<u64>, Error> {
         if file.kind != FileKind::Timelapse {
             return Ok(None);
@@ -406,12 +410,21 @@ where
         match &file.address {
             FileAddress::Ftps { path } => {
                 let cover = ftps_thumbnail_path(path);
-                match self.ftps().await?.download_file_each(&cover, sink).await {
+                let mut delivered = false;
+                let read = self
+                    .ftps()
+                    .await?
+                    .download_file_each(&cover, |chunk| {
+                        delivered = true;
+                        sink(chunk)
+                    })
+                    .await;
+                match read {
                     Ok(size) => Ok(Some(size)),
                     Err(Error::FtpReply {
                         code: FTP_FILE_NOT_FOUND,
                         ..
-                    }) => Ok(None),
+                    }) if !delivered => Ok(None),
                     Err(e) => Err(e),
                 }
             }

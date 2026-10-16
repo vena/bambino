@@ -187,6 +187,36 @@ async fn test_read_thumbnail_reads_the_matching_jpg() {
 }
 
 #[tokio::test]
+async fn test_read_thumbnail_550_after_the_cover_arrived_is_an_error() {
+    // The `SIZE` check's 550 comes after `sink` saw the cover: not "no cover".
+    let mut fx = Fixture::new();
+    let server = fx
+        .session(vec![
+            list("/timelapse", TIMELAPSES),
+            Step::Retr(
+                "/timelapse/thumbnail/video_2025-12-15_11-47-18.jpg".into(),
+                b"jpeg".to_vec(),
+            ),
+            Step::expect(
+                "SIZE /timelapse/thumbnail/video_2025-12-15_11-47-18.jpg",
+                "550 Could not get file size.",
+            ),
+        ])
+        .await;
+    let video = fx
+        .client
+        .list_files(FileKind::Timelapse)
+        .await
+        .expect("list")
+        .remove(0);
+    assert!(matches!(
+        fx.client.read_thumbnail(&video, |_| Ok(())).await,
+        Err(Error::FtpReply { code: 550, .. })
+    ));
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
 async fn test_read_thumbnail_is_none_for_a_print_file_without_a_request() {
     let mut fx = Fixture::new();
     // The script ends after the listing: a RETR would find the session closed and fail.
