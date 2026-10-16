@@ -513,5 +513,115 @@ async fn test_probe_without_mdtm_falls_back_once() {
             }
         ));
     }
+    assert_eq!(fx.client.printer_clock_reading(), None);
+    server.await.expect("FTPS mock panicked");
+}
+
+/// The year a [`RECENT`] listing's model gets.
+async fn recent_year(fx: &mut Fixture) -> i32 {
+    let FileTime::Calendar { at, .. } = recent_time(fx).await else {
+        panic!("a clock gives a year");
+    };
+    at.year
+}
+
+#[tokio::test]
+async fn test_kept_reading_lists_later_sessions_without_probing() {
+    let mut fx = Fixture::new();
+    fx.client = fx.client.with_printer_clock_probe(true);
+    assert_eq!(fx.client.printer_clock_reading(), None);
+    // The printer's clock reads 2026-02-02, so `Mar 01` is last year's.
+    let mut steps = probe("213 20260202085730");
+    steps.extend([
+        list("/cache", ""),
+        list("/", RECENT),
+        Step::expect("QUIT", "221 Goodbye."),
+    ]);
+    let server = fx.session(steps).await;
+    assert_eq!(recent_year(&mut fx).await, 2025);
+    let reading = fx
+        .client
+        .printer_clock_reading()
+        .expect("probe read the clock");
+    assert_eq!(
+        reading.at,
+        FtpTimestamp {
+            year: 2026,
+            month: 2,
+            day: 2,
+            hour: 8,
+            minute: 57,
+            second: 30,
+        }
+    );
+    fx.client.disconnect_ftps().await;
+    server.await.expect("FTPS mock panicked");
+    assert_eq!(fx.client.printer_clock_reading(), None);
+
+    // Supplied back, the reading lists a new session the same way, with the probe still on and
+    // no STOR or MDTM in the script.
+    fx.client.set_printer_clock_reading(Some(reading));
+    let server = fx
+        .session(vec![list("/cache", ""), list("/", RECENT)])
+        .await;
+    assert_eq!(recent_year(&mut fx).await, 2025);
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_cleared_reading_falls_back_to_the_probe() {
+    let mut fx = Fixture::new();
+    fx.client = fx.client.with_printer_clock_probe(true);
+    let mut steps = probe("213 20260202085730");
+    steps.extend([
+        list("/cache", ""),
+        list("/", RECENT),
+        Step::expect("QUIT", "221 Goodbye."),
+    ]);
+    let server = fx.session(steps).await;
+    recent_year(&mut fx).await;
+    let reading = fx
+        .client
+        .printer_clock_reading()
+        .expect("probe read the clock");
+    fx.client.disconnect_ftps().await;
+    server.await.expect("FTPS mock panicked");
+
+    fx.client.set_printer_clock_reading(Some(reading));
+    fx.client.set_printer_clock_reading(None);
+    // The printer rebooted and its clock now reads past `Mar 01`: the probe runs again.
+    let mut steps = probe("213 20260402085730");
+    steps.extend([list("/cache", ""), list("/", RECENT)]);
+    let server = fx.session(steps).await;
+    assert_eq!(recent_year(&mut fx).await, 2026);
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_supplied_reading_without_probe_replaces_the_host_clock() {
+    // The host clock is years past 2001, so a host-clock listing would never give 2000.
+    let mut fx = Fixture::new();
+    fx.client = fx.client.with_printer_clock_probe(true);
+    let mut steps = probe("213 20010202085730");
+    steps.extend([
+        list("/cache", ""),
+        list("/", RECENT),
+        Step::expect("QUIT", "221 Goodbye."),
+    ]);
+    let server = fx.session(steps).await;
+    assert_eq!(recent_year(&mut fx).await, 2000);
+    let reading = fx
+        .client
+        .printer_clock_reading()
+        .expect("probe read the clock");
+    fx.client.disconnect_ftps().await;
+    server.await.expect("FTPS mock panicked");
+
+    fx.client = fx.client.with_printer_clock_probe(false);
+    fx.client.set_printer_clock_reading(Some(reading));
+    let server = fx
+        .session(vec![list("/cache", ""), list("/", RECENT)])
+        .await;
+    assert_eq!(recent_year(&mut fx).await, 2000);
     server.await.expect("FTPS mock panicked");
 }

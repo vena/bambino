@@ -52,7 +52,7 @@ pub use command::{
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
-pub use files::{FileTime, PlateImages, PrinterFile, StorageKind};
+pub use files::{FileTime, PlateImages, PrinterClockReading, PrinterFile, StorageKind};
 pub use job::{JobImages, JobPlate, PlateSource};
 pub use motion::HOMING_WAIT_TIMEOUT;
 pub use thermal::PreheatHandles;
@@ -204,6 +204,8 @@ pub(crate) struct ClientCore {
     pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
     /// Whether `list_files` and `list_files_each` read the printer's clock over FTPS; see `with_printer_clock_probe`.
     pub(crate) ftps_clock_probe: bool,
+    /// A printer-clock reading the caller supplied, which FTPS listings use instead of probing; see `set_printer_clock_reading`.
+    pub(crate) ftps_clock_reading: Option<files::PrinterClockReading>,
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,
     pub(crate) file_tunnel_max_frame_size: Option<usize>,
@@ -228,6 +230,7 @@ impl ClientCore {
             ftps_port: crate::ftps::FTPS_PORT,
             ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
             ftps_clock_probe: false,
+            ftps_clock_reading: None,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             file_tunnel_max_frame_size: None,

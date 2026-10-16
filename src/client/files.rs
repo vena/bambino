@@ -196,6 +196,48 @@ impl PrinterFile {
     }
 }
 
+/// The printer's clock as the listing probe read it, to keep past its FTPS session and supply again.
+///
+/// Get one from [`PrinterClient::printer_clock_reading`] after a listing ran the probe
+/// ([`with_printer_clock_probe`](PrinterClient::with_printer_clock_probe)), and hand it back with
+/// [`PrinterClient::set_printer_clock_reading`] so later FTPS sessions list without probing, and
+/// without writing to the card.
+///
+/// **Valid only until the printer's next reboot.** The printer's clock restarts from a fixed
+/// base on every boot, so after one a kept reading puts files in the wrong year, with no sign
+/// of it. bambino doesn't detect a reboot: clear the reading when you see one, by whatever
+/// signal you have (an MQTT reconnect is one).
+///
+/// It is the printer's clock, not real time: in LAN mode it runs months behind (see
+/// [`CurrentDateTime`]).
+///
+/// **Only for the client that read it.** `read_at_ms` is on that client's FTPS timer, whose
+/// epoch is its own: `TokioTimer`'s starts when it is built, so a reading handed to
+/// another client, or to one given a new FTPS timer through
+/// [`attach_ftps`](PrinterClient::attach_ftps), is advanced by the wrong amount.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrinterClockReading {
+    /// The printer's date and time when it was read, to the second.
+    pub at: FtpTimestamp,
+    /// The client's FTPS timer ([`TimerProvider::now_millis`]) when `at` was read.
+    pub read_at_ms: u64,
+}
+
+impl PrinterClockReading {
+    /// The reading advanced to now on `timer`, or `None` when `timer` reads earlier than `read_at_ms`, so it isn't the timer the reading was taken on.
+    ///
+    /// A timer with no real clock ([`TimerProvider::has_real_clock`]) doesn't advance it.
+    fn now<T: TimerProvider>(self, timer: &T) -> Option<CurrentDateTime> {
+        let elapsed_secs = if timer.has_real_clock() {
+            timer.now_millis().checked_sub(self.read_at_ms)? / 1000
+        } else {
+            0
+        };
+        Some(advance_timestamp(self.at, elapsed_secs).into())
+    }
+}
+
 /// A plate's images from the front of a print file's `.3mf`, from [`PrinterClient::read_plate_images`].
 #[derive(Debug)]
 pub struct PlateImages<'b> {
@@ -349,7 +391,10 @@ where
     /// Off by default because it writes to the card as a side effect of a listing: the file is
     /// briefly visible on the printer's screen, and every new FTPS session probes again, including
     /// the one after a stopped download ends a session. It runs only inside `list_files` and
-    /// `list_files_each`, on the session the listing uses.
+    /// `list_files_each`, on the session the listing uses. To probe once and keep the reading
+    /// across sessions, take it with [`printer_clock_reading`](Self::printer_clock_reading) and
+    /// supply it with [`set_printer_clock_reading`](Self::set_printer_clock_reading), which takes
+    /// precedence over this setting.
     #[must_use]
     pub fn with_printer_clock_probe(mut self, enabled: bool) -> Self {
         self.core.ftps_clock_probe = enabled;
@@ -375,7 +420,8 @@ where
     /// never set (before 2000), it isn't rebuilt ([`FileTime::NoYear`]). The printer's clock is
     /// the right reference and the host's can put a file in the wrong year: turn on
     /// [`with_printer_clock_probe`](Self::with_printer_clock_probe) to read it, at the cost of an
-    /// upload, an `MDTM` and a delete once per FTPS session.
+    /// upload, an `MDTM` and a delete once per FTPS session, or supply a kept reading with
+    /// [`set_printer_clock_reading`](Self::set_printer_clock_reading) to skip the probe.
     ///
     /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] files. To place a listing's memory yourself,
     /// use [`list_files_each`](Self::list_files_each).
@@ -565,8 +611,52 @@ where
         }
     }
 
+    /// The printer's clock as this FTPS session's probe read it, or `None` when it hasn't.
+    ///
+    /// Call it after a [`list_files`](Self::list_files) or
+    /// [`list_files_each`](Self::list_files_each) with
+    /// [`with_printer_clock_probe`](Self::with_printer_clock_probe) on, and keep the result to
+    /// hand back with [`set_printer_clock_reading`](Self::set_printer_clock_reading): the
+    /// reading here ends with the session, and a stopped read ends one. `None` without an FTPS
+    /// session, on one that has ended, before the probe ran, when it failed, and when a supplied
+    /// reading made it unnecessary. See [`PrinterClockReading`] for when a kept one is valid.
+    #[must_use]
+    pub fn printer_clock_reading(&self) -> Option<PrinterClockReading> {
+        let ftps = self.ftps.as_ref().filter(|ftps| !ftps.is_poisoned())?;
+        match ftps.printer_clock {
+            PrinterClockProbe::Read { at, read_at_ms } => {
+                Some(PrinterClockReading { at, read_at_ms })
+            }
+            PrinterClockProbe::NotRun | PrinterClockProbe::Failed => None,
+        }
+    }
+
+    /// Has FTPS listings rebuild missing years against `reading`, advanced to now, instead of probing or using the host's clock; `None` clears it.
+    ///
+    /// Takes precedence over [`with_printer_clock_probe`](Self::with_printer_clock_probe): with a
+    /// reading set, no listing probes, so nothing is written to the card. Kept across FTPS
+    /// sessions until replaced or cleared.
+    ///
+    /// **You own the reboot rule.** The printer's clock restarts on every boot, so clear the
+    /// reading when the printer may have rebooted, or listings rebuild years against a stale
+    /// clock with no sign of it. See [`PrinterClockReading`], which also says which client a
+    /// reading is valid on. A reading that is later than this client's FTPS timer, so taken on
+    /// another timer, is logged, cleared and not used.
+    pub fn set_printer_clock_reading(&mut self, reading: Option<PrinterClockReading>) {
+        self.core.ftps_clock_reading = reading;
+    }
+
     /// The reference clock an FTPS listing rebuilds missing years against, or `None` for none.
     async fn listing_reference(&mut self) -> Result<Option<CurrentDateTime>, Error> {
+        if let Some(reading) = self.core.ftps_clock_reading {
+            if let Some(reference) = reading.now(self.ftps().await?.timer()) {
+                return Ok(Some(reference));
+            }
+            log::warn!(
+                "Supplied printer clock reading is later than this client's FTPS timer, so it was taken on another timer; clearing it"
+            );
+            self.core.ftps_clock_reading = None;
+        }
         if !self.core.ftps_clock_probe {
             return Ok(host_clock());
         }
@@ -581,15 +671,9 @@ where
         }
         let ftps = self.ftps().await?;
         Ok(match ftps.printer_clock {
-            PrinterClockProbe::Read { at, read_at_ms } => {
-                let timer = ftps.timer();
-                let elapsed_secs = if timer.has_real_clock() {
-                    timer.now_millis().saturating_sub(read_at_ms) / 1000
-                } else {
-                    0
-                };
-                Some(advance_timestamp(at, elapsed_secs).into())
-            }
+            PrinterClockProbe::Read { at, read_at_ms } => PrinterClockReading { at, read_at_ms }
+                .now(ftps.timer())
+                .or_else(host_clock),
             PrinterClockProbe::NotRun | PrinterClockProbe::Failed => host_clock(),
         })
     }
@@ -618,5 +702,30 @@ mod tests {
             ftps_thumbnail_path("/timelapse/a.b.mp4"),
             "/timelapse/thumbnail/a.b.jpg"
         );
+    }
+
+    #[test]
+    fn test_printer_clock_reading_advances_on_its_timer_only() {
+        let timer = crate::test_support::MockTimer::new();
+        timer.advance(5_000);
+        let reading = PrinterClockReading {
+            at: FtpTimestamp {
+                year: 2025,
+                month: 12,
+                day: 31,
+                hour: 23,
+                minute: 59,
+                second: 30,
+            },
+            read_at_ms: 5_000,
+        };
+        timer.advance(45_999);
+        assert_eq!(
+            reading.now(&timer),
+            Some(CurrentDateTime::new(2026, 1, 1, 0, 0))
+        );
+        // A timer reading earlier than `read_at_ms` isn't the one the reading was taken on.
+        let other = crate::test_support::MockTimer::new();
+        assert_eq!(reading.now(&other), None);
     }
 }
