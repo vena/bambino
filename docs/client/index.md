@@ -1807,10 +1807,6 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The path comes from the `url` of the start command the printer echoed for this job, when
   this client saw one, and otherwise from `/` followed by `gcode_file`. A `SIZE` request
   confirms the file is there and gives its size; a file that isn't is `None`, not an error.
-  An `MDTM` request then gives its modification time, with an explicit year
-  ([`FileTime::Calendar`](files/index.md#filetime) with `year_inferred: false`), or [`FileTime::Unknown`](files/index.md#filetime) on firmware
-  without `MDTM`. No directory is listed. Pass the result to
-  [`read_plate_images`](#printerclient) or any other call taking a [`PrinterFile`](#printerfile).
 
   That second rule covers every file Bambu Studio and OrcaSlicer send, which go to the card
   root (`url: "ftp://<name>"`), and a print started from the printer's screen of a file at
@@ -1820,6 +1816,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   returned, and its images are not the job's. `reference/02_ftps.md` [REF-FTPS-OPS] has the
   capture. A `gcode_file` that is a path rather than a bare `.3mf` name, as X1 firmware's
   `/data/Metadata/plate_1.gcode` on internal storage, is `None`.
+
+  After `SIZE`, an `MDTM` request gives the file's modification time with an explicit year
+  ([`FileTime::Calendar`](files/index.md#filetime) with `year_inferred: false`), or [`FileTime::Unknown`](files/index.md#filetime) on firmware
+  without `MDTM`. No directory is listed. Pass the result to
+  [`read_plate_images`](#printerclient) or any other call taking a [`PrinterFile`](#printerfile).
 
   # Errors
 
