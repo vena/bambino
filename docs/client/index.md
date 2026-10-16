@@ -854,6 +854,15 @@ public, so a file is always reached the way it was found.
 
   Where the file is stored.
 
+#### Implementations
+
+- <span id="printerfile-path"></span>`fn path(&self) -> &str`
+
+  The service's own path for the file, which tells apart two listed files with the same name.
+
+  Over FTPS it is the full card path, such as `/cache/job.3mf`. It is for display and
+  comparison; pass the `PrinterFile` itself back to reach the file.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterFile`
@@ -1623,12 +1632,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Lists the printer's files of one kind.
 
   Served over FTPS, so only external storage (card or USB stick) is listed; internal storage
-  arrives with the port-6000 file tunnel (#636). One `LIST` of one directory, never
-  recursive:
+  arrives with the port-6000 file tunnel (#636). One `LIST` per directory below, never
+  recursive, so a file in a folder of your own isn't listed:
 
-  - [`FileKind::Timelapse`]: the files in `/timelapse`, not its `thumbnail` covers.
-  - [`FileKind::Model`]: the `.3mf` files at the card root, where a slicer's LAN send puts them.
-  - [`FileKind::Video`]: always empty. No source says where FTPS keeps recorded videos.
+  - [`FileKind::Timelapse`]: the files in `/timelapse`, not its `thumbnail` covers; read a
+    cover with [`read_thumbnail`](#printerclient).
+  - [`FileKind::Model`]: the `.3mf` files in `/cache`, then at the card root. A name can
+    appear in both; [`PrinterFile::path`](files/index.md#printerfile) tells them apart.
+  - [`FileKind::Video`]: always empty. A P1S's `/ipcam` holds only an `index` file, and no
+    source shows recorded videos elsewhere on the card.
 
   **Which clock rebuilds a missing year.** A listing leaves the year out for recent files.
   By default it is rebuilt against the host's clock (with `std`) and flagged
@@ -1656,6 +1668,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-delete-file"></span>`async fn delete_file(&mut self, file: &PrinterFile) -> Result<(), Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
   Deletes a listed file. Deleting one that is already gone succeeds.
+
+- <span id="superprinterclient-read-thumbnail"></span>`async fn read_thumbnail(&mut self, file: &PrinterFile, sink: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<Option<u64>, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Reads a listed timelapse's cover image, passing each read to `sink`, and returns its size, or `None` when it has none.
+
+  Over FTPS the cover is `thumbnail/<video name without extension>.jpg` beside the video,
+  as ha-bambulab's `_download_timelapse_thumbnail` reads it (P1S: one `.jpg` per `.avi`).
+  The file tunnel (#636) will read it as Bambu Studio does, through the video's
+  `#thumbnail` member. Only a [`FileKind::Timelapse`](../file_tunnel/index.md#filekind) file has a cover; any other kind
+  returns `None` without a request. A print file's images are inside its `.3mf`.
+
+  A cover the printer refuses with `550` is `None`; FTPS can't tell a missing file from an
+  unreadable one. The read and its `sink` behave as [`download_file`](#printerclient)'s.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
