@@ -113,14 +113,7 @@ async fn test_list_models_keeps_only_3mf_files_at_the_root() {
 async fn test_list_models_lists_cache_then_root_and_keeps_each_path() {
     let mut fx = Fixture::new();
     let server = fx
-        .session(vec![
-            list(
-                "/cache",
-                "-rw-r--r--    1 1000     1000        1000 Nov 14  2025 benchy.gcode.3mf\r\n\
-                 -rw-r--r--    1 1000     1000         421 Nov 14  2025 1_benchy.bbl\r\n",
-            ),
-            list("/", ROOT),
-        ])
+        .session(vec![list("/cache", CACHE), list("/", ROOT)])
         .await;
     let files = root_models(&mut fx).await;
     let paths: Vec<_> = files.iter().map(PrinterFile::path).collect();
@@ -285,6 +278,57 @@ async fn test_list_videos_is_empty_without_touching_ftps() {
     let mut fx = Fixture::new();
     let files = fx.client.list_files(FileKind::Video).await.expect("list");
     assert!(files.is_empty());
+    let mut delivered = 0;
+    fx.client
+        .list_files_each(FileKind::Video, |_| delivered += 1)
+        .await
+        .expect("list_files_each");
+    assert_eq!(delivered, 0);
+}
+
+const CACHE: &str = "-rw-r--r--    1 1000     1000        1000 Nov 14  2025 benchy.gcode.3mf\r\n\
+-rw-r--r--    1 1000     1000         421 Nov 14  2025 1_benchy.bbl\r\n";
+
+#[tokio::test]
+async fn test_list_files_each_delivers_what_list_files_returns() {
+    let mut fx = Fixture::new();
+    let server = fx
+        .session(vec![
+            list("/cache", CACHE),
+            list("/", ROOT),
+            list("/cache", CACHE),
+            list("/", ROOT),
+            list("/timelapse", TIMELAPSES),
+            list("/timelapse", TIMELAPSES),
+        ])
+        .await;
+    for kind in [FileKind::Model, FileKind::Timelapse] {
+        let listed = fx.client.list_files(kind).await.expect("list_files");
+        let mut delivered = Vec::new();
+        fx.client
+            .list_files_each(kind, |file| delivered.push(file))
+            .await
+            .expect("list_files_each");
+        assert!(!listed.is_empty());
+        assert_eq!(delivered, listed, "{kind:?}");
+    }
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_list_files_each_delivers_the_first_directory_before_the_second_fails() {
+    let mut fx = Fixture::new();
+    // The session ends after `/cache`, so listing `/` fails.
+    let server = fx.session(vec![list("/cache", CACHE)]).await;
+    let mut delivered = Vec::new();
+    let result = fx
+        .client
+        .list_files_each(FileKind::Model, |file| delivered.push(file))
+        .await;
+    assert!(result.is_err(), "{result:?}");
+    let paths: Vec<_> = delivered.iter().map(PrinterFile::path).collect();
+    assert_eq!(paths, ["/cache/benchy.gcode.3mf"]);
+    server.await.expect("FTPS mock panicked");
 }
 
 #[tokio::test]

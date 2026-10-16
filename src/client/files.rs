@@ -107,7 +107,7 @@ pub enum FileTime {
     Unknown,
 }
 
-/// One file from [`PrinterClient::list_files`] or [`PrinterClient::job_file`].
+/// One file from [`PrinterClient::list_files`], [`PrinterClient::list_files_each`] or [`PrinterClient::job_file`].
 ///
 /// Pass it back to [`PrinterClient::download_file`], [`PrinterClient::delete_file`],
 /// [`PrinterClient::read_thumbnail`] or [`PrinterClient::read_plate_images`]. It can't be built
@@ -377,41 +377,62 @@ where
     /// [`with_printer_clock_probe`](Self::with_printer_clock_probe) to read it, at the cost of an
     /// upload, an `MDTM` and a delete once per FTPS session.
     ///
-    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] files.
+    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] files. To place a listing's memory yourself,
+    /// use [`list_files_each`](Self::list_files_each).
     ///
     /// # Errors
     ///
     /// [`Error::NotConfigured`] without FTPS, and whatever
     /// [`FtpsClient::list_directory`] returns.
     pub async fn list_files(&mut self, kind: FileKind) -> Result<Vec<PrinterFile>, Error> {
+        let mut files = Vec::new();
+        let mut capped = false;
+        self.list_files_each(kind, |file| {
+            if files.len() < FTP_MAX_LISTING_ENTRIES {
+                files.push(file);
+            } else if !capped {
+                capped = true;
+                log::warn!(
+                    "more than {FTP_MAX_LISTING_ENTRIES} {kind:?} files; truncating the listing"
+                );
+            }
+        })
+        .await?;
+        Ok(files)
+    }
+
+    /// Lists the printer's files of one kind like [`list_files`](Self::list_files), handing each file to `on_file` as it is listed.
+    ///
+    /// Nothing is collected, so the caller decides where files live, and can keep only the ones
+    /// it needs. Directories, filters, order and clock reference are `list_files`'. No entry cap
+    /// applies; every listed file is delivered.
+    ///
+    /// # Errors
+    ///
+    /// As for `list_files`. **Files delivered before an error are not a complete listing;
+    /// discard them.** That includes files from `/cache` when listing the card root then fails,
+    /// for [`FileKind::Model`].
+    pub async fn list_files_each(
+        &mut self,
+        kind: FileKind,
+        mut on_file: impl FnMut(PrinterFile),
+    ) -> Result<(), Error> {
         let (dirs, keep): (&[&str], fn(&FtpFile) -> bool) = match kind {
             FileKind::Timelapse => (TIMELAPSE_DIRS, |f| !f.is_dir),
             FileKind::Model => (MODEL_DIRS, |f| !f.is_dir && is_model_file(&f.name)),
-            FileKind::Video => return Ok(Vec::new()),
+            FileKind::Video => return Ok(()),
         };
         let reference = self.listing_reference().await?;
         let ftps = self.ftps().await?;
-        let mut files = Vec::new();
-        let mut capped = false;
         for &dir in dirs {
             ftps.list_directory_each(dir, reference.unwrap_or(NO_REFERENCE), |file| {
-                if !keep(&file) {
-                    return;
+                if keep(&file) {
+                    on_file(PrinterFile::from_ftps(dir, file, kind, reference.is_some()));
                 }
-                if files.len() >= FTP_MAX_LISTING_ENTRIES {
-                    if !capped {
-                        capped = true;
-                        log::warn!(
-                            "more than {FTP_MAX_LISTING_ENTRIES} {kind:?} files; truncating the listing"
-                        );
-                    }
-                    return;
-                }
-                files.push(PrinterFile::from_ftps(dir, file, kind, reference.is_some()));
             })
             .await?;
         }
-        Ok(files)
+        Ok(())
     }
 
     /// Downloads a listed file, passing each read to `sink` in order, and returns its size.
