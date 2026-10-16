@@ -53,11 +53,12 @@ const HANDSHAKE_MAX_FRAME_PAYLOAD: usize = 1024;
 /// A session with a printer's port-6000 file tunnel.
 ///
 /// **Poisoning.** Requests run one at a time, and each reply is matched by `sequence`. A
-/// transport failure, a frame that can't be parsed, or a stream abandoned before its last frame
-/// leaves frames on the wire that a later request would misread. The client then sets
-/// `poisoned`; every public method returns [`Error::ProtocolViolation`] after that, and the only
-/// way back is a new connection. A failure `result` the printer sends in full (`FILE_NO_EXIST`)
-/// is [`Error::TunnelReply`] and leaves the session usable.
+/// transport failure or a frame that can't be parsed can leave frames on the wire that a later
+/// request would misread. The client then sets `poisoned`; every public method returns
+/// [`Error::ProtocolViolation`] after that, and the only way back is a new connection. A stream
+/// the client stops itself (a sink error, a size limit) is cancelled with `TASK_CANCEL` instead,
+/// and poisons the session only if the cancel gets no answer. A failure `result` the printer
+/// sends in full (`FILE_NO_EXIST`) is [`Error::TunnelReply`] and leaves the session usable.
 ///
 /// **Timer.** Every method takes the timer that bounds its reads and writes, as the camera
 /// stream's `read_next_frame_with_timer` does, so the client holds only its TLS stream `S`.
@@ -668,17 +669,14 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                 require_success("SUB_FILE", env.result)?;
             }
             let body = env.reply.unwrap_or_default();
-            // Studio matches each frame to its file by `path`; a frame for another member means
-            // the stream isn't the one asked for.
+            // Studio matches each frame to its file by `path` and ignores one that matches no
+            // file. No capture shows how the printer echoes it, so a mismatch is only logged.
             if !body.path.is_empty() && body.path != paths[0] {
-                let err = Error::ProtocolViolation(
-                    format!(
-                        "file tunnel SUB_FILE answered for {:?}, not {:?}",
-                        body.path, paths[0]
-                    )
-                    .into(),
+                log::debug!(
+                    "file tunnel SUB_FILE answered for {:?} after asking for {:?}",
+                    body.path,
+                    paths[0]
                 );
-                return if more { self.poison(err) } else { Err(err) };
             }
             // A size of 0 is Studio's "no such member" (`FILE_SIZE_ERR` in its translator).
             if body.size == 0 {
@@ -763,7 +761,8 @@ impl<S: AsyncIo> FileTunnelClient<S> {
     /// per-chunk read with `-9203`.
     ///
     /// **Not yet run against a printer.** The pipelining rests on open-bamboo-networking's P2S
-    /// captures alone.
+    /// captures alone. Which print URL finds a file uploaded to a storage other than `emmc`
+    /// (`udisk`) is also unchecked.
     pub async fn upload<T: TimerProvider>(
         &mut self,
         timer: &T,
@@ -799,7 +798,12 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             .read_reply_frame(timer, cmd::FILE_UPLOAD, sequence)
             .await?;
         let (json, _) = p::split_payload(&payload);
-        let env: Envelope<UploadInitReply> = p::parse_envelope(json, "FILE_UPLOAD init")?;
+        // An init reply that can't be read leaves the printer's state unknown: it may be waiting
+        // for chunks.
+        let env: Envelope<UploadInitReply> = match p::parse_envelope(json, "FILE_UPLOAD init") {
+            Ok(env) => env,
+            Err(e) => return self.poison(e),
+        };
         // Anything but CONTINUE or FILE_EXIST ends the request before a chunk is sent.
         match env.result {
             Some(result::CONTINUE | result::FILE_EXIST) => {}
@@ -815,29 +819,22 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             .chunk_size
             .checked_mul(1024)
             .and_then(|n| usize::try_from(n).ok())
-            .filter(|&n| n > 0 && n <= self.max_frame_payload)
-            .ok_or_else(|| {
-                Error::ProtocolViolation(
-                    format!(
-                        "file tunnel FILE_UPLOAD chunk_size {} KiB is zero or over the {} byte \
-                         frame limit",
-                        init.chunk_size, self.max_frame_payload
-                    )
-                    .into(),
-                )
-            })?;
+            .filter(|&n| n > 0 && n <= self.max_frame_payload);
         let start = usize::try_from(init.offset)
             .ok()
-            .filter(|&o| o < data.len())
-            .ok_or_else(|| {
-                Error::ProtocolViolation(
-                    format!(
-                        "file tunnel FILE_UPLOAD resume offset {} is past the {total} byte file",
-                        init.offset
-                    )
-                    .into(),
+            .filter(|&o| o < data.len());
+        let (Some(chunk_len), Some(start)) = (chunk_len, start) else {
+            // The printer is waiting for chunks this client won't send: cancel the upload.
+            self.abandon(timer, sequence).await;
+            return Err(Error::ProtocolViolation(
+                format!(
+                    "file tunnel FILE_UPLOAD init asked for {} KiB chunks from offset {} of a \
+                     {total} byte file, which this client can't send (frame limit {} bytes)",
+                    init.chunk_size, init.offset, self.max_frame_payload
                 )
-            })?;
+                .into(),
+            ));
+        };
         // open-bamboo-networking: the MD5 of the entire file, on the last chunk only.
         let file_md5 = format!("{:x}", md5::compute(data));
         let chunks = data[start..].chunks(chunk_len);
@@ -863,8 +860,9 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                 return self.poison(e);
             }
         }
-        // One final reply; skip any progress frames a firmware sends in between.
-        loop {
+        // One final reply; skip any progress frames a firmware sends in between, at most one per
+        // chunk plus the usual slack.
+        for _ in 0..=last + MAX_SKIPPED_FRAMES {
             let payload = self
                 .read_reply_frame(timer, cmd::FILE_UPLOAD, sequence)
                 .await?;
@@ -878,6 +876,9 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             }
             return require_success("FILE_UPLOAD", env.result);
         }
+        self.poison(Error::ProtocolViolation(
+            "file tunnel FILE_UPLOAD sent progress frames without a final reply".into(),
+        ))
     }
 
     /// Receives a streamed `FILE_DOWNLOAD` reply, checking offsets, `total` and `file_md5`.
@@ -1693,6 +1694,26 @@ mod tests {
             .flat_map(|(_, bin)| bin.iter().copied())
             .collect();
         assert_eq!(rejoined, data);
+    }
+
+    #[tokio::test]
+    async fn unusable_upload_init_is_cancelled() {
+        // A zero chunk size can't be sent; the printer is left expecting chunks, so cancel.
+        let mut client = connected(&[
+            reply(r#"{"cmdtype":5,"result":1,"sequence":1,"reply":{"chunk_size":0,"offset":0}}"#),
+            reply(r#"{"cmdtype":4096,"result":0,"sequence":2,"reply":{"tasks":[1]}}"#),
+        ])
+        .await;
+        assert!(matches!(
+            client.upload(&DummyTimer, "emmc", "a.3mf", b"data").await,
+            Err(Error::ProtocolViolation(_))
+        ));
+        let sent = written_frames(client.stream());
+        assert_eq!(
+            core::str::from_utf8(&sent[3].1).unwrap(),
+            r#"{"mtype":12289,"cmdtype":4096,"sequence":2,"req":{"tasks":[1]}}"#
+        );
+        assert!(!client.is_poisoned());
     }
 
     #[tokio::test]

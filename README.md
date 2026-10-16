@@ -344,7 +344,7 @@ if printer.capabilities().file_tunnel_support().is_supported() {
 printer.disconnect_file_tunnel().await; // frees the TLS session
 
 // Print the uploaded file from internal storage (url: brtc://emmc/job.gcode.3mf)
-let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job", 1, "auto")
+let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
     .from_internal_storage();
 ```
 

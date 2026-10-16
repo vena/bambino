@@ -208,7 +208,7 @@ const CARD_URL_PREFIX: &str = "ftp://";
 /// defaults for calibration flags.
 #[derive(Debug, Clone)]
 pub struct PrintJobConfig {
-    /// Filename of the `.3mf` file on SD card storage (e.g. "job.3mf").
+    /// Filename of the `.3mf` file (e.g. "job.3mf"), on the card unless [`file_location`](Self::file_location) says otherwise.
     pub job_filename: String,
     /// Sliced plate gcode path inside the `.3mf` (e.g. "Metadata/plate_1.gcode").
     pub plate_gcode_path: String,
@@ -494,7 +494,7 @@ pub struct ProjectFilePayload {
     /// Per-submission task tracking ID. See `project_id`'s doc comment — same value, same
     /// reasoning.
     pub task_id: String,
-    /// Sliced compilation container file path residing on the SD card (e.g., "job.3mf").
+    /// The job's `.3mf` file name (e.g., "job.3mf"); `url` says where it is stored.
     pub file: String,
     /// Where the printer finds the file: `ftp://<name>` on the card, or `brtc://emmc/<name>` on internal storage ([`JobFileLocation`]) [REF-MQTT-LIFECYCLE].
     pub url: String,
