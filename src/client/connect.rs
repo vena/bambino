@@ -529,7 +529,7 @@ where
     /// [`with_attached_ftps()`](Self::with_attached_ftps) there.
     #[must_use]
     pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
-        self,
+        mut self,
         tls: NewFtpsTls,
         factory: NewFtpsFactory,
         timer: NewFtpsTimer,
@@ -552,6 +552,8 @@ where
         NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
         NewFtpsTimer: TimerProvider,
     {
+        // A kept reading is on the old FTPS timer.
+        self.core.ftps_clock_reading = None;
         PrinterClient {
             mqtt: self.mqtt,
             ftps: None,
@@ -1084,7 +1086,7 @@ where
     /// connected FTPS session, for the same reason as `.with_ftps()`.
     #[must_use]
     pub fn with_attached_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
-        self,
+        mut self,
         ftps_client: FtpsClient<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>,
     ) -> PrinterClient<
         MqttRawIO,
@@ -1105,6 +1107,8 @@ where
         NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
         NewFtpsTimer: TimerProvider,
     {
+        // A kept reading is on the old FTPS timer.
+        self.core.ftps_clock_reading = None;
         PrinterClient {
             mqtt: self.mqtt,
             ftps: Some(ftps_client),

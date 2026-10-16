@@ -598,6 +598,37 @@ async fn test_cleared_reading_falls_back_to_the_probe() {
 }
 
 #[tokio::test]
+async fn test_new_ftps_timer_clears_the_reading() {
+    let mut fx = Fixture::new();
+    fx.client = fx.client.with_printer_clock_probe(true);
+    let mut steps = probe("213 20260202085730");
+    steps.extend([
+        list("/cache", ""),
+        list("/", RECENT),
+        Step::expect("QUIT", "221 Goodbye."),
+    ]);
+    let server = fx.session(steps).await;
+    recent_year(&mut fx).await;
+    let reading = fx
+        .client
+        .printer_clock_reading()
+        .expect("probe read the clock");
+    fx.client.disconnect_ftps().await;
+    server.await.expect("FTPS mock panicked");
+    fx.client.set_printer_clock_reading(Some(reading));
+
+    // The reading is on the old timer, so the new one's first listing probes again.
+    let factory = MockDataStreamFactory::empty();
+    fx.container = factory.active_stream.clone();
+    fx.client = fx.client.with_ftps(DummyTlsConnector, factory, DummyTimer);
+    let mut steps = probe("213 20260402085730");
+    steps.extend([list("/cache", ""), list("/", RECENT)]);
+    let server = fx.session(steps).await;
+    assert_eq!(recent_year(&mut fx).await, 2026);
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
 async fn test_supplied_reading_without_probe_replaces_the_host_clock() {
     // The host clock is years past 2001, so a host-clock listing would never give 2000.
     let mut fx = Fixture::new();

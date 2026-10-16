@@ -212,9 +212,10 @@ impl PrinterFile {
 /// [`CurrentDateTime`]).
 ///
 /// **Only for the client that read it.** `read_at_ms` is on that client's FTPS timer, whose
-/// epoch is its own: `TokioTimer`'s starts when it is built, so a reading handed to
-/// another client, or to one given a new FTPS timer through
-/// [`attach_ftps`](PrinterClient::attach_ftps), is advanced by the wrong amount.
+/// epoch is its own: `TokioTimer`'s starts when it is built, so a reading handed to another
+/// client is advanced by the wrong amount. Giving the client a new FTPS timer
+/// ([`with_ftps`](PrinterClient::with_ftps), [`with_attached_ftps`](PrinterClient::with_attached_ftps)
+/// or [`attach_ftps`](PrinterClient::attach_ftps)) clears a supplied reading for the same reason.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrinterClockReading {
@@ -635,7 +636,7 @@ where
     ///
     /// Takes precedence over [`with_printer_clock_probe`](Self::with_printer_clock_probe): with a
     /// reading set, no listing probes, so nothing is written to the card. Kept across FTPS
-    /// sessions until replaced or cleared.
+    /// sessions until replaced, cleared, or the client is given a new FTPS timer.
     ///
     /// **You own the reboot rule.** The printer's clock restarts on every boot, so clear the
     /// reading when the printer may have rebooted, or listings rebuild years against a stale

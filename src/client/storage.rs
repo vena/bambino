@@ -58,6 +58,8 @@ where
         ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>,
     ) {
         self.disconnect_ftps().await;
+        // A kept reading is on the old FTPS timer.
+        self.core.ftps_clock_reading = None;
         self.ftps = Some(ftps_client);
     }
 
