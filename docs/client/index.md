@@ -857,6 +857,63 @@ A plate's images from the front of a print file's `.3mf`, from [`PrinterClient::
 
 - <span id="plateimages-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+### `PrinterClockReading`
+
+```rust
+struct PrinterClockReading {
+    pub at: crate::ftps::FtpTimestamp,
+    pub read_at_ms: u64,
+}
+```
+
+The printer's clock as the listing probe read it, to keep past its FTPS session and supply again.
+
+Get one from [`PrinterClient::printer_clock_reading`](#printerclient) after a listing ran the probe
+([`with_printer_clock_probe`](#printerclient)), and hand it back with
+[`PrinterClient::set_printer_clock_reading`](#printerclient) so later FTPS sessions list without probing, and
+without writing to the card.
+
+**Valid only until the printer's next reboot.** The printer's clock restarts from a fixed
+base on every boot, so after one a kept reading puts files in the wrong year, with no sign
+of it. bambino doesn't detect a reboot: clear the reading when you see one, by whatever
+signal you have (an MQTT reconnect is one).
+
+It is the printer's clock, not real time: in LAN mode it runs months behind (see
+[`CurrentDateTime`](../ftps/parser/index.md#currentdatetime)).
+
+**Only for the client that read it.** `read_at_ms` is on that client's FTPS timer, whose
+epoch is its own: `TokioTimer`'s starts when it is built, so a reading handed to
+another client, or to one given a new FTPS timer through
+[`attach_ftps`](#printerclient), is advanced by the wrong amount.
+
+#### Fields
+
+- **`at`**: `crate::ftps::FtpTimestamp`
+
+  The printer's date and time when it was read, to the second.
+
+- **`read_at_ms`**: `u64`
+
+  The client's FTPS timer ([`TimerProvider::now_millis`](../io/index.md#timerprovider)) when `at` was read.
+
+#### Trait Implementations
+
+##### `impl Clone for PrinterClockReading`
+
+- <span id="printerclockreading-clone"></span>`fn clone(&self) -> PrinterClockReading` — [`PrinterClockReading`](#printerclockreading)
+
+##### `impl Copy for PrinterClockReading`
+
+##### `impl Debug for PrinterClockReading`
+
+- <span id="printerclockreading-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PrinterClockReading`
+
+##### `impl PartialEq for PrinterClockReading`
+
+- <span id="printerclockreading-partialeq-eq"></span>`fn eq(&self, other: &PrinterClockReading) -> bool` — [`PrinterClockReading`](#printerclockreading)
+
 ### `PrinterFile`
 
 ```rust
@@ -1683,7 +1740,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Off by default because it writes to the card as a side effect of a listing: the file is
   briefly visible on the printer's screen, and every new FTPS session probes again, including
   the one after a stopped download ends a session. It runs only inside `list_files` and
-  `list_files_each`, on the session the listing uses.
+  `list_files_each`, on the session the listing uses. To probe once and keep the reading
+  across sessions, take it with [`printer_clock_reading`](#printerclient) and
+  supply it with [`set_printer_clock_reading`](#printerclient), which takes
+  precedence over this setting.
 
 - <span id="superprinterclient-list-files"></span>`async fn list_files(&mut self, kind: FileKind) -> Result<Vec<PrinterFile>, Error>` — [`FileKind`](../file_tunnel/index.md#filekind), [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
@@ -1706,7 +1766,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   never set (before 2000), it isn't rebuilt ([`FileTime::NoYear`](files/index.md#filetime)). The printer's clock is
   the right reference and the host's can put a file in the wrong year: turn on
   [`with_printer_clock_probe`](#printerclient) to read it, at the cost of an
-  upload, an `MDTM` and a delete once per FTPS session.
+  upload, an `MDTM` and a delete once per FTPS session, or supply a kept reading with
+  [`set_printer_clock_reading`](#printerclient) to skip the probe.
 
   Returns at most [`FTP_MAX_LISTING_ENTRIES`](../ftps/parser/index.md#ftp-max-listing-entries) files. To place a listing's memory yourself,
   use [`list_files_each`](#printerclient).
@@ -1779,6 +1840,32 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   As [`FtpsClient::read_front_members`](../ftps/client/index.md#ftpsclient) and [`FtpsClient::read_job_prefix`](../ftps/client/index.md#ftpsclient), plus whatever
   connecting FTPS returns.
+
+- <span id="superprinterclient-printer-clock-reading"></span>`fn printer_clock_reading(&self) -> Option<PrinterClockReading>` — [`PrinterClockReading`](#printerclockreading)
+
+  The printer's clock as this FTPS session's probe read it, or `None` when it hasn't.
+
+  Call it after a [`list_files`](#printerclient) or
+  [`list_files_each`](#printerclient) with
+  [`with_printer_clock_probe`](#printerclient) on, and keep the result to
+  hand back with [`set_printer_clock_reading`](#printerclient): the
+  reading here ends with the session, and a stopped read ends one. `None` without an FTPS
+  session, on one that has ended, before the probe ran, when it failed, and when a supplied
+  reading made it unnecessary. See [`PrinterClockReading`](#printerclockreading) for when a kept one is valid.
+
+- <span id="superprinterclient-set-printer-clock-reading"></span>`fn set_printer_clock_reading(&mut self, reading: Option<PrinterClockReading>)` — [`PrinterClockReading`](#printerclockreading)
+
+  Has FTPS listings rebuild missing years against `reading`, advanced to now, instead of probing or using the host's clock; `None` clears it.
+
+  Takes precedence over [`with_printer_clock_probe`](#printerclient): with a
+  reading set, no listing probes, so nothing is written to the card. Kept across FTPS
+  sessions until replaced or cleared.
+
+  **You own the reboot rule.** The printer's clock restarts on every boot, so clear the
+  reading when the printer may have rebooted, or listings rebuild years against a stale
+  clock with no sign of it. See [`PrinterClockReading`](#printerclockreading), which also says which client a
+  reading is valid on. A reading that is later than this client's FTPS timer, so taken on
+  another timer, is logged, cleared and not used.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
