@@ -361,7 +361,7 @@ let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job
     .from_internal_storage();
 ```
 
-The tunnel also reads single members of a listed file (`read_file_member`), deletes files (`delete_file`), and cancels a stream it stops early instead of dropping the session. `printer.read_running_job_images(&mut buf)` reads the running job's plate and pick images through the tunnel where it can, without knowing where the file is stored, and falls back to FTPS.
+The tunnel also reads single members of a listed file (`read_file_member`), deletes files (`delete_file`), and cancels a stream it stops early instead of dropping the session. `printer.read_running_job_images(&mut buf)` reads the running job's plate image, thumbnail and pick image through the tunnel where it can, without knowing where the file is stored, and falls back to FTPS (`job_file`, then `read_plate_images`). `printer.read_plate_images(&file, plate, &mut buf)` reads the same images from any listed `.3mf`, independent of the running job.
 
 The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. P1 and A1 printers never serve it, and `file_tunnel()` refuses them without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB, and `.with_file_tunnel_max_frame_size(bytes)` lowers the default 4 MiB frame cap to fit the heap.
 

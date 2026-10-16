@@ -1,4 +1,4 @@
-//! Listing, downloading and deleting a printer's print files and timelapses, and reading timelapse covers, whichever service holds them.
+//! Listing, downloading and deleting a printer's print files and timelapses, and reading timelapse covers and print files' plate images, whichever service holds them.
 //!
 //! Only FTPS backs these calls today, so every file is on external storage. The port-6000 file
 //! tunnel (#636) will add a second [`FileAddress`] arm for internal storage without changing
@@ -16,11 +16,13 @@ use crate::error::Error;
 use crate::file_tunnel::FileKind;
 use crate::ftps::client::PrinterClockProbe;
 use crate::ftps::parser::{FTP_MAX_LISTING_ENTRIES, advance_timestamp};
+use crate::ftps::project::front_members;
 use crate::ftps::protocol::FTP_FILE_NOT_FOUND;
 use crate::ftps::{CurrentDateTime, FtpFile, FtpTimestamp, FtpsClient};
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
+use super::job::plate_member_names;
 
 /// Directories FTPS keeps timelapses in [REF-FTPS-OPS].
 const TIMELAPSE_DIRS: &[&str] = &["/timelapse"];
@@ -69,11 +71,13 @@ pub enum StorageKind {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileTime {
-    /// A calendar time from an FTPS listing, with no seconds.
+    /// A calendar time from FTPS: a listing's, with no seconds, or an `MDTM` reply's, to the second.
     Calendar {
-        /// The time. `hour` and `minute` are 0 when the listing gave a year instead of a time.
+        /// The time. `hour` and `minute` are 0 when a listing gave a year instead of a time.
         at: FtpTimestamp,
         /// `true` when the listing left the year out and it was rebuilt against a reference clock.
+        ///
+        /// Always `false` from `MDTM`, which carries an explicit four-digit year.
         ///
         /// The default reference is the host's clock, which can put such a file in the wrong
         /// year. Turn on
@@ -103,11 +107,11 @@ pub enum FileTime {
     Unknown,
 }
 
-/// One file from [`PrinterClient::list_files`].
+/// One file from [`PrinterClient::list_files`] or [`PrinterClient::job_file`].
 ///
-/// Pass it back to [`PrinterClient::download_file`], [`PrinterClient::delete_file`] or
-/// [`PrinterClient::read_thumbnail`]. It
-/// can't be built by hand: it carries the service and address it was listed from, which aren't
+/// Pass it back to [`PrinterClient::download_file`], [`PrinterClient::delete_file`],
+/// [`PrinterClient::read_thumbnail`] or [`PrinterClient::read_plate_images`]. It can't be built
+/// by hand: it carries the service and address it was listed from, which aren't
 /// public, so a file is always reached the way it was found.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +177,51 @@ impl PrinterFile {
             address: FileAddress::Ftps { path },
         }
     }
+
+    /// A file found at FTPS `path` without a listing, from its `SIZE` and `MDTM` answers.
+    pub(super) fn from_ftps_path(
+        path: String,
+        size: u64,
+        modified: FileTime,
+        kind: FileKind,
+    ) -> Self {
+        Self {
+            name: String::from(path.rsplit('/').next().unwrap_or(&path)),
+            size,
+            modified,
+            kind,
+            storage: StorageKind::External,
+            address: FileAddress::Ftps { path },
+        }
+    }
+}
+
+/// A plate's images from the front of a print file's `.3mf`, from [`PrinterClient::read_plate_images`].
+#[derive(Debug)]
+pub struct PlateImages<'b> {
+    /// The 1-based plate read, or `None` when none could be told, and then every image is `None`.
+    pub plate: Option<u32>,
+    /// `true` when `plate` came from the file's own G-code list rather than the argument.
+    pub from_file: bool,
+    /// `Metadata/plate_<N>.png`, or `None` when the file has none for this plate.
+    pub plate_image: Option<&'b [u8]>,
+    /// `Metadata/plate_<N>_small.png`, the 128×128 thumbnail a file browser shows, or `None`
+    /// when the file has none for this plate.
+    pub small_image: Option<&'b [u8]>,
+    /// `Metadata/pick_<N>.png`, or `None` when the file has none for this plate. Decode its
+    /// pixels with [`pick_identify_id`](crate::ftps::project::pick_identify_id).
+    pub pick_image: Option<&'b [u8]>,
+}
+
+impl PlateImages<'_> {
+    /// No plate and no images.
+    const NONE: Self = Self {
+        plate: None,
+        from_file: false,
+        plate_image: None,
+        small_image: None,
+        pick_image: None,
+    };
 }
 
 /// The FTPS path of a timelapse's cover: `<dir>/thumbnail/<name without extension>.jpg`.
@@ -427,6 +476,70 @@ where
                     }) if !delivered => Ok(None),
                     Err(e) => Err(e),
                 }
+            }
+        }
+    }
+
+    /// Reads one plate's image, thumbnail and pick image from the front of a print file's `.3mf`, into `buf`.
+    ///
+    /// `Some(n)` reads plate `n`'s images. `None` takes the plate from the file's own list of
+    /// plate G-code when it holds G-code for exactly one plate, and otherwise returns no plate
+    /// and no images: the images of a guessed plate would look right and be wrong. Either way the
+    /// plate is never taken from the running job: for its images, use
+    /// [`read_running_job_images`](Self::read_running_job_images).
+    ///
+    /// Only a [`FileKind::Model`] file has plate images; any other kind returns none without a
+    /// request.
+    ///
+    /// One FTPS read, which usually ends the session: see
+    /// [`FtpsClient::download_prefix`]. `buf` needs room for the file's front section and, when
+    /// the plate isn't given, its list of plate G-code after it: about 30–55 KB on the files
+    /// measured.
+    ///
+    /// # Errors
+    ///
+    /// As [`FtpsClient::read_front_members`] and [`FtpsClient::read_job_prefix`], plus whatever
+    /// connecting FTPS returns.
+    pub async fn read_plate_images<'b>(
+        &mut self,
+        file: &PrinterFile,
+        plate: Option<u32>,
+        buf: &'b mut [u8],
+    ) -> Result<PlateImages<'b>, Error> {
+        if file.kind != FileKind::Model {
+            return Ok(PlateImages::NONE);
+        }
+        match &file.address {
+            FileAddress::Ftps { path } => {
+                if let Some(plate) = plate {
+                    let names = plate_member_names(plate);
+                    let [plate_image, small_image, pick_image] = self
+                        .ftps()
+                        .await?
+                        .read_front_members(path, buf, names.each_ref().map(String::as_str))
+                        .await?;
+                    return Ok(PlateImages {
+                        plate: Some(plate),
+                        from_file: false,
+                        plate_image,
+                        small_image,
+                        pick_image,
+                    });
+                }
+                let prefix = self.ftps().await?.read_job_prefix(path, buf).await?;
+                let [plate] = prefix.gcode_plates.as_slice() else {
+                    return Ok(PlateImages::NONE);
+                };
+                let names = plate_member_names(*plate);
+                let [plate_image, small_image, pick_image] =
+                    front_members(prefix.bytes, names.each_ref().map(String::as_str))?;
+                Ok(PlateImages {
+                    plate: Some(*plate),
+                    from_file: true,
+                    plate_image,
+                    small_image,
+                    pick_image,
+                })
             }
         }
     }

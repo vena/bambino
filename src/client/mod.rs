@@ -52,7 +52,7 @@ pub use command::{
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
-pub use files::{FileTime, PrinterFile, StorageKind};
+pub use files::{FileTime, PlateImages, PrinterFile, StorageKind};
 pub use job::{JobImages, JobPlate, PlateSource};
 pub use motion::HOMING_WAIT_TIMEOUT;
 pub use thermal::PreheatHandles;

@@ -499,17 +499,6 @@ pub async fn run_mock_server_avbl_unsupported(server_control: tokio::io::DuplexS
         .await;
 }
 
-/// Mock server answering one `SIZE path` with `reply`, for `PrinterClient::job_path()`.
-pub async fn run_mock_server_size(
-    server_control: tokio::io::DuplexStream,
-    path: &'static str,
-    reply: &'static [u8],
-) {
-    let mut ctl = Control::control_only(server_control);
-    ctl.handshake(true).await;
-    ctl.expect(&format!("SIZE {path}\r\n"), reply).await;
-}
-
 /// Mock server for `modification_time()` (`MDTM`) success — a well-formed `213 YYYYMMDDHHMMSS`
 /// reply.
 pub async fn run_mock_server_mdtm_success(server_control: tokio::io::DuplexStream) {
@@ -991,7 +980,8 @@ pub enum Step {
     /// Answers `RETR path` with the whole file and `226`.
     Retr(String, Vec<u8>),
     /// Answers `RETR path` with the file and sends nothing more, as a P1S does once the client
-    /// resets the data channel (#629): the session ends here.
+    /// resets the data channel (#629): the session ends here. The write may fail: a client that
+    /// stops reading early, as a front-of-file read does, leaves the rest unsent.
     RetrStopped(String, Vec<u8>),
     /// Accepts `STOR path` of exactly this many bytes, answering `226`.
     Stor(String, usize),
@@ -1044,7 +1034,7 @@ pub async fn run_script(
                     b"150 Opening data connection.\r\n",
                 )
                 .await;
-                server_data.write_all(&data).await.expect("data write");
+                let _ = server_data.write_all(&data).await;
                 return;
             }
             Step::Stor(path, len) => {

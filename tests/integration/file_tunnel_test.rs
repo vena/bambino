@@ -146,11 +146,11 @@ fn member_bytes(member: &str) -> Vec<u8> {
     format!("image:{member}").into_bytes()
 }
 
-/// Serves two `mem:/16` `get_project_file` reads, as Studio's printer does, and returns the members asked for.
+/// Serves three `mem:/16` `get_project_file` reads, as Studio's printer does, and returns the members asked for.
 async fn run_mock_tunnel_job_members(mut server: DuplexStream) -> Vec<String> {
     accept_session(&mut server).await;
     let mut members = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..3 {
         let (magic, payload) = read_frame(&mut server).await;
         assert_eq!(magic, MAGIC_CTRL);
         let split = payload.windows(2).position(|w| w == b"\n\n").unwrap();
@@ -221,6 +221,11 @@ async fn running_job_images_come_through_the_tunnel_by_name() {
         Some(member_bytes("Metadata/plate_2.png").as_slice())
     );
     assert_eq!(
+        images.small_image,
+        Some(member_bytes("Metadata/plate_2_small.png").as_slice())
+    );
+    assert_eq!(images.file, None, "the tunnel route never learns the file");
+    assert_eq!(
         images.pick_image,
         Some(member_bytes("Metadata/pick_2.png").as_slice())
     );
@@ -230,7 +235,11 @@ async fn running_job_images_come_through_the_tunnel_by_name() {
     );
     assert_eq!(
         tunnel.await.expect("mock tunnel panicked"),
-        ["Metadata/plate_2.png", "Metadata/pick_2.png"]
+        [
+            "Metadata/plate_2.png",
+            "Metadata/plate_2_small.png",
+            "Metadata/pick_2.png"
+        ]
     );
 }
 

@@ -17,19 +17,21 @@
 //!
 //! **Adding a source.** Give it a [`PlateSource`] variant (the enum is `#[non_exhaustive]`, so
 //! that is not a breaking change). A source that needs no I/O goes in [`job_plate`]'s chain. One
-//! that reads from the printer goes in [`read_job_images`], in priority order beside the FTPS
-//! read, and if it only works on some models, it is gated by a `ModelQuirks` method, never a
-//! model match.
+//! that reads from the printer goes in [`read_running_job_images`], in priority order beside the
+//! FTPS read, and if it only works on some models, it is gated by a `ModelQuirks` method, never
+//! a model match.
 //!
-//! **Two routes to the images.** [`read_job_images`] reads the file over FTPS at a path from
-//! [`job_path`]. [`read_running_job_images`] first asks the port-6000 file tunnel for the
-//! running job's members by name ([REF-FILESVC]), which needs no path and reaches internal
-//! storage FTPS can't, and falls back to the FTPS route. The tunnel route needs the plate from
-//! [`job_plate`]: it reads one plate's members and cannot tell which plate is printing.
+//! **Two routes to the images.** The FTPS route finds the job's file with [`job_file`] and reads
+//! it with [`read_plate_images`], passing [`job_plate`]'s plate, so the running job's plate only
+//! ever applies to the running job's file. [`read_running_job_images`] first asks the port-6000
+//! file tunnel for the running job's members by name ([REF-FILESVC]), which needs no path and
+//! reaches internal storage FTPS can't, and falls back to the FTPS route. The tunnel route needs
+//! the plate from [`job_plate`]: it reads one plate's members and cannot tell which plate is
+//! printing.
 //!
 //! [`job_plate`]: super::PrinterClient::job_plate
-//! [`job_path`]: super::PrinterClient::job_path
-//! [`read_job_images`]: super::PrinterClient::read_job_images
+//! [`job_file`]: super::PrinterClient::job_file
+//! [`read_plate_images`]: super::PrinterClient::read_plate_images
 //! [`read_running_job_images`]: super::PrinterClient::read_running_job_images
 
 #[cfg(not(feature = "std"))]
@@ -42,8 +44,9 @@ use core::ops::Range;
 use serde::Deserialize;
 
 use crate::error::Error;
+use crate::file_tunnel::FileKind;
 use crate::ftps::project::{
-    front_members, pick_image_member, plate_image_member, plate_of_gcode_param,
+    pick_image_member, plate_image_member, plate_of_gcode_param, plate_small_image_member,
 };
 use crate::ftps::protocol::FTP_FILE_NOT_FOUND;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
@@ -51,6 +54,7 @@ use crate::types::control::PrintStatus;
 use crate::types::telemetry::PrinterTelemetry;
 
 use super::PrinterClient;
+use super::files::{FileTime, PrinterFile};
 
 /// Where a running job's plate number came from; see the module doc for the chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,14 +77,21 @@ pub struct JobPlate {
     pub source: PlateSource,
 }
 
-/// A running job's plate and its images, from [`PrinterClient::read_job_images`].
+/// A running job's plate and its images, from [`PrinterClient::read_running_job_images`].
 #[derive(Debug)]
 pub struct JobImages<'b> {
-    /// The plate the images belong to; `None` when no source could tell, and then both images
-    /// are `None` too.
+    /// The plate the images belong to; `None` when no source could tell, and then every image
+    /// is `None` too.
     pub plate: Option<JobPlate>,
+    /// The job's file the images were read from on the FTPS route; `None` on the file tunnel
+    /// route, which reads the running job's members without learning its file, and when no
+    /// file was found.
+    pub file: Option<PrinterFile>,
     /// `Metadata/plate_<N>.png`, or `None` when the file has none for this plate.
     pub plate_image: Option<&'b [u8]>,
+    /// `Metadata/plate_<N>_small.png`, the 128×128 thumbnail, or `None` when the file has none
+    /// for this plate.
+    pub small_image: Option<&'b [u8]>,
     /// `Metadata/pick_<N>.png`, or `None` when the file has none for this plate. Decode its
     /// pixels with [`pick_identify_id`](crate::ftps::project::pick_identify_id).
     pub pick_image: Option<&'b [u8]>,
@@ -114,12 +125,16 @@ struct StartEchoFields {
 
 /// The `url` scheme of a start command whose file is on the card (`ftp://<name>`, the card root).
 const FTP_URL_SCHEME: &str = "ftp://";
-/// The extension of a job file `job_path` accepts from a bare `gcode_file` name.
+/// The extension of a job file `job_file` accepts from a bare `gcode_file` name.
 const PROJECT_FILE_EXTENSION: &str = ".3mf";
 
-/// The names of plate `plate`'s image and pick image, in that order.
-fn plate_member_names(plate: u32) -> [String; 2] {
-    [plate_image_member(plate), pick_image_member(plate)]
+/// The names of plate `plate`'s image, thumbnail and pick image, in that order.
+pub(super) fn plate_member_names(plate: u32) -> [String; 3] {
+    [
+        plate_image_member(plate),
+        plate_small_image_member(plate),
+        pick_image_member(plate),
+    ]
 }
 
 /// The last `/`-separated segment of a path or URL.
@@ -169,8 +184,8 @@ where
     /// Returns the running job's plate from the sources that need no file read, or `None` when none of them knows it.
     ///
     /// Reads cached telemetry only. `None` is common on P1/A1 for a print started before this
-    /// client connected; [`read_job_images`](Self::read_job_images) then falls back to the
-    /// job's file. See the module doc for the chain.
+    /// client connected; [`read_running_job_images`](Self::read_running_job_images) then falls
+    /// back to the job's file. See the module doc for the chain.
     pub fn job_plate(&self) -> Option<JobPlate> {
         let cache = &self.core.cache;
         if let Some(plate) = cache.last_plate_idx {
@@ -194,11 +209,15 @@ where
             .then_some(start)
     }
 
-    /// Returns the running job's `.3mf` path on the printer's card, or `None` when it can't be found exactly.
+    /// Returns the running job's `.3mf` on the printer's card, or `None` when it can't be found exactly.
     ///
     /// The path comes from the `url` of the start command the printer echoed for this job, when
-    /// this client saw one, and otherwise from `/` followed by `gcode_file`. One `SIZE` request
-    /// confirms the file is there; a file that isn't is `None`, not an error.
+    /// this client saw one, and otherwise from `/` followed by `gcode_file`. A `SIZE` request
+    /// confirms the file is there and gives its size; a file that isn't is `None`, not an error.
+    /// An `MDTM` request then gives its modification time, with an explicit year
+    /// ([`FileTime::Calendar`] with `year_inferred: false`), or [`FileTime::Unknown`] on firmware
+    /// without `MDTM`. No directory is listed. Pass the result to
+    /// [`read_plate_images`](Self::read_plate_images) or any other call taking a [`PrinterFile`].
     ///
     /// That second rule covers every file Bambu Studio and OrcaSlicer send, which go to the card
     /// root (`url: "ftp://<name>"`), and a print started from the printer's screen of a file at
@@ -211,9 +230,9 @@ where
     ///
     /// # Errors
     ///
-    /// Whatever connecting FTPS or the `SIZE` request returns, except the `550` of a missing
-    /// file.
-    pub async fn job_path(&mut self) -> Result<Option<String>, Error> {
+    /// Whatever connecting FTPS or the `SIZE` and `MDTM` requests return, except the `550` of a
+    /// missing file from `SIZE`.
+    pub async fn job_file(&mut self) -> Result<Option<PrinterFile>, Error> {
         let path = match self.running_job_start() {
             Some(start) => start.path.clone(),
             None => self
@@ -233,91 +252,52 @@ where
         let Some(path) = path else {
             return Ok(None);
         };
-        match self.ftps().await?.get_file_size(&path).await {
-            Ok(_) => Ok(Some(path)),
+        // Both requests are control-channel only and come before any front-of-file read, which
+        // usually ends the session.
+        let ftps = self.ftps().await?;
+        let size = match ftps.get_file_size(&path).await {
+            Ok(size) => size,
             Err(Error::FtpReply {
                 code: FTP_FILE_NOT_FOUND,
                 ..
-            }) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Reads the running job's plate and pick images from the start of its `.3mf` at `remote_path`, into `buf`.
-    ///
-    /// The plate comes from [`job_plate`](Self::job_plate) when it knows, and otherwise from the
-    /// file itself, in the same read: a file holding G-code for exactly one plate names it.
-    /// With no answer from either, the result's `plate` and both images are `None`: the images
-    /// of a guessed plate would look right and be wrong.
-    ///
-    /// `remote_path` is the job's file on the printer's card, from [`job_path`](Self::job_path).
-    ///
-    /// One FTPS read, which usually ends the session: see
-    /// [`FtpsClient::download_prefix`](crate::ftps::FtpsClient::download_prefix). `buf` needs room
-    /// for the file's front section and, when the plate isn't known beforehand, its list of
-    /// plate G-code after it: about 30–55 KB on the files measured.
-    ///
-    /// # Errors
-    ///
-    /// As [`FtpsClient::read_front_members`](crate::ftps::FtpsClient::read_front_members) and
-    /// [`FtpsClient::read_job_prefix`](crate::ftps::FtpsClient::read_job_prefix), plus whatever
-    /// connecting FTPS returns.
-    pub async fn read_job_images<'b>(
-        &mut self,
-        remote_path: &str,
-        buf: &'b mut [u8],
-    ) -> Result<JobImages<'b>, Error> {
-        if let Some(plate) = self.job_plate() {
-            let names = plate_member_names(plate.plate);
-            let [plate_image, pick_image] = self
-                .ftps()
-                .await?
-                .read_front_members(remote_path, buf, [names[0].as_str(), names[1].as_str()])
-                .await?;
-            return Ok(JobImages {
-                plate: Some(plate),
-                plate_image,
-                pick_image,
-            });
-        }
-
-        let prefix = self.ftps().await?.read_job_prefix(remote_path, buf).await?;
-        let [plate] = prefix.gcode_plates.as_slice() else {
-            return Ok(JobImages {
-                plate: None,
-                plate_image: None,
-                pick_image: None,
-            });
+            }) => return Ok(None),
+            Err(e) => return Err(e),
         };
-        let names = plate_member_names(*plate);
-        let [plate_image, pick_image] =
-            front_members(prefix.bytes, [names[0].as_str(), names[1].as_str()])?;
-        Ok(JobImages {
-            plate: Some(JobPlate {
-                plate: *plate,
-                source: PlateSource::ProjectFile,
-            }),
-            plate_image,
-            pick_image,
-        })
+        let modified = match ftps.modification_time(&path).await? {
+            Some(at) => FileTime::Calendar {
+                at,
+                year_inferred: false,
+            },
+            None => FileTime::Unknown,
+        };
+        Ok(Some(PrinterFile::from_ftps_path(
+            path,
+            size,
+            modified,
+            FileKind::Model,
+        )))
     }
 
-    /// Reads the running job's plate and pick images into `buf`, through the file tunnel where the printer serves it and over FTPS otherwise.
+    /// Reads the running job's plate images into `buf`, through the file tunnel where the printer serves it and over FTPS otherwise.
     ///
-    /// The tunnel route asks the printer for `Metadata/plate_<N>.png` and
-    /// `Metadata/pick_<N>.png` of the running job by name (`mem:/16`, the read Bambu Studio's
-    /// skip-objects dialog makes), so it needs no file path and reaches internal storage. It is
-    /// taken when [`Capabilities::file_tunnel_support`](super::Capabilities::file_tunnel_support)
-    /// allows, `.with_file_tunnel()` is configured, and [`job_plate`](Self::job_plate) knows the
-    /// plate. The session is disconnected afterwards, so no TLS session lingers; that includes a
-    /// session the caller had opened with [`file_tunnel()`](Self::file_tunnel).
+    /// The tunnel route asks the printer for `Metadata/plate_<N>.png`,
+    /// `Metadata/plate_<N>_small.png` and `Metadata/pick_<N>.png` of the running job by name
+    /// (`mem:/16`, the read Bambu Studio's skip-objects dialog makes), so it needs no file path
+    /// and reaches internal storage. It is taken when
+    /// [`Capabilities::file_tunnel_support`](super::Capabilities::file_tunnel_support) allows,
+    /// `.with_file_tunnel()` is configured, and [`job_plate`](Self::job_plate) knows the plate.
+    /// The session is disconnected afterwards, so no TLS session lingers; that includes a session
+    /// the caller had opened with [`file_tunnel()`](Self::file_tunnel). This route never learns
+    /// the job's file, so [`JobImages::file`] is `None`.
     ///
-    /// The FTPS route ([`job_path`](Self::job_path), then
-    /// [`read_job_images`](Self::read_job_images)) is used otherwise, and also when the tunnel
-    /// fails to connect, fails mid-read, or has neither image. A failed connect is remembered
-    /// until the next MQTT connection, so a printer that ignores the tunnel costs its 8 s
-    /// handshake timeout once rather than on every call. With no job file on the card either,
-    /// both images are `None`.
+    /// The FTPS route ([`job_file`](Self::job_file), then
+    /// [`read_plate_images`](Self::read_plate_images) with [`job_plate`](Self::job_plate)'s
+    /// plate) is used otherwise, and also when the tunnel fails to connect, fails mid-read, or has
+    /// none of the images. A failed connect is remembered until the next MQTT connection, so a
+    /// printer that ignores the tunnel costs its 8 s handshake timeout once rather than on every
+    /// call. Without a plate from `job_plate`, the plate comes from the file when it holds G-code
+    /// for exactly one plate ([`PlateSource::ProjectFile`]), and otherwise every image is `None`.
+    /// With no job file on the card either, every image is `None`.
     ///
     /// The tunnel route has not been run against a printer that serves the tunnel; see
     /// `reference/08_file_service.md`.
@@ -329,27 +309,49 @@ where
         &mut self,
         buf: &'b mut [u8],
     ) -> Result<JobImages<'b>, Error> {
-        if let Some(plate) = self.job_plate()
+        let plate = self.job_plate();
+        if let Some(plate) = plate
             && self.file_tunnel_worth_trying()
-            && let Some([plate_range, pick_range]) =
-                self.read_tunnel_job_images(plate.plate, buf).await
-            && (plate_range.is_some() || pick_range.is_some())
+            && let Some(ranges) = self.read_tunnel_job_images(plate.plate, buf).await
+            && ranges.iter().any(Option::is_some)
         {
             let buf: &'b [u8] = buf;
+            let [plate_image, small_image, pick_image] = ranges.map(|r| r.map(|r| &buf[r]));
             return Ok(JobImages {
                 plate: Some(plate),
-                plate_image: plate_range.map(|r| &buf[r]),
-                pick_image: pick_range.map(|r| &buf[r]),
+                file: None,
+                plate_image,
+                small_image,
+                pick_image,
             });
         }
-        match self.job_path().await? {
-            Some(path) => self.read_job_images(&path, buf).await,
-            None => Ok(JobImages {
-                plate: self.job_plate(),
+        let Some(file) = self.job_file().await? else {
+            return Ok(JobImages {
+                plate,
+                file: None,
                 plate_image: None,
+                small_image: None,
                 pick_image: None,
-            }),
-        }
+            });
+        };
+        let images = self
+            .read_plate_images(&file, plate.map(|p| p.plate), buf)
+            .await?;
+        let plate = if images.from_file {
+            images.plate.map(|plate| JobPlate {
+                plate,
+                source: PlateSource::ProjectFile,
+            })
+        } else {
+            plate
+        };
+        Ok(JobImages {
+            plate,
+            file: Some(file),
+            plate_image: images.plate_image,
+            small_image: images.small_image,
+            pick_image: images.pick_image,
+        })
     }
 
     /// Whether a routed operation should try the file tunnel before FTPS.
@@ -364,13 +366,17 @@ where
     /// A member the printer refuses is `None` in the result: Studio treats every refusal of this
     /// read as "no such file". The client cancels the refused stream; if that fails the session
     /// is poisoned, and the next member reconnects.
+    ///
+    /// Studio is only known to ask `mem:/16` for `pick_<N>.png` (`reference/08_file_service.md`);
+    /// asking for `plate_<N>.png` and `plate_<N>_small.png` the same way is inferred, so a refusal
+    /// of either is an ordinary `None`.
     async fn read_tunnel_job_images(
         &mut self,
         plate: u32,
         buf: &mut [u8],
-    ) -> Option<[Option<Range<usize>>; 2]> {
+    ) -> Option<[Option<Range<usize>>; 3]> {
         let names = plate_member_names(plate);
-        let mut ranges = [None, None];
+        let mut ranges = [None, None, None];
         let mut used = 0;
         for (slot, name) in ranges.iter_mut().zip(names.iter()) {
             if let Err(e) = self.ensure_file_tunnel().await {
