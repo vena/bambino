@@ -45,8 +45,9 @@ To make this safe, the client sets `poisoned = true` (originally only on the
 widest such window; now on every `write_command`/`read_response` failure in every method,
 including the single-reply metadata/filesystem commands); every public method checks the
 flag first and returns [`Error::ProtocolViolation`](../../error/index.md#error) immediately if set.
-[`download_prefix`](#ftpsclient) also sets it on purpose when it stops a transfer
-early, because the printer then closes the control connection. A poisoned client
+[`download_prefix`](#ftpsclient) and
+[`download_file_each`](#ftpsclient) also set it on purpose when they stop a
+transfer early, because the printer then closes the control connection. A poisoned client
 must be replaced: [`disconnect`](#ftpsclient) returns its parts for a fresh
 [`FtpsClient::connect`](#ftpsclient), and `PrinterClient::ftps()` does that by itself.
 
@@ -196,7 +197,8 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   **An error from `sink` ends this session**, as a full buffer does for
   [`download_prefix`](#ftpsclient): the printer can only be stopped mid-file with
   an RST, after which it closes the control connection. The client is left poisoned and
-  `PrinterClient::ftps()` reconnects. The sink's error is returned.
+  `PrinterClient::ftps()` reconnects. The sink's error is returned. Reaching
+  [`MAX_TRANSFER_BYTES`](../index.md#max-transfer-bytes) stops the transfer the same way.
 
   # Errors
 

@@ -828,7 +828,8 @@ struct PrinterFile {
 
 One file from [`PrinterClient::list_files`](#printerclient).
 
-Pass it back to [`PrinterClient::download_file`](#printerclient) or [`PrinterClient::delete_file`](#printerclient). It
+Pass it back to [`PrinterClient::download_file`](#printerclient), [`PrinterClient::delete_file`](#printerclient) or
+[`PrinterClient::read_thumbnail`](#printerclient). It
 can't be built by hand: it carries the service and address it was listed from, which aren't
 public, so a file is always reached the way it was found.
 
@@ -1645,8 +1646,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   **Which clock rebuilds a missing year.** A listing leaves the year out for recent files.
   By default it is rebuilt against the host's clock (with `std`) and flagged
   ([`FileTime::Calendar`](files/index.md#filetime)'s `year_inferred`); without `std`, or with a host clock that was
-  never set, it isn't rebuilt ([`FileTime::NoYear`](files/index.md#filetime)). The printer's clock is the right
-  reference and the host's can put a file in the wrong year: turn on
+  never set (before 2000), it isn't rebuilt ([`FileTime::NoYear`](files/index.md#filetime)). The printer's clock is
+  the right reference and the host's can put a file in the wrong year: turn on
   [`with_printer_clock_probe`](#printerclient) to read it, at the cost of an
   upload, an `MDTM` and a delete once per FTPS session.
 
@@ -1679,8 +1680,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `#thumbnail` member. Only a [`FileKind::Timelapse`](../file_tunnel/index.md#filekind) file has a cover; any other kind
   returns `None` without a request. A print file's images are inside its `.3mf`.
 
-  A cover the printer refuses with `550` is `None`; FTPS can't tell a missing file from an
-  unreadable one. The read and its `sink` behave as [`download_file`](#printerclient)'s.
+  A cover the printer refuses with `550` before sending anything is `None`; FTPS can't tell
+  a missing file from an unreadable one. A `550` after bytes reached `sink` (from the
+  closing `SIZE` check) is an error, not `None`. The read and its `sink` behave as
+  [`download_file`](#printerclient)'s.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](../types/control/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -4142,8 +4145,9 @@ LAN mode often run months behind real time (see [`CurrentDateTime`](../ftps/pars
   A calendar time from an FTPS listing that left the year out, with no reference clock to rebuild it.
   
   Happens without `std`, where there is no host clock, or with a host clock that was never
-  set. Turn on [`with_printer_clock_probe`](#printerclient) to get
-  the year from the printer's clock.
+  set (one reading before 2000, as an embedded clock that never synced does). Turn on
+  [`with_printer_clock_probe`](#printerclient) to get the year
+  from the printer's clock.
 
 - **`Unix`**
 
