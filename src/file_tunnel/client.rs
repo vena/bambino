@@ -31,6 +31,8 @@ pub(crate) const FILE_TUNNEL_WRITE_TIMEOUT_SECS: u64 = 30;
 const MAX_SKIPPED_FRAMES: usize = 64;
 /// `mem:/` index of a member of the running job's `.3mf` (Studio's `PrinterFileSystem::GetPickImage`).
 pub(crate) const MEM_PROJECT_FILE_INDEX: u32 = 16;
+/// Largest frame accepted during the handshake: the login ack is 4 bytes and the setup reply a short JSON object.
+const HANDSHAKE_MAX_FRAME_PAYLOAD: usize = 1024;
 
 /// A session with a printer's port-6000 file tunnel.
 ///
@@ -42,13 +44,22 @@ pub(crate) const MEM_PROJECT_FILE_INDEX: u32 = 16;
 /// is [`Error::TunnelReply`] and leaves the session usable.
 ///
 /// **Timer.** Every method takes the timer that bounds its reads and writes, as the camera
-/// stream's `read_next_frame_with_timer` does, so the client holds only its TLS stream `S`. Under a timer with no real clock (the
-/// crate's `DummyTimer`) nothing is bounded, including the handshake, so a printer that never
-/// answers the login (every P1/A1) hangs [`connect`](Self::connect) until it closes the socket
-/// after 60 s. [`PrinterClient::file_tunnel`](crate::client::PrinterClient::file_tunnel) supplies
-/// its own timer through [`FileTunnel`].
+/// stream's `read_next_frame_with_timer` does, so the client holds only its TLS stream `S`.
+/// Under a timer with no real clock (the crate's `DummyTimer`) nothing is bounded, including the
+/// handshake, so a printer that never answers the login (every P1/A1) hangs
+/// [`connect`](Self::connect) until it closes the socket after 60 s.
+/// [`PrinterClient::file_tunnel`](crate::client::PrinterClient::file_tunnel) supplies its own
+/// timer through [`FileTunnel`].
+///
+/// **Frame size.** Each frame's payload is allocated in full before it is parsed, so a corrupt
+/// header is refused above [`DEFAULT_MAX_FRAME_PAYLOAD`](super::DEFAULT_MAX_FRAME_PAYLOAD)
+/// (4 MiB). That is far more than an embedded heap holds; lower it with
+/// [`with_max_frame_payload`](Self::with_max_frame_payload). The largest frames reported are
+/// 20 KiB download fragments; a `LIST_INFO` reply grows with the number of files.
 pub struct FileTunnelClient<S: AsyncIo> {
     stream: S,
+    /// Largest frame payload accepted after the handshake.
+    max_frame_payload: usize,
     /// The header `seq` of the next frame this client sends.
     frame_seq: u32,
     /// The JSON `sequence` of the next request; `0` belongs to the setup frame.
@@ -95,24 +106,22 @@ async fn read_exact_bounded<IO: AsyncIo, T: TimerProvider>(
     Ok(())
 }
 
-/// Reads one whole frame, header and payload, within `budget_secs`.
+/// Reads one whole frame, header and payload, within `budget_secs`, refusing a payload over `max_payload`.
 async fn read_frame<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     timer: &T,
     budget_secs: u64,
+    max_payload: usize,
 ) -> Result<(FrameHeader, Vec<u8>), Error> {
     let deadline_ms = ftps_deadline_ms(timer, budget_secs);
     let mut header = [0u8; p::FRAME_HEADER_LEN];
     read_exact_bounded(stream, &mut header, timer, deadline_ms).await?;
     let header = FrameHeader::decode(&header);
     let len = header.payload_len as usize;
-    if len > p::MAX_FRAME_PAYLOAD {
+    if len > max_payload {
         return Err(Error::ProtocolViolation(
-            format!(
-                "file tunnel frame declares {len} bytes, over the {} byte limit",
-                p::MAX_FRAME_PAYLOAD
-            )
-            .into(),
+            format!("file tunnel frame declares {len} bytes, over the {max_payload} byte limit")
+                .into(),
         ));
     }
     let mut payload = vec![0u8; len];
@@ -137,7 +146,13 @@ async fn handshake<IO: AsyncIo, T: TimerProvider>(
 ) -> Result<(), Error> {
     let login = p::build_login_payload(access_code)?;
     write_frame(stream, timer, frame_seq, p::MAGIC_LOGIN, &login).await?;
-    let (ack, _) = read_frame(stream, timer, FILE_TUNNEL_HANDSHAKE_TIMEOUT_SECS).await?;
+    let (ack, _) = read_frame(
+        stream,
+        timer,
+        FILE_TUNNEL_HANDSHAKE_TIMEOUT_SECS,
+        HANDSHAKE_MAX_FRAME_PAYLOAD,
+    )
+    .await?;
     match ack.magic {
         p::MAGIC_LOGIN_ACK => {}
         p::MAGIC_REJECT => return Err(rejected()),
@@ -148,7 +163,13 @@ async fn handshake<IO: AsyncIo, T: TimerProvider>(
     let pid = p::setup_pid(*frame_seq);
     let setup = p::build_setup_json(&pid)?;
     write_frame(stream, timer, frame_seq, p::MAGIC_CTRL, &setup).await?;
-    let (header, payload) = read_frame(stream, timer, FILE_TUNNEL_HANDSHAKE_TIMEOUT_SECS).await?;
+    let (header, payload) = read_frame(
+        stream,
+        timer,
+        FILE_TUNNEL_HANDSHAKE_TIMEOUT_SECS,
+        HANDSHAKE_MAX_FRAME_PAYLOAD,
+    )
+    .await?;
     if header.magic == p::MAGIC_REJECT {
         return Err(rejected());
     }
@@ -209,10 +230,20 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         handshake(&mut stream, &identity.access_code, timer, &mut frame_seq).await?;
         Ok(Self {
             stream,
+            max_frame_payload: super::DEFAULT_MAX_FRAME_PAYLOAD,
             frame_seq,
             next_sequence: 1,
             poisoned: false,
         })
+    }
+
+    /// Lowers (or raises) the largest frame payload accepted, in bytes; see the struct docs.
+    ///
+    /// A frame over the limit is a protocol violation and poisons the session.
+    #[must_use]
+    pub fn with_max_frame_payload(mut self, bytes: usize) -> Self {
+        self.max_frame_payload = bytes;
+        self
     }
 
     /// Whether an earlier failure left the session out of sync; see the struct docs.
@@ -271,11 +302,17 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         sequence: u32,
     ) -> Result<Vec<u8>, Error> {
         for _ in 0..=MAX_SKIPPED_FRAMES {
-            let (header, payload) =
-                match read_frame(&mut self.stream, timer, FILE_TUNNEL_READ_TIMEOUT_SECS).await {
-                    Ok(frame) => frame,
-                    Err(e) => return self.poison(e),
-                };
+            let (header, payload) = match read_frame(
+                &mut self.stream,
+                timer,
+                FILE_TUNNEL_READ_TIMEOUT_SECS,
+                self.max_frame_payload,
+            )
+            .await
+            {
+                Ok(frame) => frame,
+                Err(e) => return self.poison(e),
+            };
             match header.magic {
                 p::MAGIC_REJECT => return self.poison(rejected()),
                 p::MAGIC_CTRL_REPLY => {}
@@ -540,6 +577,17 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                     format!(
                         "file tunnel {command}: {} bytes exceeds the {max} byte limit",
                         body.total
+                    )
+                    .into(),
+                );
+                return if more { self.poison(err) } else { Err(err) };
+            }
+            if received.saturating_add(body.size) > body.total {
+                let err = Error::ProtocolViolation(
+                    format!(
+                        "file tunnel {command} fragment of {} bytes at {received} runs past the \
+                         {} byte total",
+                        body.size, body.total
                     )
                     .into(),
                 );
@@ -1063,6 +1111,48 @@ mod tests {
                 .read_running_job_member(&DummyTimer, "Metadata/pick_9.png", 1024)
                 .await,
             Err(Error::TunnelReply { result: 2, .. })
+        ));
+        assert!(client.is_poisoned());
+    }
+
+    #[tokio::test]
+    async fn fragments_past_the_declared_total_are_refused() {
+        // A printer that keeps sending past `total` must not grow the caller's buffer.
+        let mut client = connected(&[
+            reply_with(
+                r#"{"cmdtype":4,"result":1,"sequence":1,"reply":{"offset":0,"total":4,"size":4}}"#,
+                b"abcd",
+            ),
+            reply_with(
+                r#"{"cmdtype":4,"result":1,"sequence":1,"reply":{"offset":4,"total":4,"size":4}}"#,
+                b"efgh",
+            ),
+        ])
+        .await;
+        let file = TunnelFile {
+            name: "a".into(),
+            path: Some("/a".into()),
+            time: 0,
+            size: 4,
+            storage: None,
+        };
+        assert!(matches!(
+            client.download(&DummyTimer, &file, |_| Ok(())).await,
+            Err(Error::ProtocolViolation(_))
+        ));
+        assert!(client.is_poisoned());
+    }
+
+    #[tokio::test]
+    async fn frame_over_the_payload_limit_is_refused() {
+        let mut client = connected(&[reply(
+            r#"{"cmdtype":7,"reply":{"storage":["emmc"]},"result":0,"sequence":1}"#,
+        )])
+        .await
+        .with_max_frame_payload(16);
+        assert!(matches!(
+            client.media_ability(&DummyTimer).await,
+            Err(Error::ProtocolViolation(_))
         ));
         assert!(client.is_poisoned());
     }

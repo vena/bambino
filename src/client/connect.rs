@@ -742,12 +742,15 @@ where
                     .into(),
             ));
         }
-        let client = race_against_connect_timeout(
+        let mut client = race_against_connect_timeout(
             &self.timer,
             self.core.connect_timeout,
             dial_file_tunnel(factory, tls, identity, &self.timer),
         )
         .await?;
+        if let Some(max) = self.core.file_tunnel_max_frame_size {
+            client = client.with_max_frame_payload(max);
+        }
         // Like the camera, nothing is moved out of `camera_config`: `disconnect_file_tunnel()`
         // closes through the same connector, and a later call redials.
         self.file_tunnel = Some(client);
@@ -1120,6 +1123,16 @@ where
     #[must_use]
     pub fn with_camera_port(mut self, port: u16) -> Self {
         self.core.camera_port = port;
+        self
+    }
+
+    /// Overrides the largest file tunnel frame accepted, 4 MiB by default (see [`FileTunnelClient::with_max_frame_payload`]).
+    ///
+    /// Lower it on embedded targets, whose heap is far smaller than the default. Applies from the
+    /// next connect.
+    #[must_use]
+    pub fn with_file_tunnel_max_frame_size(mut self, bytes: usize) -> Self {
+        self.core.file_tunnel_max_frame_size = Some(bytes);
         self
     }
 

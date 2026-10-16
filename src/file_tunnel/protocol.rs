@@ -81,15 +81,6 @@ pub(crate) mod result {
     pub(crate) const FILE_SIZE_ERR: i64 = 12;
 }
 
-/// Largest frame payload the client accepts, in bytes.
-///
-/// A corrupt or hostile header could otherwise make the reader allocate up to 4 GiB, which on a
-/// `no_std` target aborts through `alloc_error_handler` rather than returning an error (the same
-/// reasoning as `CAMERA_FRAME_MAX_SIZE`). The largest frames reported are 255 KiB upload chunks
-/// (client to printer) and 20 KiB download fragments; a `LIST_INFO` reply grows with the number
-/// of files. 4 MiB leaves room for a long listing.
-pub(crate) const MAX_FRAME_PAYLOAD: usize = 4 * 1024 * 1024;
-
 /// One decoded frame header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FrameHeader {

@@ -201,6 +201,7 @@ pub(crate) struct ClientCore {
     pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,
+    pub(crate) file_tunnel_max_frame_size: Option<usize>,
 }
 
 impl ClientCore {
@@ -220,6 +221,7 @@ impl ClientCore {
             ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
+            file_tunnel_max_frame_size: None,
         }
     }
 }

@@ -4,9 +4,9 @@
 
 ### 8.1 Network Boundary & Sources [REF-FILESVC]
 
-Port 6000 on newer printers carries a TLS file service besides (or instead of) the chamber-image JPEG stream [REF-CAM-BINARY]. It lists, reads, deletes and uploads files on the printer's storage, reads individual members of a stored `.3mf` without downloading it, and serves in-memory files such as the running job's pick images and a camera preview. It reaches internal/eMMC storage, which FTPS on port 990 does not: newer firmware (H2D `01.03`, H2S `01.02`, P2S, X2D) hides the print file from FTPS unless external storage is enabled, which leaves a LAN client this service as its only route to it.
+Port 6000 on newer printers carries a TLS file service besides (or instead of) the chamber-image JPEG stream [REF-CAM-BINARY]. It lists, reads, deletes and uploads files on the printer's storage, reads individual members of a stored `.3mf` without downloading it, and serves in-memory files such as the running job's pick images and a camera preview. It reaches internal/eMMC storage, which FTPS on port 990 does not show. Newer firmware (H2D `01.03`, H2S `01.02`, P2S, X2D) can keep the print file there, announced by a `brtc://emmc/<name>` URL in the print command, and then FTPS may have no copy. How often that happens varies: bambuddy found the P2S and H2C with nothing on FTPS, but an H2D on `01.03.00.00` with a card inserted still had each such file under `/cache` (`print_storage.py`, bambuddy #2780 and #2856).
 
-bambino implements none of it. `src/ftps/` is its only file-access path.
+bambino's client is `src/file_tunnel/` (`FileTunnelClient`, `PrinterClient::file_tunnel`): the handshake, `REQUEST_MEDIA_ABILITY`, `LIST_INFO`, `FILE_DOWNLOAD` and the `mem:/16` running-job read. `SUB_FILE`, `FILE_UPLOAD`, `FILE_DEL` and `TASK_CANCEL` are not implemented yet (#634).
 
 Bambu Studio reaches this service as `bambu:///local/<ip>?port=6000&user=bblp&passwd=<access code>` through the closed `libBambuSource` (`Bambu_Create`/`Bambu_Open`/`Bambu_StartStreamEx(tunnel, 0x3001)`/`Bambu_SendMessage`/`Bambu_ReadSample`). Off-LAN, the same JSON bodies travel over a cloud-minted TUTK session with different framing; bambino is LAN-only and ignores that path.
 
@@ -188,7 +188,7 @@ The first reply frame carries `reply.mem_dl_param_size` and the printer's own JS
 
 ### 8.5 Which Printers Serve It
 
-**Serves it:** P2S and X2D (open-bamboo-networking captures, X2D `01.02.00.00`). H2D and H2S are the printers ha-bambulab's client exists for, because their FTPS hides internal storage. The X1C, H2C and H2D Pro advertise it with `fun` bit 31 (below), but nobody has exercised it on them. **Unknown:** X1, X1E.
+**Serves it:** P2S and X2D (open-bamboo-networking captures, X2D `01.02.00.00`). H2D and H2S are the printers ha-bambulab's client exists for, to reach internal storage FTPS doesn't show. The X1C, H2C and H2D Pro advertise it with `fun` bit 31 (below), but nobody has exercised it on them. **Unknown:** X1, X1E.
 
 **Doesn't serve it: every chamber-image printer (A1, A1 Mini, A2L, P1P, P1S).** On a P1S running `01.10.00.00` (2026-10-15), with no camera client attached:
 
@@ -218,12 +218,10 @@ The other file-adjacent bits Studio decodes describe features, not the service: 
 
 ---
 
-### 8.6 Implementation Notes for bambino
+### 8.6 How bambino Uses It
 
-These follow from the sections above. They are design inputs, not decisions.
-
-- **Transport.** The service fits bambino's existing traits: `RawStreamFactory` dials port 6000, `TlsConnector` wraps it, and the protocol runs over `AsyncIo`. Nothing here needs a platform API.
-- **Allocation.** Replies interleave JSON and binary in one length-prefixed frame. On `no_std`, a client should bound `payload_len` as `BinaryCameraStream` does, and stream fragments to a sink rather than buffering a whole file. Upload fragments are up to `chunk_size` KiB (255 KiB seen).
-- **Integrity.** Check `total` and `file_md5` on every download. bambino uses the `md5` crate for this (`src/file_tunnel/`).
-- **Sequencing.** One request in flight per session, matched on `sequence` and `cmdtype`, gives Studio's ordering plus the stale-reply protection the other two clients add.
-- **Capability detection.** Gate on `fun` bit 31, as Studio does. Bit set: use the service. Bit clear, or `fun` absent: don't dial. That covers every P1/A1 printer, where a dial would also hold the single port-6000 connection for 60 s. Like Studio, treat a failed handshake on an advertising printer as "use FTPS": a `0x0003013F` reject, a close, or a timeout (Studio waits 8 s). `ipcam.file` is never sent, so it can't be used.
+- **Transport.** `RawStreamFactory` dials port 6000, `TlsConnector` wraps it with the serial as SNI, and the protocol runs over `AsyncIo`. `PrinterClient` uses the camera's connector slot (`with_file_tunnel()`), since no printer serves both on port 6000.
+- **Allocation.** Each frame is read whole before parsing, so a payload over `DEFAULT_MAX_FRAME_PAYLOAD` (4 MiB) is refused. Lower the cap on an embedded heap (`with_file_tunnel_max_frame_size`). Downloads stream to a caller sink, and a fragment that would run past the reply's `total` is refused.
+- **Integrity.** Every download checks `total` and `file_md5`, using the `md5` crate.
+- **Sequencing.** One request in flight per session, matched on `sequence` and `cmdtype`. A transport failure or an abandoned stream poisons the session; a failure `result` read in full (`Error::TunnelReply`) does not.
+- **Capability detection.** `Capabilities::file_tunnel_support()` reads `fun` bit 31. A reported bit decides. Without one, a chamber-image model is refused without dialing, since a dial would hold its single port-6000 connection for 60 s. Any other model is tried, which differs from Studio's default of false: every captured RTSPS model that sends `fun` sets the bit. A failed handshake (a `0x0003013F` reject, a close, or the 8 s timeout per handshake reply, Studio's own budget) is the caller's signal to use FTPS. `ipcam.file` is never sent, so it can't be used.

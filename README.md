@@ -329,7 +329,7 @@ let free = ftp.get_available_space().await?;
 
 ### Internal storage (file tunnel)
 
-Newer printers keep print files on internal storage that FTPS doesn't show, and serve it through a TLS file service on port 6000 instead ([REF-FILESVC] in `reference/08_file_service.md`). Configure it with `.with_file_tunnel()`, the same slot the binary camera uses (no printer serves both on port 6000), so one connector cloned for MQTT and FTPS serves here too:
+Newer printers can keep print files on internal storage that FTPS doesn't show, and serve it through a TLS file service on port 6000 instead ([REF-FILESVC] in `reference/08_file_service.md`). Configure it with `.with_file_tunnel()`, the same slot the binary camera uses (no printer serves both on port 6000), so one connector cloned for MQTT and FTPS serves here too:
 
 ```rust
 let mut printer = printer.with_file_tunnel(tls.clone(), TokioRawStreamFactory);
@@ -343,7 +343,7 @@ if printer.capabilities().file_tunnel_support().is_supported() {
 printer.disconnect_file_tunnel().await; // frees the TLS session
 ```
 
-The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. P1 and A1 printers never serve it, and `file_tunnel()` refuses them without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB.
+The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. P1 and A1 printers never serve it, and `file_tunnel()` refuses them without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB, and `.with_file_tunnel_max_frame_size(bytes)` lowers the default 4 MiB frame cap to fit the heap.
 
 > **Not yet run against a printer that serves it.** The protocol follows Bambu Studio's source and two independent working clients; only the P1S's refusal has been checked on hardware.
 

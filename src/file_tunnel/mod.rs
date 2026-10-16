@@ -21,6 +21,15 @@ pub use client::{FileTunnel, FileTunnelClient};
 /// Port the file tunnel listens on, shared with the chamber-image stream of P1/A1 printers.
 pub const FILE_TUNNEL_PORT: u16 = 6000;
 
+/// Default largest frame payload [`FileTunnelClient`] accepts, in bytes (4 MiB).
+///
+/// A corrupt or hostile header could otherwise make the reader allocate up to 4 GiB, which on a
+/// `no_std` target aborts through `alloc_error_handler` rather than returning an error. 4 MiB
+/// leaves room for a long `LIST_INFO` reply on a host, but is far more than an embedded heap
+/// holds: lower it there with [`FileTunnelClient::with_max_frame_payload`] or
+/// `PrinterClient::with_file_tunnel_max_frame_size`.
+pub const DEFAULT_MAX_FRAME_PAYLOAD: usize = 4 * 1024 * 1024;
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
