@@ -396,6 +396,7 @@ struct PrintJobConfig {
     pub ams: Option<AmsSource>,
     pub nozzle_rack: Option<NozzleRack>,
     pub pa_profile_shared_by_type: Option<bool>,
+    pub file_location: JobFileLocation,
 }
 ```
 
@@ -471,6 +472,11 @@ defaults for calibration flags.
   Set it with [`pa_profile_sharing`](commands/print_job/index.md#printjobconfig), which describes the wire
   encoding and its sources.
 
+- **`file_location`**: `JobFileLocation`
+
+  Where the printer finds the file; [`JobFileLocation::Card`](commands/print_job/index.md#jobfilelocation) unless
+  [`from_internal_storage`](commands/print_job/index.md#printjobconfig) was called.
+
 #### Implementations
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
@@ -478,6 +484,12 @@ defaults for calibration flags.
   Builds a job config with these defaults: bed leveling and flow calibration on,
   **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
   disabled, and the model's own nozzle-offset-calibration default.
+
+- <span id="printjobconfig-from-internal-storage"></span>`fn from_internal_storage(self) -> Self`
+
+  Prints `job_filename` from internal storage, where [`FileTunnelClient::upload`](../file_tunnel/index.md) to `emmc` put it, instead of from the card.
+
+  Sends `url: "brtc://emmc/<job_filename>"`; see [`JobFileLocation::InternalStorage`](commands/print_job/index.md#jobfilelocation).
 
 - <span id="printjobconfig-with-ams"></span>`fn with_ams(self, mapping: Vec<i32>) -> Self`
 
@@ -830,6 +842,53 @@ Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed i
 ##### `impl PartialEq for CalibrationMode`
 
 - <span id="calibrationmode-partialeq-eq"></span>`fn eq(&self, other: &CalibrationMode) -> bool` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
+
+### `JobFileLocation`
+
+```rust
+enum JobFileLocation {
+    Card,
+    InternalStorage,
+}
+```
+
+Where the printer finds a job's `.3mf`, which decides the start command's `url` [REF-MQTT-LIFECYCLE].
+
+#### Variants
+
+- **`Card`**
+
+  On the SD card or USB stick, uploaded over FTPS: `ftp://<name>`.
+
+- **`InternalStorage`**
+
+  On internal storage, uploaded through the port-6000 file tunnel to `emmc`: `brtc://emmc/<name>`.
+  
+  The URL Bambu's own plugin sends after a tunnel upload to internal storage
+  (open-bamboo-networking capture on a P2S), and the dispatch URL bambuddy records for H2,
+  P2S and X2D jobs sent there (`print_storage.py`). Not yet sent by bambino to a printer.
+
+#### Trait Implementations
+
+##### `impl Clone for JobFileLocation`
+
+- <span id="jobfilelocation-clone"></span>`fn clone(&self) -> JobFileLocation` — [`JobFileLocation`](commands/print_job/index.md#jobfilelocation)
+
+##### `impl Copy for JobFileLocation`
+
+##### `impl Debug for JobFileLocation`
+
+- <span id="jobfilelocation-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for JobFileLocation`
+
+- <span id="jobfilelocation-default"></span>`fn default() -> JobFileLocation` — [`JobFileLocation`](commands/print_job/index.md#jobfilelocation)
+
+##### `impl Eq for JobFileLocation`
+
+##### `impl PartialEq for JobFileLocation`
+
+- <span id="jobfilelocation-partialeq-eq"></span>`fn eq(&self, other: &JobFileLocation) -> bool` — [`JobFileLocation`](commands/print_job/index.md#jobfilelocation)
 
 ### `AirductRequest`
 

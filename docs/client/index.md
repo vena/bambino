@@ -1464,6 +1464,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Overrides the default camera port (6000, binary-JPEG only).
 
+- <span id="superprinterclient-with-file-tunnel-max-frame-size"></span>`fn with_file_tunnel_max_frame_size(self, bytes: usize) -> Self`
+
+  Overrides the largest file tunnel frame accepted, 4 MiB by default (see [`FileTunnelClient::with_max_frame_payload`](../file_tunnel/client/index.md#filetunnelclient)).
+
+  Lower it on embedded targets, whose heap is far smaller than the default. Applies from the
+  next connect.
+
 - <span id="superprinterclient-with-camera-max-frame-size"></span>`fn with_camera_max_frame_size(self, bytes: usize) -> Self`
 
   Overrides the default maximum accepted camera frame size (see `BinaryCameraStream::with_max_frame_size`).
@@ -1611,6 +1618,32 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   As [`FtpsClient::read_front_members`](../ftps/index.md) and
   [`FtpsClient::read_job_prefix`](../ftps/index.md), plus whatever
   connecting FTPS returns.
+
+- <span id="superprinterclient-read-running-job-images"></span>`async fn read_running_job_images<'b>(&mut self, buf: &'b mut [u8]) -> Result<JobImages<'b>, Error>` — [`JobImages`](#jobimages), [`Error`](../error/index.md#error)
+
+  Reads the running job's plate and pick images into `buf`, through the file tunnel where the printer serves it and over FTPS otherwise.
+
+  The tunnel route asks the printer for `Metadata/plate_<N>.png` and
+  `Metadata/pick_<N>.png` of the running job by name (`mem:/16`, the read Bambu Studio's
+  skip-objects dialog makes), so it needs no file path and reaches internal storage. It is
+  taken when [`Capabilities::file_tunnel_support`](capabilities/index.md#capabilities)
+  allows, `.with_file_tunnel()` is configured, and [`job_plate`](#printerclient) knows the
+  plate. The session is disconnected afterwards, so no TLS session lingers; that includes a
+  session the caller had opened with [`file_tunnel()`](#printerclient).
+
+  The FTPS route ([`job_path`](#printerclient), then
+  [`read_job_images`](#printerclient)) is used otherwise, and also when the tunnel
+  fails to connect, fails mid-read, or has neither image. A failed connect is remembered
+  until the next MQTT connection, so a printer that ignores the tunnel costs its 8 s
+  handshake timeout once rather than on every call. With no job file on the card either,
+  both images are `None`.
+
+  The tunnel route has not been run against a printer that serves the tunnel; see
+  `reference/08_file_service.md`.
+
+  # Errors
+
+  Those of the FTPS route, when it runs.
 
 - <span id="superprinterclient-is-axis-homed"></span>`fn is_axis_homed(&self, axis: Axis) -> Option<bool>` — [`Axis`](../quirks/index.md#axis)
 
