@@ -41,9 +41,10 @@ Not yet checked on X1C, H2D, or other model lines; a v3 leaf carrying its own SA
 
 #### Physical Storage Filepaths [REF-FTPS-OPS]
 The physical storage architecture utilizes a flat folder structure under the root directory:
-*   `/cache`: Persistent cache directory residing on the physical MicroSD card. Used by the printer to store uploaded `.3mf` files and unpack sliced file manifests.
-*   `/timelapse`: Dedicated directory for raw print records. Contains `.mp4` or `.avi` files depending on model parameters, and an internal subdirectory `/timelapse/thumbnail` containing paired `.jpg` cover sheets.
-*   `/model`: Storage location for uploaded `.3mf` or standalone `.gcode` print payloads.
+*   `/cache`: Persistent cache directory residing on the physical MicroSD card. Used by the printer to store uploaded `.3mf` files and unpack sliced file manifests. On a P1S (2026-10-16) it held four `.3mf` files (named `<name>.3mf`, not `<name>.gcode.3mf`; origin unknown) among 215 `.gcode`/`.bbl` extracts. It is the one folder the printer's screen shows as a folder: every other folder's files are flattened into the screen's root list.
+*   `/timelapse`: Dedicated directory for raw print records. Contains `.mp4` or `.avi` files depending on model parameters, and an internal subdirectory `/timelapse/thumbnail` containing paired `.jpg` cover sheets. On a P1S the recordings are `.avi`, named `video_<YYYY-MM-DD_HH-MM-SS>.avi`, and each has a cover `thumbnail/<same stem>.jpg` (16 of 16, 2026-10-16).
+*   `/model`: Storage location for uploaded `.3mf` or standalone `.gcode` print payloads. On a P1S it held only Bambu's preinstalled sample prints, as `.gcode`, dated 2023-09-28, and no `.3mf`.
+*   `/ipcam`: On a P1S, one 4-byte file named `index` and no videos. open-bamboo-networking's FTPS stand-in for the file tunnel maps `type: "video"` here (`resolve_subtree`, `stubs/BambuSource.cpp`).
 *   `/data`: Core calibration parameters and logs.
 *   `/data/Metadata`: Stores parsed metadata (previews, model structures) extracted by the firmware.
 

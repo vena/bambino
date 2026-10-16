@@ -16,15 +16,24 @@ use crate::error::Error;
 use crate::file_tunnel::FileKind;
 use crate::ftps::client::PrinterClockProbe;
 use crate::ftps::parser::{FTP_MAX_LISTING_ENTRIES, advance_timestamp};
+use crate::ftps::protocol::FTP_FILE_NOT_FOUND;
 use crate::ftps::{CurrentDateTime, FtpFile, FtpTimestamp, FtpsClient};
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
 
-/// Directory FTPS keeps timelapses in [REF-FTPS-OPS]; its `thumbnail` subdirectory holds their covers.
-const TIMELAPSE_DIR: &str = "/timelapse";
-/// Directory a slicer's LAN send puts a `.3mf` in (measured on a P1S, 2026-10-15).
-const MODEL_DIR: &str = "/";
+/// Directories FTPS keeps timelapses in [REF-FTPS-OPS].
+const TIMELAPSE_DIRS: &[&str] = &["/timelapse"];
+/// Subdirectory of a timelapse's directory holding its cover, `<video name without extension>.jpg`.
+const THUMBNAIL_SUBDIR: &str = "thumbnail";
+/// Extension of a timelapse cover.
+const THUMBNAIL_EXTENSION: &str = "jpg";
+/// Directories FTPS keeps print files in, in listing order.
+///
+/// A slicer's LAN send puts a `.3mf` at the root, and `/cache` holds `.3mf` files too, the one
+/// folder the printer's screen shows (P1S, 2026-10-16). ha-bambulab's
+/// `Ftps990MediaSource.list_files` lists the same two.
+const MODEL_DIRS: &[&str] = &["/cache", "/"];
 /// Extension a listed print file must have, compared ignoring ASCII case.
 const MODEL_EXTENSION: &[u8] = b".3mf";
 /// The throwaway file the printer-clock probe uploads, reads the mtime of, and deletes.
@@ -122,6 +131,17 @@ enum FileAddress {
 }
 
 impl PrinterFile {
+    /// The service's own path for the file, which tells apart two listed files with the same name.
+    ///
+    /// Over FTPS it is the full card path, such as `/cache/job.3mf`. It is for display and
+    /// comparison; pass the `PrinterFile` itself back to reach the file.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match &self.address {
+            FileAddress::Ftps { path } => path,
+        }
+    }
+
     /// An FTPS listing entry from `dir`, its year rebuilt only when `has_reference`.
     fn from_ftps(dir: &str, file: FtpFile, kind: FileKind, has_reference: bool) -> Self {
         let modified = if file.year_is_inferred && !has_reference {
@@ -151,6 +171,13 @@ impl PrinterFile {
             address: FileAddress::Ftps { path },
         }
     }
+}
+
+/// The FTPS path of a timelapse's cover: `<dir>/thumbnail/<name without extension>.jpg`.
+fn ftps_thumbnail_path(video_path: &str) -> String {
+    let (dir, name) = video_path.rsplit_once('/').unwrap_or(("", video_path));
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    format!("{dir}/{THUMBNAIL_SUBDIR}/{stem}.{THUMBNAIL_EXTENSION}")
 }
 
 /// Whether `name` ends in `.3mf`, ignoring ASCII case.
@@ -281,12 +308,15 @@ where
     /// Lists the printer's files of one kind.
     ///
     /// Served over FTPS, so only external storage (card or USB stick) is listed; internal storage
-    /// arrives with the port-6000 file tunnel (#636). One `LIST` of one directory, never
-    /// recursive:
+    /// arrives with the port-6000 file tunnel (#636). One `LIST` per directory below, never
+    /// recursive, so a file in a folder of your own isn't listed:
     ///
-    /// - [`FileKind::Timelapse`]: the files in `/timelapse`, not its `thumbnail` covers.
-    /// - [`FileKind::Model`]: the `.3mf` files at the card root, where a slicer's LAN send puts them.
-    /// - [`FileKind::Video`]: always empty. No source says where FTPS keeps recorded videos.
+    /// - [`FileKind::Timelapse`]: the files in `/timelapse`, not its `thumbnail` covers; read a
+    ///   cover with [`read_thumbnail`](Self::read_thumbnail).
+    /// - [`FileKind::Model`]: the `.3mf` files in `/cache`, then at the card root. A name can
+    ///   appear in both; [`PrinterFile::path`] tells them apart.
+    /// - [`FileKind::Video`]: always empty. A P1S's `/ipcam` holds only an `index` file, and no
+    ///   source shows recorded videos elsewhere on the card.
     ///
     /// **Which clock rebuilds a missing year.** A listing leaves the year out for recent files.
     /// By default it is rebuilt against the host's clock (with `std`) and flagged
@@ -303,31 +333,33 @@ where
     /// [`Error::NotConfigured`] without FTPS, and whatever
     /// [`FtpsClient::list_directory`] returns.
     pub async fn list_files(&mut self, kind: FileKind) -> Result<Vec<PrinterFile>, Error> {
-        let (dir, keep): (&str, fn(&FtpFile) -> bool) = match kind {
-            FileKind::Timelapse => (TIMELAPSE_DIR, |f| !f.is_dir),
-            FileKind::Model => (MODEL_DIR, |f| !f.is_dir && is_model_file(&f.name)),
+        let (dirs, keep): (&[&str], fn(&FtpFile) -> bool) = match kind {
+            FileKind::Timelapse => (TIMELAPSE_DIRS, |f| !f.is_dir),
+            FileKind::Model => (MODEL_DIRS, |f| !f.is_dir && is_model_file(&f.name)),
             FileKind::Video => return Ok(Vec::new()),
         };
         let reference = self.listing_reference().await?;
         let ftps = self.ftps().await?;
         let mut files = Vec::new();
         let mut capped = false;
-        ftps.list_directory_each(dir, reference.unwrap_or(NO_REFERENCE), |file| {
-            if !keep(&file) {
-                return;
-            }
-            if files.len() >= FTP_MAX_LISTING_ENTRIES {
-                if !capped {
-                    capped = true;
-                    log::warn!(
-                        "{dir} lists more than {FTP_MAX_LISTING_ENTRIES} files; truncating the listing"
-                    );
+        for &dir in dirs {
+            ftps.list_directory_each(dir, reference.unwrap_or(NO_REFERENCE), |file| {
+                if !keep(&file) {
+                    return;
                 }
-                return;
-            }
-            files.push(PrinterFile::from_ftps(dir, file, kind, reference.is_some()));
-        })
-        .await?;
+                if files.len() >= FTP_MAX_LISTING_ENTRIES {
+                    if !capped {
+                        capped = true;
+                        log::warn!(
+                            "more than {FTP_MAX_LISTING_ENTRIES} {kind:?} files; truncating the listing"
+                        );
+                    }
+                    return;
+                }
+                files.push(PrinterFile::from_ftps(dir, file, kind, reference.is_some()));
+            })
+            .await?;
+        }
         Ok(files)
     }
 
@@ -350,6 +382,39 @@ where
     pub async fn delete_file(&mut self, file: &PrinterFile) -> Result<(), Error> {
         match &file.address {
             FileAddress::Ftps { path } => self.ftps().await?.delete_file(path).await,
+        }
+    }
+
+    /// Reads a listed timelapse's cover image, passing each read to `sink`, and returns its size, or `None` when it has none.
+    ///
+    /// Over FTPS the cover is `thumbnail/<video name without extension>.jpg` beside the video,
+    /// as ha-bambulab's `_download_timelapse_thumbnail` reads it (P1S: one `.jpg` per `.avi`).
+    /// The file tunnel (#636) will read it as Bambu Studio does, through the video's
+    /// `#thumbnail` member. Only a [`FileKind::Timelapse`] file has a cover; any other kind
+    /// returns `None` without a request. A print file's images are inside its `.3mf`.
+    ///
+    /// A cover the printer refuses with `550` is `None`; FTPS can't tell a missing file from an
+    /// unreadable one. The read and its `sink` behave as [`download_file`](Self::download_file)'s.
+    pub async fn read_thumbnail(
+        &mut self,
+        file: &PrinterFile,
+        sink: impl FnMut(&[u8]) -> Result<(), Error>,
+    ) -> Result<Option<u64>, Error> {
+        if file.kind != FileKind::Timelapse {
+            return Ok(None);
+        }
+        match &file.address {
+            FileAddress::Ftps { path } => {
+                let cover = ftps_thumbnail_path(path);
+                match self.ftps().await?.download_file_each(&cover, sink).await {
+                    Ok(size) => Ok(Some(size)),
+                    Err(Error::FtpReply {
+                        code: FTP_FILE_NOT_FOUND,
+                        ..
+                    }) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 
@@ -394,5 +459,17 @@ mod tests {
         assert!(!is_model_file("job.gcode"));
         assert!(!is_model_file("3mf"));
         assert!(!is_model_file("é.3m"));
+    }
+
+    #[test]
+    fn test_ftps_thumbnail_path() {
+        assert_eq!(
+            ftps_thumbnail_path("/timelapse/video_2025-12-15_11-47-18.avi"),
+            "/timelapse/thumbnail/video_2025-12-15_11-47-18.jpg"
+        );
+        assert_eq!(
+            ftps_thumbnail_path("/timelapse/a.b.mp4"),
+            "/timelapse/thumbnail/a.b.jpg"
+        );
     }
 }

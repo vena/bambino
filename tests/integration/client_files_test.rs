@@ -84,7 +84,7 @@ async fn root_models(fixture: &mut Fixture) -> Vec<PrinterFile> {
 #[tokio::test]
 async fn test_list_models_keeps_only_3mf_files_at_the_root() {
     let mut fx = Fixture::new();
-    let server = fx.session(vec![list("/", ROOT)]).await;
+    let server = fx.session(vec![list("/cache", ""), list("/", ROOT)]).await;
     let files = root_models(&mut fx).await;
     let names: Vec<_> = files.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["benchy.gcode.3mf", "UPPER.3MF"]);
@@ -105,6 +105,99 @@ async fn test_list_models_keeps_only_3mf_files_at_the_root() {
             },
             year_inferred: false,
         }
+    );
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_list_models_lists_cache_then_root_and_keeps_each_path() {
+    let mut fx = Fixture::new();
+    let server = fx
+        .session(vec![
+            list(
+                "/cache",
+                "-rw-r--r--    1 1000     1000        1000 Nov 14  2025 benchy.gcode.3mf\r\n\
+                 -rw-r--r--    1 1000     1000         421 Nov 14  2025 1_benchy.bbl\r\n",
+            ),
+            list("/", ROOT),
+        ])
+        .await;
+    let files = root_models(&mut fx).await;
+    let paths: Vec<_> = files.iter().map(PrinterFile::path).collect();
+    assert_eq!(
+        paths,
+        ["/cache/benchy.gcode.3mf", "/benchy.gcode.3mf", "/UPPER.3MF"]
+    );
+    // Same name, different files.
+    assert_eq!(files[0].name, files[1].name);
+    assert_ne!(files[0].size, files[1].size);
+    server.await.expect("FTPS mock panicked");
+}
+
+const TIMELAPSES: &str = "drwxr-xr-x    2 1000     1000         4096 Nov 14  2025 thumbnail\r\n\
+-rw-r--r--    1 1000     1000     2600000 Dec 15  2025 video_2025-12-15_11-47-18.avi\r\n";
+
+#[tokio::test]
+async fn test_read_thumbnail_reads_the_matching_jpg() {
+    let mut fx = Fixture::new();
+    let cover = b"\xff\xd8 jpeg \xff\xd9".to_vec();
+    let server = fx
+        .session(vec![
+            list("/timelapse", TIMELAPSES),
+            Step::Retr(
+                "/timelapse/thumbnail/video_2025-12-15_11-47-18.jpg".into(),
+                cover.clone(),
+            ),
+            Step::expect(
+                "SIZE /timelapse/thumbnail/video_2025-12-15_11-47-18.jpg",
+                &format!("213 {}", cover.len()),
+            ),
+            Step::RetrMissing("/timelapse/thumbnail/video_2025-12-15_11-47-18.jpg".into()),
+        ])
+        .await;
+    let video = fx
+        .client
+        .list_files(FileKind::Timelapse)
+        .await
+        .expect("list")
+        .remove(0);
+
+    let mut got = Vec::new();
+    let n = fx
+        .client
+        .read_thumbnail(&video, |chunk| {
+            got.extend_from_slice(chunk);
+            Ok(())
+        })
+        .await
+        .expect("thumbnail");
+    assert_eq!(n, Some(cover.len() as u64));
+    assert_eq!(got, cover);
+
+    // No cover: `None`, and the session stays usable.
+    assert_eq!(
+        fx.client
+            .read_thumbnail(&video, |_| Ok(()))
+            .await
+            .expect("read"),
+        None
+    );
+    assert!(fx.client.is_ftps_connected());
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_read_thumbnail_is_none_for_a_print_file_without_a_request() {
+    let mut fx = Fixture::new();
+    // The script ends after the listing: a RETR would find the session closed and fail.
+    let server = fx.session(vec![list("/cache", ""), list("/", ROOT)]).await;
+    let file = root_models(&mut fx).await.remove(0);
+    assert_eq!(
+        fx.client
+            .read_thumbnail(&file, |_| Ok(()))
+            .await
+            .expect("read"),
+        None
     );
     server.await.expect("FTPS mock panicked");
 }
@@ -144,6 +237,7 @@ async fn test_download_streams_the_file_and_rechecks_size() {
     let body = vec![7u8; 10_000];
     let server = fx
         .session(vec![
+            list("/cache", ""),
             list("/", ROOT),
             Step::Retr("/benchy.gcode.3mf".into(), body.clone()),
             Step::expect("SIZE /benchy.gcode.3mf", "213 10000"),
@@ -178,6 +272,7 @@ async fn test_sink_error_ends_the_session_and_the_next_call_reconnects() {
     let mut fx = Fixture::new();
     let server = fx
         .session(vec![
+            list("/cache", ""),
             list("/", ROOT),
             Step::RetrStopped("/benchy.gcode.3mf".into(), vec![1u8; 2048]),
         ])
@@ -196,7 +291,7 @@ async fn test_sink_error_ends_the_session_and_the_next_call_reconnects() {
     assert!(!fx.client.is_ftps_connected(), "session left poisoned");
     server.await.expect("FTPS mock panicked");
 
-    let server = fx.session(vec![list("/", ROOT)]).await;
+    let server = fx.session(vec![list("/cache", ""), list("/", ROOT)]).await;
     assert_eq!(root_models(&mut fx).await.len(), 2);
     server.await.expect("FTPS mock panicked");
 }
@@ -206,6 +301,7 @@ async fn test_delete_file_deletes_the_listed_path() {
     let mut fx = Fixture::new();
     let server = fx
         .session(vec![
+            list("/cache", ""),
             list("/", ROOT),
             Step::expect("DELE /benchy.gcode.3mf", "250 Delete operation successful."),
         ])
@@ -242,7 +338,9 @@ async fn recent_time(fx: &mut Fixture) -> FileTime {
 async fn test_probe_is_off_by_default() {
     // The script has no STOR or MDTM: sending either fails the mock.
     let mut fx = Fixture::new();
-    let server = fx.session(vec![list("/", RECENT)]).await;
+    let server = fx
+        .session(vec![list("/cache", ""), list("/", RECENT)])
+        .await;
     let FileTime::Calendar { at, year_inferred } = recent_time(&mut fx).await else {
         panic!("host clock gives a year");
     };
@@ -258,7 +356,9 @@ async fn test_probe_runs_once_per_session() {
     // The printer's clock reads 2026-02-02, so `Mar 01` is last year's.
     let mut steps = probe("213 20260202085730");
     steps.extend([
+        list("/cache", ""),
         list("/", RECENT),
+        list("/cache", ""),
         list("/", RECENT),
         Step::expect("QUIT", "221 Goodbye."),
     ]);
@@ -282,7 +382,7 @@ async fn test_probe_runs_once_per_session() {
 
     // A new session probes again: this time the printer's clock is past `Mar 01`.
     let mut steps = probe("213 20260402085730");
-    steps.push(list("/", RECENT));
+    steps.extend([list("/cache", ""), list("/", RECENT)]);
     let server = fx.session(steps).await;
     let FileTime::Calendar { at, .. } = recent_time(&mut fx).await else {
         panic!("probed clock gives a year");
@@ -297,7 +397,12 @@ async fn test_probe_without_mdtm_falls_back_once() {
     fx.client = fx.client.with_printer_clock_probe(true);
     let mut steps = probe("502 Command not implemented.");
     // The second listing doesn't retry the probe.
-    steps.extend([list("/", RECENT), list("/", RECENT)]);
+    steps.extend([
+        list("/cache", ""),
+        list("/", RECENT),
+        list("/cache", ""),
+        list("/", RECENT),
+    ]);
     let server = fx.session(steps).await;
     for _ in 0..2 {
         assert!(matches!(

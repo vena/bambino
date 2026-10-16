@@ -128,7 +128,7 @@ pub enum FilesAction {
     /// (an upload, MDTM and delete of /bambino_clock_probe.txt), so a year the listing leaves out
     /// is rebuilt against the printer's clock rather than the host's.
     #[command(
-        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> [--probe-clock]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> get <NAME> <LOCAL_PATH> [--stop-after <BYTES>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> rm <NAME>"
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> [--probe-clock]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> get <NAME> <LOCAL_PATH> [--stop-after <BYTES>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> rm <NAME>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog timelapse thumb <NAME> <LOCAL_PATH>"
     )]
     Catalog {
         kind: CatalogKind,
@@ -166,16 +166,22 @@ impl From<CatalogKind> for FileKind {
 pub enum CatalogOp {
     /// Download a listed file by name, writing it as it arrives
     Get {
-        /// The file's name as the listing shows it
+        /// The file's name or path, as the listing shows it
         name: String,
         local_path: String,
         /// Stop once this many bytes are written; the printer then closes the FTPS session
         #[arg(long, value_name = "BYTES")]
         stop_after: Option<u64>,
     },
+    /// Download a listed timelapse's cover image by name
+    Thumb {
+        /// The timelapse's name or path, as the listing shows it
+        name: String,
+        local_path: String,
+    },
     /// Delete a listed file by name
     Rm {
-        /// The file's name as the listing shows it
+        /// The file's name or path, as the listing shows it
         name: String,
     },
 }
@@ -536,11 +542,21 @@ async fn run_catalog(
     let started = Instant::now();
     let files = printer.list_files(kind).await?;
     print_transfer_time("list_files", started);
-    let find = |name: &str| {
-        files
-            .iter()
-            .find(|f| f.name == name)
-            .ok_or_else(|| CliError::InvalidArgs(format!("no {kind:?} file named '{name}'")))
+    // A path names one file; a name may name one in /cache and one at the root.
+    let find = |name: &str| -> Result<&PrinterFile, CliError> {
+        if let Some(file) = files.iter().find(|f| f.path() == name) {
+            return Ok(file);
+        }
+        let mut named = files.iter().filter(|f| f.name == name);
+        match (named.next(), named.next()) {
+            (Some(file), None) => Ok(file),
+            (Some(_), Some(_)) => Err(CliError::InvalidArgs(format!(
+                "more than one {kind:?} file is named '{name}'; pass its path instead"
+            ))),
+            (None, _) => Err(CliError::InvalidArgs(format!(
+                "no {kind:?} file named '{name}'"
+            ))),
+        }
     };
     match op {
         None if files.is_empty() => println!("No {kind:?} files."),
@@ -560,6 +576,22 @@ async fn run_catalog(
             print_transfer_time("download_file", started);
             sink.report(result, !printer.is_ftps_connected(), &local_path)?;
         }
+        Some(CatalogOp::Thumb { name, local_path }) => {
+            let file = find(&name)?.clone();
+            let mut sink = LocalSink::create(&local_path, None)?;
+            match printer
+                .read_thumbnail(&file, |chunk| sink.accept(chunk))
+                .await
+            {
+                Ok(Some(n)) => println!("Success: {n} bytes written to '{local_path}'."),
+                Ok(None) => {
+                    drop(sink);
+                    fs::remove_file(&local_path)?;
+                    println!("'{name}' has no cover image.");
+                }
+                Err(e) => sink.report(Err(e), !printer.is_ftps_connected(), &local_path)?,
+            }
+        }
         Some(CatalogOp::Rm { name }) => {
             let file = find(&name)?.clone();
             printer.delete_file(&file).await?;
@@ -571,7 +603,7 @@ async fn run_catalog(
 
 /// Prints a `catalog` listing; a rebuilt year is marked `*`, a missing one `????`.
 fn print_catalog_table(files: &[PrinterFile]) {
-    let mut table = crate::table::Table::new(vec!["Size", "Modified", "Storage", "Name"]);
+    let mut table = crate::table::Table::new(vec!["Size", "Modified", "Storage", "Path"]);
     let mut any_inferred = false;
     for file in files {
         let modified = match file.modified {
@@ -601,7 +633,7 @@ fn print_catalog_table(files: &[PrinterFile]) {
             &format_size(file.size),
             &modified,
             &storage,
-            &file.name,
+            file.path(),
         ]);
     }
     table.print();

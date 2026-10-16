@@ -995,6 +995,8 @@ pub enum Step {
     RetrStopped(String, Vec<u8>),
     /// Accepts `STOR path` of exactly this many bytes, answering `226`.
     Stor(String, usize),
+    /// Answers `RETR path` with `550`, as for a file that isn't there.
+    RetrMissing(String),
 }
 
 impl Step {
@@ -1029,6 +1031,11 @@ pub async fn run_script(
                     b"226 Transfer complete.\r\n",
                 )
                 .await;
+            }
+            Step::RetrMissing(path) => {
+                let _server_data = ctl.pasv().await;
+                ctl.expect(&format!("RETR {path}\r\n"), b"550 Failed to open file.\r\n")
+                    .await;
             }
             Step::RetrStopped(path, data) => {
                 let mut server_data = ctl.pasv().await;

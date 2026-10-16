@@ -326,13 +326,13 @@ To list, download and delete print files and timelapses without working with car
 ```rust
 use bambino::client::FileKind;
 
-let files = printer.list_files(FileKind::Model).await?; // the .3mf files at the card root
+let files = printer.list_files(FileKind::Model).await?; // the .3mf files in /cache and at the root
 let mut out = Vec::new();
 printer.download_file(&files[0], |chunk| { out.extend_from_slice(chunk); Ok(()) }).await?;
 printer.delete_file(&files[0]).await?;
 ```
 
-`download_file` hands each read to the closure, so a file never has to fit in memory. An error from the closure stops the transfer and ends the FTPS session, which the next call reconnects. `FileKind::Timelapse` lists `/timelapse`; `FileKind::Video` is always empty over FTPS. A listed file's `modified` is a `FileTime`: see the timestamps section below for why its year may be rebuilt, and for `.with_printer_clock_probe(true)`.
+`download_file` hands each read to the closure, so a file never has to fit in memory. An error from the closure stops the transfer and ends the FTPS session, which the next call reconnects. A name can appear in both `/cache` and the root, so `file.path()` tells two listed files apart. Folders you create on the card aren't listed. `FileKind::Timelapse` lists `/timelapse`, and `printer.read_thumbnail(&file, sink)` reads a timelapse's cover image. `FileKind::Video` is always empty over FTPS. A listed file's `modified` is a `FileTime`: see the timestamps section below for why its year may be rebuilt, and for `.with_printer_clock_probe(true)`.
 
 > **Reading only the start of a file:** `ftp.download_prefix(path, &mut buf)` fills `buf` from the start of the file and stops the transfer, so a few tens of KB of a large file (a `.3mf`'s plate images, say) never cost the whole download. Stopping early ends the FTPS session, and the next `ftps()` call reconnects. The printer has no other partial read: see [REF-FTPS-PARTIAL] in `reference/02_ftps.md`.
 >
