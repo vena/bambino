@@ -263,7 +263,6 @@ impl CurrentDateTime {
 /// Converts days since 1970-01-01 to a proleptic Gregorian `(year, month, day)`.
 ///
 /// Howard Hinnant's `civil_from_days` (<https://howardhinnant.github.io/date_algorithms.html>).
-#[cfg(feature = "std")]
 fn civil_from_days(days: i64) -> (i32, u8, u8) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -275,6 +274,40 @@ fn civil_from_days(days: i64) -> (i32, u8, u8) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
     let year = (yoe + era * 400 + i64::from(month <= 2)) as i32;
     (year, month, day)
+}
+
+/// Converts a proleptic Gregorian date to days since 1970-01-01, the inverse of [`civil_from_days`].
+///
+/// Howard Hinnant's `days_from_civil`, from the same page.
+fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let m = i64::from(month);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Returns `t` moved `secs` seconds later, carrying into the minute, hour, day, month and year.
+///
+/// A leap second (`second == 60`) carries like any other second.
+pub(crate) fn advance_timestamp(t: FtpTimestamp, secs: u64) -> FtpTimestamp {
+    let start = days_from_civil(t.year, t.month, t.day) * 86_400
+        + i64::from(t.hour) * 3600
+        + i64::from(t.minute) * 60
+        + i64::from(t.second);
+    let total = start.saturating_add(i64::try_from(secs).unwrap_or(i64::MAX));
+    let (year, month, day) = civil_from_days(total.div_euclid(86_400));
+    let secs_of_day = total.rem_euclid(86_400);
+    FtpTimestamp {
+        year,
+        month,
+        day,
+        hour: (secs_of_day / 3600) as u8,
+        minute: (secs_of_day % 3600 / 60) as u8,
+        second: (secs_of_day % 60) as u8,
+    }
 }
 
 /// Converts an `MDTM` reading into a `LIST` reference clock, discarding the seconds field.
@@ -498,7 +531,6 @@ pub(crate) fn parse_listing_line(line: &str, now: CurrentDateTime) -> Option<Ftp
 mod tests {
     use super::*;
 
-    #[cfg(feature = "std")]
     #[test]
     fn test_civil_from_days_known_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
@@ -506,6 +538,34 @@ mod tests {
         assert_eq!(civil_from_days(19_723), (2024, 1, 1));
         assert_eq!(civil_from_days(20_513), (2026, 3, 1));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        for days in [-1, 0, 11_016, 19_723, 20_513] {
+            let (y, m, d) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, m, d), days);
+        }
+    }
+
+    #[test]
+    fn test_advance_timestamp_carries_into_the_year() {
+        let t = |year, month, day, hour, minute, second| FtpTimestamp {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        };
+        assert_eq!(
+            advance_timestamp(t(2024, 12, 31, 23, 59, 30), 45),
+            t(2025, 1, 1, 0, 0, 15)
+        );
+        assert_eq!(
+            advance_timestamp(t(2024, 2, 28, 12, 0, 0), 86_400),
+            t(2024, 2, 29, 12, 0, 0)
+        );
+        assert_eq!(
+            advance_timestamp(t(2026, 2, 2, 8, 57, 30), 0),
+            t(2026, 2, 2, 8, 57, 30)
+        );
     }
 
     #[test]

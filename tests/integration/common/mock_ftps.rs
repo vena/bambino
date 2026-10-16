@@ -982,6 +982,80 @@ pub async fn run_mock_server_download_coalesced_replies(
     .await;
 }
 
+/// One step of a [`run_script`] session, after the handshake.
+pub enum Step {
+    /// Reads the command line (without `\r\n`) and answers with the reply line (without `\r\n`).
+    Expect(String, String),
+    /// Answers `LIST path` with the listing.
+    List(String, Vec<u8>),
+    /// Answers `RETR path` with the whole file and `226`.
+    Retr(String, Vec<u8>),
+    /// Answers `RETR path` with the file and sends nothing more, as a P1S does once the client
+    /// resets the data channel (#629): the session ends here.
+    RetrStopped(String, Vec<u8>),
+    /// Accepts `STOR path` of exactly this many bytes, answering `226`.
+    Stor(String, usize),
+}
+
+impl Step {
+    /// [`Step::Expect`] from string slices.
+    pub fn expect(cmd: &str, reply: &str) -> Self {
+        Self::Expect(cmd.to_string(), reply.to_string())
+    }
+}
+
+/// Runs the handshake, then `steps` in order, over one control channel.
+///
+/// Panics (failing the awaiting test) on any command the script didn't expect.
+pub async fn run_script(
+    server_control: tokio::io::DuplexStream,
+    data_container: DataContainer,
+    steps: Vec<Step>,
+) {
+    let mut ctl = Control::new(server_control, data_container);
+    ctl.handshake(true).await;
+    for step in steps {
+        match step {
+            Step::Expect(cmd, reply) => {
+                ctl.expect(&format!("{cmd}\r\n"), format!("{reply}\r\n").as_bytes())
+                    .await;
+            }
+            Step::List(path, lines) => ctl.serve_listing(&path, &lines).await,
+            Step::Retr(path, data) => {
+                ctl.serve_data(
+                    &format!("RETR {path}\r\n"),
+                    b"150 Opening data connection.\r\n",
+                    &data,
+                    b"226 Transfer complete.\r\n",
+                )
+                .await;
+            }
+            Step::RetrStopped(path, data) => {
+                let mut server_data = ctl.pasv().await;
+                ctl.expect(
+                    &format!("RETR {path}\r\n"),
+                    b"150 Opening data connection.\r\n",
+                )
+                .await;
+                server_data.write_all(&data).await.expect("data write");
+                return;
+            }
+            Step::Stor(path, len) => {
+                let mut server_data = ctl.pasv().await;
+                ctl.expect(&format!("STOR {path}\r\n"), b"150 Ok to send data.\r\n")
+                    .await;
+                let mut received = vec![0u8; len];
+                server_data
+                    .read_exact(&mut received)
+                    .await
+                    .expect("upload data read");
+                drop(server_data);
+                ctl.respond(b"226 File receive OK.\r\n").await;
+            }
+        }
+    }
+}
+
 /// Mock server for disconnect (QUIT) test.
 pub async fn run_mock_server_disconnect(server_control: tokio::io::DuplexStream) {
     let mut ctl = Control::control_only(server_control);

@@ -585,6 +585,44 @@ pub(crate) async fn read_prefix_until<IO: AsyncIo, T: TimerProvider>(
     Ok((filled, false))
 }
 
+/// Why [`read_each_to_eof`] stopped before the end of the stream.
+pub(crate) enum EachStop {
+    /// The read failed; the data channel is broken.
+    Read(Error),
+    /// The sink refused a chunk or the size cap was reached; the rest of the stream is unread.
+    Stopped(Error),
+}
+
+/// Reads `stream` to EOF, handing each read to `sink` as it arrives, and returns the byte count.
+///
+/// Holds one `FTPS_DATA_READ_BUF_SIZE` buffer, the same reads [`read_to_eof`] makes, with its
+/// per-read deadline. `max_bytes` caps the total like [`read_to_eof_bounded`]'s.
+pub(crate) async fn read_each_to_eof<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    timer: &T,
+    budget_ms: u64,
+    max_bytes: u64,
+    mut sink: impl FnMut(&[u8]) -> Result<(), Error>,
+) -> Result<u64, EachStop> {
+    let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
+    let mut total = 0u64;
+    loop {
+        let deadline_ms = ftps_deadline_from_ms(timer, budget_ms);
+        let n = match read_transfer_chunk(stream, &mut chunk, timer, deadline_ms).await {
+            Ok(0) => return Ok(total),
+            Ok(n) => n,
+            Err(e) => return Err(EachStop::Read(Error::Network(e))),
+        };
+        total += n as u64;
+        if total > max_bytes {
+            return Err(EachStop::Stopped(Error::ProtocolViolation(
+                "FTPS transfer exceeds maximum accepted size".into(),
+            )));
+        }
+        sink(&chunk[..n]).map_err(EachStop::Stopped)?;
+    }
+}
+
 /// Longest `LIST` line [`read_lines_to_eof`] passes on, in bytes, without its `\n`.
 ///
 /// A real line is the fixed columns (~60 bytes) plus a name of at most 255 bytes on ext4, or 255

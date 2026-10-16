@@ -1,0 +1,398 @@
+//! Listing, downloading and deleting a printer's print files and timelapses, whichever service holds them.
+//!
+//! Only FTPS backs these calls today, so every file is on external storage. The port-6000 file
+//! tunnel (#636) will add a second [`FileAddress`] arm for internal storage without changing
+//! anything public: a [`PrinterFile`] carries its own address, so a caller never sends one
+//! service's path to the other.
+
+#[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use crate::error::Error;
+use crate::file_tunnel::FileKind;
+use crate::ftps::client::PrinterClockProbe;
+use crate::ftps::parser::{FTP_MAX_LISTING_ENTRIES, advance_timestamp};
+use crate::ftps::{CurrentDateTime, FtpFile, FtpTimestamp, FtpsClient};
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+
+use super::PrinterClient;
+
+/// Directory FTPS keeps timelapses in [REF-FTPS-OPS]; its `thumbnail` subdirectory holds their covers.
+const TIMELAPSE_DIR: &str = "/timelapse";
+/// Directory a slicer's LAN send puts a `.3mf` in (measured on a P1S, 2026-10-15).
+const MODEL_DIR: &str = "/";
+/// Extension a listed print file must have, compared ignoring ASCII case.
+const MODEL_EXTENSION: &[u8] = b".3mf";
+/// The throwaway file the printer-clock probe uploads, reads the mtime of, and deletes.
+const CLOCK_PROBE_PATH: &str = "/bambino_clock_probe.txt";
+/// The probe file's contents.
+const CLOCK_PROBE_PAYLOAD: &[u8] = b"bambino clock probe";
+/// Earliest year a host clock is taken to be set; an embedded clock that never synced reads 1970.
+#[cfg(feature = "std")]
+const MIN_HOST_CLOCK_YEAR: i32 = 2000;
+/// Reference for a listing with no clock: the last minute of a leap year.
+///
+/// No entry is later than it, so none rolls back a year, and a Feb 29 entry parses. The years
+/// it supplies are never reported: those entries become [`FileTime::NoYear`].
+const NO_REFERENCE: CurrentDateTime = CurrentDateTime::new(2024, 12, 31, 23, 59);
+
+/// Where a [`PrinterFile`] is stored.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StorageKind {
+    /// The removable card or USB stick: everything FTPS serves [REF-FTPS-OPS].
+    External,
+    /// The printer's internal storage, which only the port-6000 file tunnel reaches.
+    ///
+    /// No listing returns it yet; it arrives with the file tunnel's support in
+    /// [`PrinterClient::list_files`] (#636).
+    Internal,
+}
+
+/// When a [`PrinterFile`] was last modified, in the form the service that listed it gives.
+///
+/// Every form is the printer's own clock at the time it wrote the file, and Bambu printers in
+/// LAN mode often run months behind real time (see [`CurrentDateTime`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileTime {
+    /// A calendar time from an FTPS listing, with no seconds.
+    Calendar {
+        /// The time. `hour` and `minute` are 0 when the listing gave a year instead of a time.
+        at: FtpTimestamp,
+        /// `true` when the listing left the year out and it was rebuilt against a reference clock.
+        ///
+        /// The default reference is the host's clock, which can put such a file in the wrong
+        /// year. Turn on
+        /// [`with_printer_clock_probe`](PrinterClient::with_printer_clock_probe) to rebuild it
+        /// against the printer's clock instead.
+        year_inferred: bool,
+    },
+    /// A calendar time from an FTPS listing that left the year out, with no reference clock to rebuild it.
+    ///
+    /// Happens without `std`, where there is no host clock, or with a host clock that was never
+    /// set. Turn on [`with_printer_clock_probe`](PrinterClient::with_printer_clock_probe) to get
+    /// the year from the printer's clock.
+    NoYear {
+        /// Calendar month (1-12).
+        month: u8,
+        /// Day of month (1-31).
+        day: u8,
+        /// Hour (0-23).
+        hour: u8,
+        /// Minute (0-59).
+        minute: u8,
+    },
+    /// Unix seconds, as the file tunnel reports them.
+    Unix(u64),
+    /// The listing gave no time.
+    Unknown,
+}
+
+/// One file from [`PrinterClient::list_files`].
+///
+/// Pass it back to [`PrinterClient::download_file`] or [`PrinterClient::delete_file`]. It
+/// can't be built by hand: it carries the service and address it was listed from, which aren't
+/// public, so a file is always reached the way it was found.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrinterFile {
+    /// The file name, without its directory.
+    pub name: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Modification time.
+    pub modified: FileTime,
+    /// What kind of file this is: the kind the listing asked for.
+    pub kind: FileKind,
+    /// Where the file is stored.
+    pub storage: StorageKind,
+    address: FileAddress,
+}
+
+/// How the service that listed a [`PrinterFile`] addresses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileAddress {
+    /// A full card path over FTPS.
+    Ftps { path: String },
+}
+
+impl PrinterFile {
+    /// An FTPS listing entry from `dir`, its year rebuilt only when `has_reference`.
+    fn from_ftps(dir: &str, file: FtpFile, kind: FileKind, has_reference: bool) -> Self {
+        let modified = if file.year_is_inferred && !has_reference {
+            FileTime::NoYear {
+                month: file.modified.month,
+                day: file.modified.day,
+                hour: file.modified.hour,
+                minute: file.modified.minute,
+            }
+        } else {
+            FileTime::Calendar {
+                at: file.modified,
+                year_inferred: file.year_is_inferred,
+            }
+        };
+        let path = if dir.ends_with('/') {
+            format!("{dir}{}", file.name)
+        } else {
+            format!("{dir}/{}", file.name)
+        };
+        Self {
+            name: file.name,
+            size: file.size,
+            modified,
+            kind,
+            storage: StorageKind::External,
+            address: FileAddress::Ftps { path },
+        }
+    }
+}
+
+/// Whether `name` ends in `.3mf`, ignoring ASCII case.
+fn is_model_file(name: &str) -> bool {
+    let name = name.as_bytes();
+    name.len() >= MODEL_EXTENSION.len()
+        && name[name.len() - MODEL_EXTENSION.len()..].eq_ignore_ascii_case(MODEL_EXTENSION)
+}
+
+/// The host's clock as a listing reference, or `None` when it has none or it was never set.
+#[cfg(feature = "std")]
+fn host_clock() -> Option<CurrentDateTime> {
+    let now = CurrentDateTime::now_utc();
+    (now.year >= MIN_HOST_CLOCK_YEAR).then_some(now)
+}
+
+/// The host's clock as a listing reference: none without `std`.
+#[cfg(not(feature = "std"))]
+fn host_clock() -> Option<CurrentDateTime> {
+    None
+}
+
+/// Reads the printer's clock: uploads [`CLOCK_PROBE_PATH`], reads its mtime with `MDTM`, then deletes it.
+///
+/// Never fails: a failure is logged and recorded as [`PrinterClockProbe::Failed`]. The delete is
+/// attempted whenever the session is still usable, even after a failed upload, which may have
+/// left a partial file.
+async fn probe_printer_clock<RawIO, Tls, Factory, Timer>(
+    ftps: &mut FtpsClient<RawIO, Tls, Factory, Timer>,
+) -> PrinterClockProbe
+where
+    RawIO: AsyncIo,
+    Tls: TlsConnector<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
+    Timer: TimerProvider,
+{
+    let upload = ftps
+        .upload_file(CLOCK_PROBE_PATH, CLOCK_PROBE_PAYLOAD)
+        .await;
+    let read_at_ms = ftps.timer().now_millis();
+    let mdtm = match upload {
+        Ok(()) => ftps.modification_time(CLOCK_PROBE_PATH).await,
+        Err(e) => Err(e),
+    };
+    if !ftps.is_poisoned()
+        && let Err(e) = ftps.delete_file(CLOCK_PROBE_PATH).await
+    {
+        log::warn!("Printer clock probe: could not delete {CLOCK_PROBE_PATH}: {e}");
+    }
+    match mdtm {
+        Ok(Some(at)) => PrinterClockProbe::Read { at, read_at_ms },
+        Ok(None) => {
+            log::warn!(
+                "Printer clock probe: this firmware has no MDTM; listing against the host clock"
+            );
+            PrinterClockProbe::Failed
+        }
+        Err(e) => {
+            log::warn!("Printer clock probe failed ({e}); listing against the host clock");
+            PrinterClockProbe::Failed
+        }
+    }
+}
+
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    FtpsTimer,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
+where
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
+    Timer: TimerProvider,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    FtpsTimer: TimerProvider,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
+{
+    /// Has [`list_files`](Self::list_files) read the printer's clock before an FTPS listing, so rebuilt years are the printer's.
+    ///
+    /// An FTPS listing leaves the year out for recent files, and the year can only be rebuilt
+    /// against the printer's clock, which in LAN mode runs months behind and restarts on every
+    /// boot. By default `list_files` uses the host's clock and flags each rebuilt year
+    /// ([`FileTime::Calendar`]'s `year_inferred`), or reports [`FileTime::NoYear`] without one.
+    ///
+    /// When on, the first `list_files` of each FTPS session uploads a throwaway file
+    /// (`/bambino_clock_probe.txt`), reads its mtime with `MDTM`, and deletes it. The reading is
+    /// kept for that session, advanced by the time since, and dropped when the session ends,
+    /// since a reboot both ends the session and resets the clock. If the probe fails (no `MDTM`,
+    /// a full or read-only card, any error), that session uses the default and the failure is
+    /// logged; the listing itself goes ahead.
+    ///
+    /// Off by default because it writes to the card as a side effect of a listing: the file is
+    /// briefly visible on the printer's screen, and every new FTPS session probes again, including
+    /// the one after a stopped download ends a session. It runs only inside `list_files`, on the
+    /// session the listing uses.
+    #[must_use]
+    pub fn with_printer_clock_probe(mut self, enabled: bool) -> Self {
+        self.core.ftps_clock_probe = enabled;
+        self
+    }
+
+    /// Lists the printer's files of one kind.
+    ///
+    /// Served over FTPS, so only external storage (card or USB stick) is listed; internal storage
+    /// arrives with the port-6000 file tunnel (#636). One `LIST` of one directory, never
+    /// recursive:
+    ///
+    /// - [`FileKind::Timelapse`]: the files in `/timelapse`, not its `thumbnail` covers.
+    /// - [`FileKind::Model`]: the `.3mf` files at the card root, where a slicer's LAN send puts them.
+    /// - [`FileKind::Video`]: always empty. No source says where FTPS keeps recorded videos.
+    ///
+    /// **Which clock rebuilds a missing year.** A listing leaves the year out for recent files.
+    /// By default it is rebuilt against the host's clock (with `std`) and flagged
+    /// ([`FileTime::Calendar`]'s `year_inferred`); without `std`, or with a host clock that was
+    /// never set, it isn't rebuilt ([`FileTime::NoYear`]). The printer's clock is the right
+    /// reference and the host's can put a file in the wrong year: turn on
+    /// [`with_printer_clock_probe`](Self::with_printer_clock_probe) to read it, at the cost of an
+    /// upload, an `MDTM` and a delete once per FTPS session.
+    ///
+    /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] files.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConfigured`] without FTPS, and whatever
+    /// [`FtpsClient::list_directory`] returns.
+    pub async fn list_files(&mut self, kind: FileKind) -> Result<Vec<PrinterFile>, Error> {
+        let (dir, keep): (&str, fn(&FtpFile) -> bool) = match kind {
+            FileKind::Timelapse => (TIMELAPSE_DIR, |f| !f.is_dir),
+            FileKind::Model => (MODEL_DIR, |f| !f.is_dir && is_model_file(&f.name)),
+            FileKind::Video => return Ok(Vec::new()),
+        };
+        let reference = self.listing_reference().await?;
+        let ftps = self.ftps().await?;
+        let mut files = Vec::new();
+        let mut capped = false;
+        ftps.list_directory_each(dir, reference.unwrap_or(NO_REFERENCE), |file| {
+            if !keep(&file) {
+                return;
+            }
+            if files.len() >= FTP_MAX_LISTING_ENTRIES {
+                if !capped {
+                    capped = true;
+                    log::warn!(
+                        "{dir} lists more than {FTP_MAX_LISTING_ENTRIES} files; truncating the listing"
+                    );
+                }
+                return;
+            }
+            files.push(PrinterFile::from_ftps(dir, file, kind, reference.is_some()));
+        })
+        .await?;
+        Ok(files)
+    }
+
+    /// Downloads a listed file, passing each read to `sink` in order, and returns its size.
+    ///
+    /// Checked against the printer's `SIZE` once the transfer ends, so treat what `sink` received
+    /// as provisional until this returns `Ok`. **An error from `sink` ends the FTPS session**
+    /// (see [`FtpsClient::download_file_each`]); the next FTPS call reconnects.
+    pub async fn download_file(
+        &mut self,
+        file: &PrinterFile,
+        sink: impl FnMut(&[u8]) -> Result<(), Error>,
+    ) -> Result<u64, Error> {
+        match &file.address {
+            FileAddress::Ftps { path } => self.ftps().await?.download_file_each(path, sink).await,
+        }
+    }
+
+    /// Deletes a listed file. Deleting one that is already gone succeeds.
+    pub async fn delete_file(&mut self, file: &PrinterFile) -> Result<(), Error> {
+        match &file.address {
+            FileAddress::Ftps { path } => self.ftps().await?.delete_file(path).await,
+        }
+    }
+
+    /// The reference clock an FTPS listing rebuilds missing years against, or `None` for none.
+    async fn listing_reference(&mut self) -> Result<Option<CurrentDateTime>, Error> {
+        if !self.core.ftps_clock_probe {
+            return Ok(host_clock());
+        }
+        let ftps = self.ftps().await?;
+        if ftps.printer_clock == PrinterClockProbe::NotRun {
+            ftps.printer_clock = probe_printer_clock(ftps).await;
+            if ftps.is_poisoned() {
+                // The probe ended the session. List on a fresh one, without probing it again:
+                // a printer whose session the probe breaks would otherwise never list.
+                self.ftps().await?.printer_clock = PrinterClockProbe::Failed;
+            }
+        }
+        let ftps = self.ftps().await?;
+        Ok(match ftps.printer_clock {
+            PrinterClockProbe::Read { at, read_at_ms } => {
+                let timer = ftps.timer();
+                let elapsed_secs = if timer.has_real_clock() {
+                    timer.now_millis().saturating_sub(read_at_ms) / 1000
+                } else {
+                    0
+                };
+                Some(advance_timestamp(at, elapsed_secs).into())
+            }
+            PrinterClockProbe::NotRun | PrinterClockProbe::Failed => host_clock(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_model_file() {
+        assert!(is_model_file("job.gcode.3mf"));
+        assert!(is_model_file("JOB.3MF"));
+        assert!(!is_model_file("job.gcode"));
+        assert!(!is_model_file("3mf"));
+        assert!(!is_model_file("é.3m"));
+    }
+}

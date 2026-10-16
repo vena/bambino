@@ -23,6 +23,7 @@ mod connect;
 pub mod drying;
 pub mod dummy;
 mod file_tunnel;
+mod files;
 mod hardware;
 mod job;
 mod motion;
@@ -33,6 +34,7 @@ mod telemetry;
 mod thermal;
 pub mod types;
 
+pub use crate::file_tunnel::FileKind;
 pub use crate::mqtt::commands::{AirductMode, IdleIgnoreScope};
 pub use crate::quirks::Axis;
 #[doc(inline)]
@@ -50,6 +52,7 @@ pub use command::{
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
+pub use files::{FileTime, PrinterFile, StorageKind};
 pub use job::{JobImages, JobPlate, PlateSource};
 pub use motion::HOMING_WAIT_TIMEOUT;
 pub use thermal::PreheatHandles;
@@ -199,6 +202,8 @@ pub(crate) struct ClientCore {
     /// feature; on `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead.
     /// Default `false`.
     pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
+    /// Whether `list_files` reads the printer's clock over FTPS; see `with_printer_clock_probe`.
+    pub(crate) ftps_clock_probe: bool,
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,
     pub(crate) file_tunnel_max_frame_size: Option<usize>,
@@ -222,6 +227,7 @@ impl ClientCore {
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
             ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
+            ftps_clock_probe: false,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             file_tunnel_max_frame_size: None,

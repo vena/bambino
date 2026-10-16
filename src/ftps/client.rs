@@ -133,6 +133,22 @@ where
     /// read — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing with a spurious
     /// `ConnectionReset` when scoped too narrowly.
     control_fill_buf: Vec<u8>,
+    /// The printer's clock as `PrinterClient::list_files`' probe read it on this session.
+    ///
+    /// Kept here so it ends with the session: the printer's clock restarts on a reboot, and a
+    /// reboot ends the session.
+    pub(crate) printer_clock: PrinterClockProbe,
+}
+
+/// What `PrinterClient::list_files`' printer-clock probe has learned on one FTPS session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrinterClockProbe {
+    /// Not run on this session.
+    NotRun,
+    /// The printer's clock read `at` when the timer read `read_at_ms`.
+    Read { at: FtpTimestamp, read_at_ms: u64 },
+    /// Run and failed; this session uses the default reference.
+    Failed,
 }
 
 /// Sends `close_notify` on `stream`, bounded by `FTPS_WRITE_TIMEOUT_SECS` under a real clock.
@@ -389,6 +405,7 @@ where
             poisoned: false,
             tls_version_check,
             control_fill_buf,
+            printer_clock: PrinterClockProbe::NotRun,
         }
     }
 
@@ -670,7 +687,10 @@ where
     /// when deciding to omit it. Bambu printers in LAN mode routinely never sync time, so the two
     /// clocks can be years apart; see [`CurrentDateTime`] for how to recover the printer's and what
     /// passing host time instead costs. Entries whose year came from `now` are flagged with
-    /// [`FtpFile::year_is_inferred`].
+    /// [`FtpFile::year_is_inferred`]. To have the reference handled for you, list through
+    /// [`PrinterClient::list_files`](crate::client::PrinterClient::list_files), which can read the
+    /// printer's clock itself
+    /// ([`with_printer_clock_probe`](crate::client::PrinterClient::with_printer_clock_probe)).
     ///
     /// Returns at most [`FTP_MAX_LISTING_ENTRIES`] entries. To reuse a vector's capacity across
     /// listings, use [`list_directory_into`](Self::list_directory_into); to place a listing's
@@ -933,15 +953,67 @@ where
         // early (same failure class documented for P2S/X2D, or any other early-close
         // condition). The control channel was read cleanly here, so this is a plain error,
         // not a poisoning path.
+        self.check_downloaded_size(remote_path, file_payload.len() as u64)
+            .await?;
+        Ok(file_payload)
+    }
+
+    /// Downloads a remote file like [`download_file`](Self::download_file), handing each read to `sink` as it arrives, and returns the byte count.
+    ///
+    /// Nothing is collected, so a file larger than the heap can be written out as it arrives.
+    /// The same `SIZE` recheck runs once the transfer ends, so treat what `sink` received as
+    /// provisional until this returns `Ok`.
+    ///
+    /// **An error from `sink` ends this session**, as a full buffer does for
+    /// [`download_prefix`](Self::download_prefix): the printer can only be stopped mid-file with
+    /// an RST, after which it closes the control connection. The client is left poisoned and
+    /// `PrinterClient::ftps()` reconnects. The sink's error is returned.
+    ///
+    /// # Errors
+    ///
+    /// As for `download_file`, plus the sink's own error.
+    pub async fn download_file_each(
+        &mut self,
+        remote_path: &str,
+        sink: impl FnMut(&[u8]) -> Result<(), Error>,
+    ) -> Result<u64, Error> {
+        let mut data_channel = self.open_transfer("RETR", remote_path).await?;
+        let read = read_each_to_eof(
+            &mut data_channel,
+            &self.timer,
+            FTPS_READ_TIMEOUT_SECS * 1000,
+            FTPS_MAX_TRANSFER_BYTES as u64,
+            sink,
+        )
+        .await;
+        let total = match read {
+            Ok(total) => total,
+            Err(EachStop::Read(e)) => {
+                // The final reply is still owed.
+                self.poisoned = true;
+                return Err(e);
+            }
+            Err(EachStop::Stopped(e)) => {
+                self.abort_data_channel(data_channel).await;
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
+        self.finish_transfer("RETR", data_channel).await?;
+        self.check_downloaded_size(remote_path, total).await?;
+        Ok(total)
+    }
+
+    /// Compares a finished download's byte count with the printer's `SIZE` for the file.
+    async fn check_downloaded_size(&mut self, remote_path: &str, read: u64) -> Result<(), Error> {
         let remote_size = self.get_file_size(remote_path).await?;
-        if remote_size != file_payload.len() as u64 {
+        if remote_size != read {
             return Err(Error::ProtocolViolation(
                 "Downloaded file size does not match remote SIZE (possible truncated transfer)"
                     .into(),
             ));
         }
-
-        Ok(file_payload)
+        Ok(())
     }
 
     /// Reads the first `buf.len()` bytes of a remote file into `buf`, then stops the transfer.
@@ -1222,6 +1294,11 @@ where
     #[must_use]
     pub fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+
+    /// The timer bounding this session's reads.
+    pub(crate) fn timer(&self) -> &FtpsTimer {
+        &self.timer
     }
 
     /// Sends a QUIT command, terminates the FTP session, and returns the connector, factory and timer for a reconnect.

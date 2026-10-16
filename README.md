@@ -321,6 +321,19 @@ let data = ftp.download_file("/timelapse/video.mp4").await?;
 let free = ftp.get_available_space().await?;
 ```
 
+To list, download and delete print files and timelapses without working with card paths, use the `PrinterClient` calls. They run over FTPS today and will also cover internal storage, through the file tunnel below, without code changes (#636):
+
+```rust
+use bambino::client::FileKind;
+
+let files = printer.list_files(FileKind::Model).await?; // the .3mf files at the card root
+let mut out = Vec::new();
+printer.download_file(&files[0], |chunk| { out.extend_from_slice(chunk); Ok(()) }).await?;
+printer.delete_file(&files[0]).await?;
+```
+
+`download_file` hands each read to the closure, so a file never has to fit in memory. An error from the closure stops the transfer and ends the FTPS session, which the next call reconnects. `FileKind::Timelapse` lists `/timelapse`; `FileKind::Video` is always empty over FTPS. A listed file's `modified` is a `FileTime`: see the timestamps section below for why its year may be rebuilt, and for `.with_printer_clock_probe(true)`.
+
 > **Reading only the start of a file:** `ftp.download_prefix(path, &mut buf)` fills `buf` from the start of the file and stops the transfer, so a few tens of KB of a large file (a `.3mf`'s plate images, say) never cost the whole download. Stopping early ends the FTPS session, and the next `ftps()` call reconnects. The printer has no other partial read: see [REF-FTPS-PARTIAL] in `reference/02_ftps.md`.
 >
 > **Direct protocol access:** For cases where `PrinterClient` isn't needed, `FtpsClient::connect()` provides standalone FTPS access; see the [`ftps`](src/ftps/) module.
@@ -407,6 +420,8 @@ if let Some(t) = printer_now {
 ```
 
 Feed that into `list_directory`'s `now: CurrentDateTime` parameter, and it automatically reconstructs missing years against the best reference available.
+
+`PrinterClient::list_files` can do this for you. Build the client with `.with_printer_clock_probe(true)` and the first `list_files` on each FTPS session runs this probe, then rebuilds years against the printer's clock, advanced by the time since the probe. A new session probes again, since a reboot ends the session and resets the clock. Without it, `list_files` uses the host's clock (or, without `std`, reports `FileTime::NoYear` for a file whose year is missing). The probe is off by default because it writes to the card: the file shows briefly on the printer's screen. Turn it on when you display or compare file dates. If the probe fails (no `MDTM`, a full card), that session falls back to the host's clock and the listing still succeeds.
 
 > Without `MDTM`, a similar probe could be done with `list_directory` (upload, fetch list, read time of the file name you uploaded), but only partly since recent files in a `LIST` return lack the year.
 

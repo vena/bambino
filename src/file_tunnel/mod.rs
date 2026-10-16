@@ -33,7 +33,9 @@ pub const DEFAULT_MAX_FRAME_PAYLOAD: usize = 4 * 1024 * 1024;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
-/// Which kind of file a listing asks for (`LIST_INFO`'s `type`).
+/// Which kind of file a listing asks for: `LIST_INFO`'s `type`, and the kind `PrinterClient::list_files` lists over either service.
+///
+/// Re-exported as `bambino::client::FileKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileKind {
     /// Timelapse videos.
