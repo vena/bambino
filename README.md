@@ -339,13 +339,20 @@ if printer.capabilities().file_tunnel_support().is_supported() {
     let storages = tunnel.media_ability().await?;   // e.g. ["emmc", "udisk"]
     let files = tunnel.list_files(FileKind::Model, Some("emmc")).await?;
     let pick = tunnel.read_running_job_member("Metadata/pick_1.png", 1 << 20).await?;
+    tunnel.upload("emmc", "job.gcode.3mf", &file_bytes).await?; // caller picks the storage
 }
 printer.disconnect_file_tunnel().await; // frees the TLS session
+
+// Print the uploaded file from internal storage (url: brtc://emmc/job.gcode.3mf)
+let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job", 1, "auto")
+    .from_internal_storage();
 ```
+
+The tunnel also reads single members of a listed file (`read_file_member`), deletes files (`delete_file`), and cancels a stream it stops early instead of dropping the session. `printer.read_running_job_images(&mut buf)` reads the running job's plate and pick images through the tunnel where it can, without knowing where the file is stored, and falls back to FTPS.
 
 The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. P1 and A1 printers never serve it, and `file_tunnel()` refuses them without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB, and `.with_file_tunnel_max_frame_size(bytes)` lowers the default 4 MiB frame cap to fit the heap.
 
-> **Not yet run against a printer that serves it.** The protocol follows Bambu Studio's source and two independent working clients; only the P1S's refusal has been checked on hardware.
+> **Not yet run against a printer that serves it.** The protocol follows Bambu Studio's source and two independent working clients; only the P1S's refusal has been checked on hardware. Upload is the least certain part: it sends every chunk without waiting for a reply, which rests on one of those clients' P2S captures.
 
 ### Timestamps on LAN-mode printers
 

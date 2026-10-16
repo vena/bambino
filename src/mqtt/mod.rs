@@ -28,7 +28,7 @@ pub use commands::{
     AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, AmsMappingTable,
     AmsSource, BuzzerRequest, CalibrationMode, CalibrationRequest, ClampedTaskId,
     CleanPrintErrorRequest, DryingParams, GCodeRequest, GetAccessCodeRequest, GetVersionRequest,
-    HmsActionRequest, IdleIgnoreRequest, LedCtrlRequest, NozzleRack, PrintJobConfig,
-    PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest, PushAllRequest, SkipObjectsRequest,
-    StandardControlRequest, UiopRequest, resolve_rack_nozzle_mapping,
+    HmsActionRequest, IdleIgnoreRequest, JobFileLocation, LedCtrlRequest, NozzleRack,
+    PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest, PushAllRequest,
+    SkipObjectsRequest, StandardControlRequest, UiopRequest, resolve_rack_nozzle_mapping,
 };

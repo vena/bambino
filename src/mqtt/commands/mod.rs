@@ -38,8 +38,8 @@ pub use hardware::{
     StoreSentFilesRequest, XcamControlRequest,
 };
 pub use print_job::{
-    AmsMappingTable, AmsSource, CalibrationMode, NozzleRack, PrintJobConfig, ProjectFileRequest,
-    resolve_rack_nozzle_mapping,
+    AmsMappingTable, AmsSource, CalibrationMode, JobFileLocation, NozzleRack, PrintJobConfig,
+    ProjectFileRequest, resolve_rack_nozzle_mapping,
 };
 pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
 

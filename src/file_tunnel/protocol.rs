@@ -61,12 +61,20 @@ pub(crate) const BINARY_SEPARATOR: &[u8] = b"\n\n";
 pub(crate) mod cmd {
     /// List files of one type on one storage.
     pub(crate) const LIST_INFO: u32 = 0x0001;
+    /// Read members of a listed file without downloading it.
+    pub(crate) const SUB_FILE: u32 = 0x0002;
+    /// Delete files.
+    pub(crate) const FILE_DEL: u32 = 0x0003;
     /// Download a file, or an in-memory file under `mem:/<index>`.
     pub(crate) const FILE_DOWNLOAD: u32 = 0x0004;
+    /// Chunked upload.
+    pub(crate) const FILE_UPLOAD: u32 = 0x0005;
     /// List the storages this printer has.
     pub(crate) const REQUEST_MEDIA_ABILITY: u32 = 0x0007;
     /// First printer-initiated notify `cmdtype`; a frame with no `result` and a `cmdtype` at or above it is a notify.
     pub(crate) const NOTIFY_FIRST: u32 = 0x0100;
+    /// Cancel in-flight requests by `sequence`.
+    pub(crate) const TASK_CANCEL: u32 = 0x1000;
 }
 
 /// `result` values the client acts on, from Studio's `PrinterFileSystem.h`; the rest only reach an error message.
@@ -79,6 +87,8 @@ pub(crate) mod result {
     pub(crate) const ERROR_JSON: i64 = 2;
     /// Wrong size; also Studio's code for a `mem:/` status blob reporting size 0.
     pub(crate) const FILE_SIZE_ERR: i64 = 12;
+    /// The upload's target name exists; Studio continues, and the upload overwrites it.
+    pub(crate) const FILE_EXIST: i64 = 19;
 }
 
 /// One decoded frame header.
@@ -356,6 +366,75 @@ impl MemDownloadStatus {
     pub(crate) fn accepted(&self) -> bool {
         self.result.is_some_and(|r| r != result::CONTINUE) && self.size != Some(0)
     }
+}
+
+/// `TASK_CANCEL` request body, as Studio's `PrinterFileSystem::CancelRequests` builds it.
+#[derive(Serialize)]
+pub(crate) struct TaskCancelReq<'a> {
+    pub(crate) tasks: &'a [u32],
+}
+
+/// `SUB_FILE` request body for named members, as Studio's `PrinterFileSystem::UpdateFocusThumbnail2` builds it (without `zip`).
+#[derive(Serialize)]
+pub(crate) struct SubFileReq<'a> {
+    pub(crate) paths: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) storage: Option<&'a str>,
+}
+
+/// One `SUB_FILE` reply frame's body.
+///
+/// Studio reads `path` (the requested `file#member`), `size` (this fragment's length, 0 for a
+/// missing member) and `continue` (more fragments of the same member follow).
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct SubFileReply {
+    #[serde(default)]
+    pub(crate) path: String,
+    #[serde(default)]
+    pub(crate) size: u64,
+    #[serde(default, rename = "continue")]
+    pub(crate) more_fragments: bool,
+}
+
+/// `FILE_DEL` request body, as Studio's `PrinterFileSystem::DeleteFilesContinue` builds it: `paths` when the listing gave them, else `delete` with bare names.
+#[derive(Serialize)]
+pub(crate) struct FileDelReq<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) paths: Option<&'a [&'a str]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) delete: Option<&'a [&'a str]>,
+}
+
+/// The `type` of every upload Studio makes (`PrinterFileSystem::RequestUploadFile`).
+pub(crate) const UPLOAD_TYPE_MODEL: &str = "model";
+
+/// `FILE_UPLOAD` init request body, as Studio's `PrinterFileSystem::RequestUploadFile` builds it.
+#[derive(Serialize)]
+pub(crate) struct UploadInitReq<'a> {
+    #[serde(rename = "type")]
+    pub(crate) kind: &'a str,
+    pub(crate) storage: &'a str,
+    pub(crate) path: &'a str,
+    pub(crate) total: u64,
+}
+
+/// `FILE_UPLOAD` init reply body: the chunk size in KiB and the byte offset to start from.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct UploadInitReply {
+    #[serde(default)]
+    pub(crate) chunk_size: u64,
+    #[serde(default)]
+    pub(crate) offset: u64,
+}
+
+/// One `FILE_UPLOAD` chunk's request body, as Studio's `PrinterFileSystem::UploadFileTask` builds it.
+#[derive(Serialize)]
+pub(crate) struct UploadChunkReq<'a> {
+    pub(crate) frag_id: u32,
+    pub(crate) offset: u64,
+    pub(crate) size: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file_md5: Option<&'a str>,
 }
 
 /// Whether `digest` matches the printer's `file_md5`, ignoring case as Studio does.

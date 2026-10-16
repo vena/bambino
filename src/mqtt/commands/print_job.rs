@@ -183,6 +183,25 @@ pub struct NozzleRack {
     pub rack_nozzle_id: i32,
 }
 
+/// Where the printer finds a job's `.3mf`, which decides the start command's `url` [REF-MQTT-LIFECYCLE].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JobFileLocation {
+    /// On the SD card or USB stick, uploaded over FTPS: `ftp://<name>`.
+    #[default]
+    Card,
+    /// On internal storage, uploaded through the port-6000 file tunnel to `emmc`: `brtc://emmc/<name>`.
+    ///
+    /// The URL Bambu's own plugin sends after a tunnel upload to internal storage
+    /// (open-bamboo-networking capture on a P2S), and the dispatch URL bambuddy records for H2,
+    /// P2S and X2D jobs sent there (`print_storage.py`). Not yet sent by bambino to a printer.
+    InternalStorage,
+}
+
+/// The `url` prefix of a job on internal storage, after its file name is appended.
+const INTERNAL_STORAGE_URL_PREFIX: &str = "brtc://emmc/";
+/// The `url` prefix of a job on the card.
+const CARD_URL_PREFIX: &str = "ftp://";
+
 /// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 ///
 /// Replaces the positional parameter list on `start_print()` with named fields and sensible
@@ -228,6 +247,9 @@ pub struct PrintJobConfig {
     /// Set it with [`pa_profile_sharing`](Self::pa_profile_sharing), which describes the wire
     /// encoding and its sources.
     pub pa_profile_shared_by_type: Option<bool>,
+    /// Where the printer finds the file; [`JobFileLocation::Card`] unless
+    /// [`from_internal_storage`](Self::from_internal_storage) was called.
+    pub file_location: JobFileLocation,
 }
 
 impl PrintJobConfig {
@@ -256,7 +278,17 @@ impl PrintJobConfig {
             ams: None,
             nozzle_rack: None,
             pa_profile_shared_by_type: None,
+            file_location: JobFileLocation::Card,
         }
+    }
+
+    /// Prints `job_filename` from internal storage, where [`FileTunnelClient::upload`](crate::file_tunnel::FileTunnelClient::upload) to `emmc` put it, instead of from the card.
+    ///
+    /// Sends `url: "brtc://emmc/<job_filename>"`; see [`JobFileLocation::InternalStorage`].
+    #[must_use]
+    pub fn from_internal_storage(mut self) -> Self {
+        self.file_location = JobFileLocation::InternalStorage;
+        self
     }
 
     /// Enables AMS and sets the flat slot-mapping array (`ams_mapping`).
@@ -464,7 +496,7 @@ pub struct ProjectFilePayload {
     pub task_id: String,
     /// Sliced compilation container file path residing on the SD card (e.g., "job.3mf").
     pub file: String,
-    /// Connection endpoint directory scheme (Must use `ftp://` for local loopback parsing) [REF-MQTT-LIFECYCLE].
+    /// Where the printer finds the file: `ftp://<name>` on the card, or `brtc://emmc/<name>` on internal storage ([`JobFileLocation`]) [REF-MQTT-LIFECYCLE].
     pub url: String,
     /// Whether timelapse capture is enabled for this job.
     pub timelapse: bool,
@@ -534,7 +566,12 @@ impl ProjectFileRequest {
         sequence_id: impl Into<ClampedTaskId>,
         model: PrinterModel,
     ) -> Self {
-        let url = format!("ftp://{}", config.job_filename);
+        let url = match config.file_location {
+            JobFileLocation::Card => format!("{CARD_URL_PREFIX}{}", config.job_filename),
+            JobFileLocation::InternalStorage => {
+                format!("{INTERNAL_STORAGE_URL_PREFIX}{}", config.job_filename)
+            }
+        };
 
         let quirks = model.quirks();
         let is_single_nozzle = quirks.physical_nozzle_count() == 1;
@@ -652,5 +689,25 @@ impl ProjectFileRequest {
                     .map(|shared| if shared { 0 } else { 1 }),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_follows_the_file_location() {
+        let config =
+            PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job", 1, "auto");
+        let card = ProjectFileRequest::from_config(&config, 1u64, PrinterModel::P2S);
+        assert_eq!(card.print.url, "ftp://job.gcode.3mf");
+        let internal = ProjectFileRequest::from_config(
+            &config.from_internal_storage(),
+            1u64,
+            PrinterModel::P2S,
+        );
+        assert_eq!(internal.print.url, "brtc://emmc/job.gcode.3mf");
+        assert_eq!(internal.print.file, "job.gcode.3mf");
     }
 }

@@ -12,10 +12,22 @@ use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, TimerProvider, TlsConnector, read_chunk, with_deadline};
 
 use super::protocol::{
-    self as p, DownloadReply, DownloadReq, Envelope, FrameHeader, ListInfoReply, ListInfoReq,
-    MediaAbilityReply, MediaAbilityReq, MemDownloadStatus, ProjectFileParam, cmd, result,
+    self as p, DownloadReply, DownloadReq, Envelope, FileDelReq, FrameHeader, ListInfoReply,
+    ListInfoReq, MediaAbilityReply, MediaAbilityReq, MemDownloadStatus, ProjectFileParam,
+    SubFileReply, SubFileReq, TaskCancelReq, UploadChunkReq, UploadInitReply, UploadInitReq, cmd,
+    result,
 };
 use super::{FileKind, TunnelFile};
+
+/// A reply body the client doesn't read, for [`FileTunnelClient::single_reply`]'s `Default` bound.
+#[derive(Default)]
+struct IgnoredAnyDefault;
+
+impl<'de> serde::Deserialize<'de> for IgnoredAnyDefault {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        IgnoredAny::deserialize(d).map(|_| Self)
+    }
+}
 
 /// Wall-clock budget for each handshake reply: the login ack and the setup reply.
 ///
@@ -29,6 +41,8 @@ pub(crate) const FILE_TUNNEL_READ_TIMEOUT_SECS: u64 = 30;
 pub(crate) const FILE_TUNNEL_WRITE_TIMEOUT_SECS: u64 = 30;
 /// Frames skipped while waiting for one reply (notifies, stale replies) before the session is declared desynced.
 const MAX_SKIPPED_FRAMES: usize = 64;
+/// Frames skipped while waiting for a `TASK_CANCEL` reply: the abandoned stream's in-flight fragments come first.
+const CANCEL_MAX_SKIPPED_FRAMES: usize = 256;
 /// `mem:/` index of a member of the running job's `.3mf` (Studio's `PrinterFileSystem::GetPickImage`).
 pub(crate) const MEM_PROJECT_FILE_INDEX: u32 = 16;
 /// The command name a running-job member read reports in its errors.
@@ -303,7 +317,19 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         cmdtype: u32,
         sequence: u32,
     ) -> Result<Vec<u8>, Error> {
-        for _ in 0..=MAX_SKIPPED_FRAMES {
+        self.read_reply_frame_within(timer, cmdtype, sequence, MAX_SKIPPED_FRAMES)
+            .await
+    }
+
+    /// [`read_reply_frame`](Self::read_reply_frame) with its own budget of skipped frames.
+    async fn read_reply_frame_within<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        cmdtype: u32,
+        sequence: u32,
+        max_skipped: usize,
+    ) -> Result<Vec<u8>, Error> {
+        for _ in 0..=max_skipped {
             let (header, payload) = match read_frame(
                 &mut self.stream,
                 timer,
@@ -340,9 +366,49 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             );
         }
         self.poison(Error::ProtocolViolation(
-            format!("file tunnel sent {MAX_SKIPPED_FRAMES} unrelated frames without answering")
-                .into(),
+            format!("file tunnel sent {max_skipped} unrelated frames without answering").into(),
         ))
+    }
+
+    /// Stops an unfinished streamed reply with `TASK_CANCEL`, as Studio's `CancelRequest` does, so the session stays usable.
+    ///
+    /// Frames of the abandoned stream that arrive before the cancel's reply are skipped as stale.
+    /// If the cancel can't be sent or answered, the session is poisoned instead.
+    async fn abandon<T: TimerProvider>(&mut self, timer: &T, sequence: u32) {
+        let tasks = [sequence];
+        let cancelled = match self
+            .send_request(
+                timer,
+                cmd::TASK_CANCEL,
+                &TaskCancelReq { tasks: &tasks },
+                &[],
+            )
+            .await
+        {
+            Ok(cancel_seq) => {
+                match self
+                    .read_reply_frame_within(
+                        timer,
+                        cmd::TASK_CANCEL,
+                        cancel_seq,
+                        CANCEL_MAX_SKIPPED_FRAMES,
+                    )
+                    .await
+                {
+                    Ok(payload) => {
+                        let (json, _) = p::split_payload(&payload);
+                        p::parse_envelope::<IgnoredAny>(json, "TASK_CANCEL")
+                            .is_ok_and(|env| env.result == Some(result::SUCCESS))
+                    }
+                    Err(_) => false,
+                }
+            }
+            Err(_) => false,
+        };
+        if !cancelled {
+            log::debug!("file tunnel could not cancel sequence {sequence}; session poisoned");
+            self.poisoned = true;
+        }
     }
 
     /// Sends a single-reply request and parses its reply body.
@@ -438,8 +504,8 @@ impl<S: AsyncIo> FileTunnelClient<S> {
     /// The transfer is checked as Studio checks it: the byte count must reach the reply's `total`,
     /// and the MD5 of the bytes must match the final frame's `file_md5`. A mismatch is reported
     /// after `sink` has seen every byte, so a caller writing to storage should treat its output as
-    /// provisional until this returns `Ok`. An error from `sink` stops the transfer and leaves the
-    /// session out of sync, since the printer goes on sending.
+    /// provisional until this returns `Ok`. An error from `sink` stops the transfer: the client
+    /// cancels the rest with `TASK_CANCEL`, and poisons the session only if that fails.
     pub async fn download<T: TimerProvider>(
         &mut self,
         timer: &T,
@@ -466,8 +532,8 @@ impl<S: AsyncIo> FileTunnelClient<S> {
     /// `Metadata/model_settings.config` and `Metadata/slice_info.config`
     /// (`PartSkipDialog::DownloadPartsFile`). A member larger than `max_bytes` is refused before
     /// any of it is buffered. A member the printer doesn't have is refused with
-    /// [`Error::TunnelReply`], and that refusal also poisons the session, since the printer may
-    /// go on sending; Studio treats every refusal here as "no such file".
+    /// [`Error::TunnelReply`]; Studio treats every refusal here as "no such file". The client
+    /// cancels whatever the printer would still send, and poisons the session only if that fails.
     pub async fn read_running_job_member<T: TimerProvider>(
         &mut self,
         timer: &T,
@@ -552,6 +618,268 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             .await
     }
 
+    /// Reads one member of a listed file without downloading the file (`SUB_FILE`), or `None` when the file has no such member.
+    ///
+    /// `member` is a path inside the archive, such as `Metadata/plate_1.png`; for a video, the
+    /// member `thumbnail` is its thumbnail. `file` must carry the `path` its listing gave:
+    /// `SUB_FILE` addresses members as `<path>#<member>` (Studio's
+    /// `PrinterFileSystem::UpdateFocusThumbnail2`). A member larger than `max_bytes` is refused,
+    /// and the rest of the stream cancelled.
+    pub async fn read_file_member<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        file: &TunnelFile,
+        member: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.check_poisoned()?;
+        let Some(path) = file.path.as_deref() else {
+            return Err(Error::InvalidArgument(
+                "SUB_FILE needs the file's path, which its listing didn't give".into(),
+            ));
+        };
+        if member.is_empty() {
+            return Err(Error::InvalidArgument("file member path is empty".into()));
+        }
+        let paths = [format!("{path}#{member}")];
+        let sequence = self
+            .send_request(
+                timer,
+                cmd::SUB_FILE,
+                &SubFileReq {
+                    paths: &paths,
+                    storage: file.storage.as_deref(),
+                },
+                &[],
+            )
+            .await?;
+        let mut out = Vec::new();
+        loop {
+            let payload = self
+                .read_reply_frame(timer, cmd::SUB_FILE, sequence)
+                .await?;
+            let (json, binary) = p::split_payload(&payload);
+            let env: Envelope<SubFileReply> = match p::parse_envelope(json, "SUB_FILE") {
+                Ok(env) => env,
+                Err(e) => return self.poison(e),
+            };
+            let more = env.result == Some(result::CONTINUE);
+            if !more {
+                require_success("SUB_FILE", env.result)?;
+            }
+            let body = env.reply.unwrap_or_default();
+            // Studio matches each frame to its file by `path`; a frame for another member means
+            // the stream isn't the one asked for.
+            if !body.path.is_empty() && body.path != paths[0] {
+                let err = Error::ProtocolViolation(
+                    format!(
+                        "file tunnel SUB_FILE answered for {:?}, not {:?}",
+                        body.path, paths[0]
+                    )
+                    .into(),
+                );
+                return if more { self.poison(err) } else { Err(err) };
+            }
+            // A size of 0 is Studio's "no such member" (`FILE_SIZE_ERR` in its translator).
+            if body.size == 0 {
+                if more {
+                    self.abandon(timer, sequence).await;
+                }
+                return Ok(None);
+            }
+            let Some(chunk) = usize::try_from(body.size)
+                .ok()
+                .and_then(|n| binary.get(..n))
+            else {
+                let err = Error::ProtocolViolation(
+                    format!(
+                        "file tunnel SUB_FILE fragment declares {} bytes but carries {}",
+                        body.size,
+                        binary.len()
+                    )
+                    .into(),
+                );
+                return if more { self.poison(err) } else { Err(err) };
+            };
+            if out.len() + chunk.len() > max_bytes {
+                if more {
+                    self.abandon(timer, sequence).await;
+                }
+                return Err(Error::ProtocolViolation(
+                    format!("file tunnel SUB_FILE member exceeds the {max_bytes} byte limit")
+                        .into(),
+                ));
+            }
+            out.extend_from_slice(chunk);
+            if body.more_fragments && more {
+                continue;
+            }
+            // One member was asked for; a stream still marked CONTINUE after it is cancelled.
+            if more {
+                self.abandon(timer, sequence).await;
+            }
+            return Ok(Some(out));
+        }
+    }
+
+    /// Deletes a listed file (`FILE_DEL`).
+    ///
+    /// Addresses it by `path` when its listing gave one and by name otherwise, as Studio's
+    /// `PrinterFileSystem::DeleteFilesContinue` does. Don't delete before an upload of the same
+    /// name: an upload overwrites, and an extra request first can race the upload's reply.
+    pub async fn delete_file<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        file: &TunnelFile,
+    ) -> Result<(), Error> {
+        let target = [file.path.as_deref().unwrap_or(file.name.as_str())];
+        let req = if file.path.is_some() {
+            FileDelReq {
+                paths: Some(&target),
+                delete: None,
+            }
+        } else {
+            FileDelReq {
+                paths: None,
+                delete: Some(&target),
+            }
+        };
+        let _: IgnoredAnyDefault = self
+            .single_reply(timer, "FILE_DEL", cmd::FILE_DEL, &req)
+            .await?;
+        Ok(())
+    }
+
+    /// Uploads `data` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
+    ///
+    /// `storage` is a label from [`media_ability`](Self::media_ability), such as `emmc`; there is
+    /// no default. To print the file afterwards from internal storage, start the job with
+    /// [`PrintJobConfig::from_internal_storage`](crate::mqtt::PrintJobConfig::from_internal_storage).
+    ///
+    /// The flow follows Studio's `PrinterFileSystem::RequestUploadFile` and `UploadFileTask`: an
+    /// init request, whose reply sets the chunk size, then every chunk on the init's `sequence`
+    /// with the whole file's MD5 on the last, then one final reply. The chunks go out back to
+    /// back without reading between them: open-bamboo-networking found that a P2S answers a
+    /// per-chunk read with `-9203`.
+    ///
+    /// **Not yet run against a printer.** The pipelining rests on open-bamboo-networking's P2S
+    /// captures alone.
+    pub async fn upload<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        storage: &str,
+        name: &str,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        self.check_poisoned()?;
+        if storage.is_empty() || name.is_empty() {
+            return Err(Error::InvalidArgument(
+                "upload needs a storage label and a file name".into(),
+            ));
+        }
+        // Studio refuses an empty file (`UploadFileTask` reads nothing and fails).
+        if data.is_empty() {
+            return Err(Error::InvalidArgument("upload of an empty file".into()));
+        }
+        let total = data.len() as u64;
+        let sequence = self
+            .send_request(
+                timer,
+                cmd::FILE_UPLOAD,
+                &UploadInitReq {
+                    kind: p::UPLOAD_TYPE_MODEL,
+                    storage,
+                    path: name,
+                    total,
+                },
+                &[],
+            )
+            .await?;
+        let payload = self
+            .read_reply_frame(timer, cmd::FILE_UPLOAD, sequence)
+            .await?;
+        let (json, _) = p::split_payload(&payload);
+        let env: Envelope<UploadInitReply> = p::parse_envelope(json, "FILE_UPLOAD init")?;
+        // Anything but CONTINUE or FILE_EXIST ends the request before a chunk is sent.
+        match env.result {
+            Some(result::CONTINUE | result::FILE_EXIST) => {}
+            Some(result::SUCCESS) => {
+                return Err(Error::ProtocolViolation(
+                    "file tunnel FILE_UPLOAD init finished without asking for data".into(),
+                ));
+            }
+            other => require_success("FILE_UPLOAD", other)?,
+        }
+        let init = env.reply.unwrap_or_default();
+        let chunk_len = init
+            .chunk_size
+            .checked_mul(1024)
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|&n| n > 0 && n <= self.max_frame_payload)
+            .ok_or_else(|| {
+                Error::ProtocolViolation(
+                    format!(
+                        "file tunnel FILE_UPLOAD chunk_size {} KiB is zero or over the {} byte \
+                         frame limit",
+                        init.chunk_size, self.max_frame_payload
+                    )
+                    .into(),
+                )
+            })?;
+        let start = usize::try_from(init.offset)
+            .ok()
+            .filter(|&o| o < data.len())
+            .ok_or_else(|| {
+                Error::ProtocolViolation(
+                    format!(
+                        "file tunnel FILE_UPLOAD resume offset {} is past the {total} byte file",
+                        init.offset
+                    )
+                    .into(),
+                )
+            })?;
+        // open-bamboo-networking: the MD5 of the entire file, on the last chunk only.
+        let file_md5 = format!("{:x}", md5::compute(data));
+        let chunks = data[start..].chunks(chunk_len);
+        let last = chunks.len().saturating_sub(1);
+        for (index, chunk) in chunks.enumerate() {
+            let offset = start + index * chunk_len;
+            let req = UploadChunkReq {
+                frag_id: index as u32,
+                offset: offset as u64,
+                size: chunk.len(),
+                file_md5: (index == last).then_some(file_md5.as_str()),
+            };
+            let frame = p::encode_request(cmd::FILE_UPLOAD, sequence, &req, chunk)?;
+            if let Err(e) = write_frame(
+                &mut self.stream,
+                timer,
+                &mut self.frame_seq,
+                p::MAGIC_CTRL,
+                &frame,
+            )
+            .await
+            {
+                return self.poison(e);
+            }
+        }
+        // One final reply; skip any progress frames a firmware sends in between.
+        loop {
+            let payload = self
+                .read_reply_frame(timer, cmd::FILE_UPLOAD, sequence)
+                .await?;
+            let (json, _) = p::split_payload(&payload);
+            let env: Envelope<IgnoredAny> = match p::parse_envelope(json, "FILE_UPLOAD") {
+                Ok(env) => env,
+                Err(e) => return self.poison(e),
+            };
+            if env.result == Some(result::CONTINUE) {
+                continue;
+            }
+            return require_success("FILE_UPLOAD", env.result);
+        }
+    }
+
     /// Receives a streamed `FILE_DOWNLOAD` reply, checking offsets, `total` and `file_md5`.
     async fn receive_download<T: TimerProvider>(
         &mut self,
@@ -592,13 +920,15 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                 };
                 if !status.accepted() {
                     // Studio's codes for the two refusals: ERROR_JSON for a missing or `1`
-                    // result, FILE_SIZE_ERR for size 0. Frames may follow, so the session is lost.
+                    // result, FILE_SIZE_ERR for size 0. Frames may follow, so cancel the rest.
                     let code = if status.size == Some(0) {
                         result::FILE_SIZE_ERR
                     } else {
                         result::ERROR_JSON
                     };
-                    self.poisoned = more;
+                    if more {
+                        self.abandon(timer, sequence).await;
+                    }
                     return Err(Error::TunnelReply {
                         command,
                         result: code,
@@ -622,7 +952,10 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                     )
                     .into(),
                 );
-                return if more { self.poison(err) } else { Err(err) };
+                if more {
+                    self.abandon(timer, sequence).await;
+                }
+                return Err(err);
             }
             if received.saturating_add(body.size) > body.total {
                 let err = Error::ProtocolViolation(
@@ -660,7 +993,10 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                 return if more { self.poison(err) } else { Err(err) };
             };
             if let Err(e) = sink(chunk) {
-                return if more { self.poison(e) } else { Err(e) };
+                if more {
+                    self.abandon(timer, sequence).await;
+                }
+                return Err(e);
             }
             digest.consume(chunk);
             received += body.size;
@@ -776,6 +1112,28 @@ impl<S: AsyncIo, T: TimerProvider> FileTunnel<'_, S, T> {
         self.client
             .read_running_job_member_into(self.timer, member, out)
             .await
+    }
+
+    /// See [`FileTunnelClient::read_file_member`].
+    pub async fn read_file_member(
+        &mut self,
+        file: &TunnelFile,
+        member: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.client
+            .read_file_member(self.timer, file, member, max_bytes)
+            .await
+    }
+
+    /// See [`FileTunnelClient::delete_file`].
+    pub async fn delete_file(&mut self, file: &TunnelFile) -> Result<(), Error> {
+        self.client.delete_file(self.timer, file).await
+    }
+
+    /// See [`FileTunnelClient::upload`].
+    pub async fn upload(&mut self, storage: &str, name: &str, data: &[u8]) -> Result<(), Error> {
+        self.client.upload(self.timer, storage, name, data).await
     }
 
     /// See [`FileTunnelClient::is_poisoned`].
@@ -1166,6 +1524,193 @@ mod tests {
             Err(Error::TunnelReply { result: 2, .. })
         ));
         assert!(client.is_poisoned());
+    }
+
+    fn listed(path: Option<&str>, storage: Option<&str>) -> TunnelFile {
+        TunnelFile {
+            name: "a.3mf".into(),
+            path: path.map(Into::into),
+            time: 0,
+            size: 1,
+            storage: storage.map(Into::into),
+        }
+    }
+
+    #[tokio::test]
+    async fn sink_error_cancels_the_stream_and_keeps_the_session() {
+        let mut client = connected(&[
+            reply_with(
+                r#"{"cmdtype":4,"result":1,"sequence":1,"reply":{"offset":0,"total":8,"size":4}}"#,
+                b"abcd",
+            ),
+            // A fragment already in flight when the cancel goes out, skipped as stale.
+            reply_with(
+                r#"{"cmdtype":4,"result":1,"sequence":1,"reply":{"offset":4,"total":8,"size":4}}"#,
+                b"efgh",
+            ),
+            reply(r#"{"cmdtype":4096,"result":0,"sequence":2,"reply":{"tasks":[1]}}"#),
+            reply(r#"{"cmdtype":7,"result":0,"sequence":3,"reply":{"storage":["emmc"]}}"#),
+        ])
+        .await;
+        let err = client
+            .download(&DummyTimer, &listed(Some("/a"), None), |_| {
+                Err(Error::InvalidArgument("disk full".into()))
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+        assert!(!client.is_poisoned());
+        let sent = written_frames(client.stream());
+        assert_eq!(
+            core::str::from_utf8(&sent[3].1).unwrap(),
+            r#"{"mtype":12289,"cmdtype":4096,"sequence":2,"req":{"tasks":[1]}}"#
+        );
+        assert_eq!(
+            client.media_ability(&DummyTimer).await.unwrap(),
+            vec!["emmc"]
+        );
+    }
+
+    #[tokio::test]
+    async fn file_member_is_read_by_path_and_storage() {
+        let mut client = connected(&[
+            reply_with(
+                r#"{"cmdtype":2,"result":1,"sequence":1,"reply":{"path":"/m/a.3mf#Metadata/plate_1.png","size":3,"continue":true}}"#,
+                b"abc",
+            ),
+            reply_with(
+                r#"{"cmdtype":2,"result":0,"sequence":1,"reply":{"path":"/m/a.3mf#Metadata/plate_1.png","size":2}}"#,
+                b"de",
+            ),
+        ])
+        .await;
+        let data = client
+            .read_file_member(
+                &DummyTimer,
+                &listed(Some("/m/a.3mf"), Some("emmc")),
+                "Metadata/plate_1.png",
+                64,
+            )
+            .await
+            .unwrap();
+        assert_eq!(data.as_deref(), Some(&b"abcde"[..]));
+        let sent = written_frames(client.stream());
+        assert_eq!(
+            core::str::from_utf8(&sent[2].1).unwrap(),
+            r##"{"mtype":12289,"cmdtype":2,"sequence":1,"req":{"paths":["/m/a.3mf#Metadata/plate_1.png"],"storage":"emmc"}}"##
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_file_member_is_none() {
+        let mut client = connected(&[reply(
+            r#"{"cmdtype":2,"result":0,"sequence":1,"reply":{"path":"/m/a.3mf#x","size":0}}"#,
+        )])
+        .await;
+        let data = client
+            .read_file_member(&DummyTimer, &listed(Some("/m/a.3mf"), None), "x", 64)
+            .await
+            .unwrap();
+        assert_eq!(data, None);
+    }
+
+    #[tokio::test]
+    async fn file_member_needs_a_listed_path() {
+        let mut client = connected(&[]).await;
+        assert!(matches!(
+            client
+                .read_file_member(&DummyTimer, &listed(None, None), "x", 64)
+                .await,
+            Err(Error::InvalidArgument(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_uses_paths_or_bare_names() {
+        let mut client = connected(&[
+            reply(r#"{"cmdtype":3,"result":0,"sequence":1}"#),
+            reply(r#"{"cmdtype":3,"result":0,"sequence":2}"#),
+        ])
+        .await;
+        client
+            .delete_file(&DummyTimer, &listed(Some("/m/a.3mf"), None))
+            .await
+            .unwrap();
+        client
+            .delete_file(&DummyTimer, &listed(None, None))
+            .await
+            .unwrap();
+        let sent = written_frames(client.stream());
+        assert_eq!(
+            core::str::from_utf8(&sent[2].1).unwrap(),
+            r#"{"mtype":12289,"cmdtype":3,"sequence":1,"req":{"paths":["/m/a.3mf"]}}"#
+        );
+        assert_eq!(
+            core::str::from_utf8(&sent[3].1).unwrap(),
+            r#"{"mtype":12289,"cmdtype":3,"sequence":2,"req":{"delete":["a.3mf"]}}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_pipelines_chunks_with_the_md5_on_the_last() {
+        let data = vec![7u8; 2048 + 100];
+        let mut client = connected(&[
+            // `FILE_EXIST` continues and overwrites, as Studio does.
+            reply(r#"{"cmdtype":5,"result":19,"sequence":1,"reply":{"chunk_size":1,"offset":0}}"#),
+            reply(r#"{"cmdtype":5,"result":0,"sequence":1}"#),
+        ])
+        .await;
+        client
+            .upload(&DummyTimer, "emmc", "job.gcode.3mf", &data)
+            .await
+            .unwrap();
+        let sent = written_frames(client.stream());
+        assert_eq!(
+            core::str::from_utf8(&sent[2].1).unwrap(),
+            r#"{"mtype":12289,"cmdtype":5,"sequence":1,"req":{"type":"model","storage":"emmc","path":"job.gcode.3mf","total":2148}}"#
+        );
+        // Three 1 KiB-or-less chunks on the init's sequence, all written before any reply is read.
+        let chunks: Vec<_> = sent[3..].iter().map(|(_, p)| p::split_payload(p)).collect();
+        assert_eq!(chunks.len(), 3);
+        let json = |i: usize| core::str::from_utf8(chunks[i].0).unwrap();
+        assert_eq!(
+            json(0),
+            r#"{"mtype":12289,"cmdtype":5,"sequence":1,"req":{"frag_id":0,"offset":0,"size":1024}}"#
+        );
+        assert_eq!(
+            json(1),
+            r#"{"mtype":12289,"cmdtype":5,"sequence":1,"req":{"frag_id":1,"offset":1024,"size":1024}}"#
+        );
+        assert_eq!(
+            json(2),
+            format!(
+                r#"{{"mtype":12289,"cmdtype":5,"sequence":1,"req":{{"frag_id":2,"offset":2048,"size":100,"file_md5":"{}"}}}}"#,
+                md5_hex(&data)
+            )
+        );
+        let rejoined: Vec<u8> = chunks
+            .iter()
+            .flat_map(|(_, bin)| bin.iter().copied())
+            .collect();
+        assert_eq!(rejoined, data);
+    }
+
+    #[tokio::test]
+    async fn refused_upload_init_sends_no_chunks() {
+        let mut client = connected(&[reply(r#"{"cmdtype":5,"result":20,"sequence":1}"#)]).await;
+        let err = client
+            .upload(&DummyTimer, "emmc", "big.3mf", b"data")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::TunnelReply {
+                command: "FILE_UPLOAD",
+                result: 20
+            }
+        ));
+        assert_eq!(written_frames(client.stream()).len(), 3);
+        assert!(!client.is_poisoned());
     }
 
     #[tokio::test]

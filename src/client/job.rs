@@ -362,7 +362,8 @@ where
     /// Reads plate `plate`'s images through the file tunnel into `buf`, returning where each landed, or `None` when the tunnel couldn't be used.
     ///
     /// A member the printer refuses is `None` in the result: Studio treats every refusal of this
-    /// read as "no such file". The refusal poisons the session, so the next member reconnects.
+    /// read as "no such file". The client cancels the refused stream; if that fails the session
+    /// is poisoned, and the next member reconnects.
     async fn read_tunnel_job_images(
         &mut self,
         plate: u32,
