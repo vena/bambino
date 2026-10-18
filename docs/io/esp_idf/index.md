@@ -280,6 +280,26 @@ channels can take clones of one connector instead of each holding its own PEM bu
   `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
   `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
 
+- <span id="espidftlsconnector-pinned"></span>`fn pinned(pin: Vec<u8>) -> Self`
+
+  Creates a connector that trusts exactly one certificate, `pin`, the printer's DER leaf as `peer_chain_der` returned it.
+
+  For a pin that [`Self::with_certs`](#espidftlsconnector) cannot verify: mbedTLS accepts an end-entity
+  certificate as an anchor only when it is self-issued, and then still checks its name, so a
+  CA-issued printer leaf never verifies and a self-signed proxy cert fails on the SNI (GitHub
+  issue #642). The pin is the identity, so no chain, name or date is checked; SNI is still
+  sent as given.
+
+  The handshake runs as in [`Self::unverified`](#espidftlsconnector) (same hook, same
+  `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` requirement), and `connect` then compares the peer's
+  leaf with `pin` before returning the stream, so nothing is sent over a session that fails
+  the check. mbedTLS still verifies the handshake signature against the presented
+  certificate's key, so the peer must hold the pinned key. A differing leaf fails with
+  [`CertificateFailure::PinMismatch`](../index.md#certificatefailure).
+
+  **Requires `CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE`**, as `peer_chain_der` does. With it
+  off the leaf can't be read and every `connect` fails closed with a `SocketError::Other`.
+
 - <span id="espidftlsconnector-with-connect-timeout"></span>`fn with_connect_timeout(self, connect_timeout: core::time::Duration) -> Self`
 
   Sets a handshake deadline for direct use of this connector; disabled by default.

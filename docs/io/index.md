@@ -210,6 +210,7 @@ enum CertificateFailure {
     Missing,
     Malformed,
     IncompleteTrustStore,
+    PinMismatch,
     Unspecified,
 }
 ```
@@ -300,6 +301,18 @@ backend that can actually reach that state.
   
   Only the ESP-IDF backend can see how many anchors a handshake actually held, so only it
   produces this (GitHub issue #384).
+
+- **`PinMismatch`**
+
+  A pinned connector's peer presented a leaf certificate that differs from the pinned one.
+  
+  Produced only by the pinned connectors (`TokioTlsConnector::pinned`,
+  `EspIdfTlsConnector::pinned`), which trust exactly one certificate by byte comparison
+  and check nothing else (GitHub issue #642). **Not** a trust-on-first-use candidate, unlike
+  [`UntrustedAnchor`](#certificatefailure): the caller already holds a pin for this
+  printer, so a different certificate means the printer's identity changed (a replaced
+  certificate, a different device at that address, or an interception). Whether to re-pin
+  is the caller's decision, and it should not look like first contact.
 
 - **`Unspecified`**
 

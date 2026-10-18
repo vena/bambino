@@ -20,6 +20,7 @@ and the Rustls TLS stack.
   - [`TokioUdpSocket`](#tokioudpsocket)
   - [`TokioFtpsClient`](#tokioftpsclient)
 - [Functions](#functions)
+  - [`build_pinned_client_config`](#build-pinned-client-config)
   - [`build_unsafe_client_config`](#build-unsafe-client-config)
   - [`build_verified_client_config`](#build-verified-client-config)
 
@@ -32,6 +33,7 @@ and the Rustls TLS stack.
 | [`TokioTimer`](#tokiotimer) | struct | Timer implementation utilizing Tokio's non-blocking system clock registry. |
 | [`TokioTlsConnector`](#tokiotlsconnector) | struct | TLS Secure connector wrapping Tokio-Rustls. |
 | [`TokioUdpSocket`](#tokioudpsocket) | struct | UDP socket interface wrapping a native Tokio UdpSocket. |
+| [`build_pinned_client_config`](#build-pinned-client-config) | fn | Builds a `ClientConfig` that trusts exactly `pin`, the printer's DER leaf certificate — see [`PinnedCertVerifier`](cert_verify/index.md#pinnedcertverifier). |
 | [`build_unsafe_client_config`](#build-unsafe-client-config) | fn | Builds a `ClientConfig` that accepts any certificate — see [`NoCertificateVerification`](cert_verify/index.md#nocertificateverification). |
 | [`build_verified_client_config`](#build-verified-client-config) | fn | Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs. |
 | [`TokioFtpsClient`](#tokioftpsclient) | type | An [`FtpsClient`](../../ftps/index.md) on the tokio backend, as `PrinterClient::ftps()` hands it out with `TokioTimer`. |
@@ -160,6 +162,71 @@ anchors, so the leaf is CA-issued and a genuine chain of trust is available.
 
   The provider's schemes, the same list [`CnFallbackServerVerifier`](#cnfallbackserververifier) offers, so a printer that
   completes a verified handshake also completes an unverified one.
+
+### `PinMismatchError`
+
+```rust
+struct PinMismatchError;
+```
+
+The error [`PinnedCertVerifier`](#pinnedcertverifier) rejects a differing leaf with, carried in `CertificateError::Other`.
+
+#### Trait Implementations
+
+##### `impl Debug for PinMismatchError`
+
+- <span id="pinmismatcherror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for PinMismatchError`
+
+- <span id="pinmismatcherror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Error for PinMismatchError`
+
+##### `impl ToString for PinMismatchError`
+
+- <span id="pinmismatcherror-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+### `PinnedCertVerifier`
+
+```rust
+struct PinnedCertVerifier {
+    // [REDACTED: Private Fields]
+}
+```
+
+Certificate verifier that trusts exactly one certificate, compared byte for byte with the peer's leaf.
+
+The pin is the identity, so nothing else about the certificate is checked: no chain, no
+name (the pin need not name the SNI, e.g. a proxy or a printer reached under another name),
+no validity dates (GitHub issue #642). The handshake signature *is* checked, through the same
+`x509-parser` path as [`CnFallbackServerVerifier`](#cnfallbackserververifier), so the peer must hold the pinned key and
+a v1 Bambu leaf works as a pin.
+
+A mismatch is reported as [`PinMismatchError`](#pinmismatcherror) inside `CertificateError::Other`, which
+`map_rustls_certificate_error` turns into `CertificateFailure::PinMismatch`.
+
+#### Implementations
+
+- <span id="pinnedcertverifier-new"></span>`fn new(pin: CertificateDer<'static>) -> Self`
+
+  Builds the verifier for `pin`, the DER leaf certificate to trust (as `peer_chain_der` returns it).
+
+#### Trait Implementations
+
+##### `impl Debug for PinnedCertVerifier`
+
+- <span id="pinnedcertverifier-debug-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl ServerCertVerifier for PinnedCertVerifier`
+
+- <span id="pinnedcertverifier-servercertverifier-verify-server-cert"></span>`fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, _intermediates: &[CertificateDer<'_>], _server_name: &ServerName<'_>, _ocsp_response: &[u8], _now: UnixTime) -> Result<ServerCertVerified, RustlsError>`
+
+- <span id="pinnedcertverifier-servercertverifier-verify-tls12-signature"></span>`fn verify_tls12_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+
+- <span id="pinnedcertverifier-servercertverifier-verify-tls13-signature"></span>`fn verify_tls13_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+
+- <span id="pinnedcertverifier-servercertverifier-supported-verify-schemes"></span>`fn supported_verify_schemes(&self) -> Vec<SignatureScheme>`
 
 ### `TokioIo<T>`
 
@@ -321,6 +388,10 @@ TLS Secure connector wrapping Tokio-Rustls.
 
   A connector that verifies the printer against `ca_certs` — see [`build_verified_client_config`](#build-verified-client-config).
 
+- <span id="tokiotlsconnector-pinned"></span>`fn pinned(pin: CertificateDer<'static>, versions: TlsVersions) -> Self` — [`TlsVersions`](../index.md#tlsversions)
+
+  A connector that trusts exactly one certificate — see [`build_pinned_client_config`](#build-pinned-client-config).
+
 #### Trait Implementations
 
 ##### `impl Clone for TokioTlsConnector`
@@ -390,6 +461,21 @@ An [`FtpsClient`](../../ftps/index.md) on the tokio backend, as `PrinterClient::
 ---
 
 ## Functions
+
+### `build_pinned_client_config`
+
+```rust
+fn build_pinned_client_config(pin: rustls_pki_types::CertificateDer<'static>, versions: crate::io::TlsVersions) -> std::sync::Arc<rustls::ClientConfig>
+```
+
+**Types:** [`TlsVersions`](../index.md#tlsversions)
+
+Builds a `ClientConfig` that trusts exactly `pin`, the printer's DER leaf certificate — see [`PinnedCertVerifier`](#pinnedcertverifier).
+
+For a caller that captured the certificate with `TlsConnector::peer_chain_der` and now
+trusts that certificate alone. No chain, name or date check: a mismatch fails the handshake
+with `CertificateFailure::PinMismatch`. See [`build_unsafe_client_config`](#build-unsafe-client-config) for when
+`versions` must be [`TlsVersions::Tls12Only`](../index.md#tlsversions).
 
 ### `build_unsafe_client_config`
 

@@ -266,6 +266,14 @@ own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Call
 a bounded connect must race `EmbassyTlsConnector::connect` against
 `embassy_time::with_timeout` themselves.
 
+**No `pinned()` constructor**, unlike `TokioTlsConnector::pinned` and
+`EspIdfTlsConnector::pinned`. Both compare the peer's leaf byte for byte, and `mbedtls-rs` 0.3
+gives this backend no way to see that leaf (see `peer_chain_der` below) or to install a verify
+callback of its own. Passing the pin to [`Self::verified`](#embassytlsconnector) is not a substitute: mbedTLS
+accepts an end-entity anchor only when it is self-issued, and still checks its name (GitHub
+issue #642). Left out rather than made to fail on every connect, so the gap shows at compile
+time.
+
 `Clone` is cheap (`mbedtls-rs` reference-counts a parsed `Certificate`), so one connector can
 serve every `PrinterClient` channel.
 
