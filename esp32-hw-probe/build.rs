@@ -30,10 +30,14 @@ const REQUIRED_KEYS: [&str; 4] = [
 ///
 /// `PROBE_FTPS_PATH` is a file on the printer's card, for probes that read one (#629's
 /// `download_prefix` check).
-const OPTIONAL_KEYS: [&str; 3] = [
+///
+/// `PROBE_PIN_PROXY` is `<ip>:<port>` of a TLS server with a self-signed certificate on the
+/// LAN, for #642's pinned-connector check.
+const OPTIONAL_KEYS: [&str; 4] = [
     "PROBE_ACCESS_CODE",
     "PROBE_RESET_LISTENER",
     "PROBE_FTPS_PATH",
+    "PROBE_PIN_PROXY",
 ];
 
 fn main() {

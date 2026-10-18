@@ -1,46 +1,41 @@
-//! Current investigation: `FtpsClient::download_prefix` on ESP-IDF (GitHub issue #629).
+//! Current investigation: `EspIdfTlsConnector::pinned` on hardware (GitHub issue #642).
 //!
-//! On a P1S, a FIN on an FTPS data channel does not stop a download: the printer sends the rest
-//! of the file. Only an RST does, and the printer then closes the control connection too.
-//! `download_prefix` marks the data channel with `RawStreamFactory::abort_on_drop`, which on
-//! ESP-IDF does nothing: the source says lwIP already ends the connection with an RST, because
-//! the data channel is closed with received data unread (`tcp.c`, `tcp_close_shutdown`) and any
-//! data arriving after the close is answered with one (`tcp_in.c`, `TF_RXCLOSED`). This probe
-//! checks that on hardware.
+//! `with_certs([pin])` cannot verify a pinned certificate: mbedTLS trusts an end-entity anchor
+//! only when it is self-issued, and still checks its name, so a P1S's CA-issued leaf fails with
+//! `UntrustedAnchor` and a self-signed proxy cert under another name fails with `NameMismatch`.
+//! `pinned()` runs the `unverified()` handshake and compares the peer's leaf byte for byte.
 //!
-//! `CYCLES` cycles, `SPACING` apart. Each cycle connects an `FtpsClient`, reads the first
-//! `PREFIX_BYTES` of `PROBE_FTPS_PATH` with `download_prefix`, drops the spent client, then times
-//! a fresh connect plus `list_directory("/")`. The printer serves one FTPS connection at a time,
-//! so that time is the signal: right after an RST it is about as fast as any login (~1 s), while
-//! a printer still sending the rest of the file after a FIN holds the next login back for as long
-//! as that takes. Cycle 1 also logs the prefix's SHA-256. After the cycles all three ports
-//! (8883, 990, 6000) are checked at +0 s, +30 s and +130 s.
+//! The probe first captures both leaves with `unverified()` + `peer_chain_der`, the path a
+//! consumer captures a pin with, then runs four handshakes with `pinned()`:
 //!
-//! **Passes when** every cycle returns `PREFIX_BYTES` with the client poisoned, every follow-up
-//! login and listing succeeds in about the time of an ordinary one, and every port accepts at
-//! every check. Compare the SHA-256 with `head -c <PREFIX_BYTES> <file> | shasum -a 256` on a
-//! computer.
+//! 1. the proxy's own cert against the proxy, under a server name the cert does not carry;
+//! 2. the P1S's own leaf against the P1S (port 8883), under its real serial;
+//! 3. the P1S's leaf against the proxy;
+//! 4. the proxy's cert against the P1S.
 //!
-//! **Running it.** Set `PROBE_ACCESS_CODE` and `PROBE_FTPS_PATH` (a `.3mf` on the card larger
-//! than `PREFIX_BYTES`; a bigger file makes a FIN-close more obvious) in `.env`, close every
-//! other FTPS client and camera viewer, then:
+//! **Passes when** 1 and 2 connect and 3 and 4 fail with
+//! `CertificateInvalid(PinMismatch)`, never `UntrustedAnchor` or `NameMismatch`.
+//!
+//! **Running it.** On a computer on the same LAN, start a TLS server with a self-signed cert:
 //!
 //! ```sh
-//! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee prefix-1.log
+//! openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj /CN=pin-test-proxy \
+//!     -keyout pin-key.pem -out pin-cert.pem
+//! openssl s_server -accept 8884 -cert pin-cert.pem -key pin-key.pem
 //! ```
 //!
-//! Prior investigations (the connection teardown check, #385's out-of-memory sweep, and others)
-//! are recoverable via `git log -- esp32-hw-probe/src/main.rs`.
+//! Set `PROBE_PIN_PROXY=<that computer's IP>:8884` in `.env`, then:
+//!
+//! ```sh
+//! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee pin-1.log
+//! ```
+//!
+//! Prior investigations are recoverable via `git log -- esp32-hw-probe/src/main.rs`.
 
-use bambino::ftps::{CurrentDateTime, FtpsClient, TlsVersionCheck};
-use bambino::io::esp_idf::{
-    EspIdfRawStreamFactory, EspIdfTcpStream, EspIdfTimer, EspIdfTlsConnector,
-};
-use bambino::io::RawStreamFactory;
-use bambino::PrinterIdentity;
+use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTcpStream, EspIdfTlsConnector};
+use bambino::io::{CertificateFailure, RawStreamFactory, SocketError, TlsConnector};
+use bambino::mqtt::MQTTS_PORT;
 use core::time::Duration;
-use std::net::{SocketAddr, TcpStream};
-use std::time::Instant;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
@@ -53,39 +48,23 @@ const WIFI_SSID: &str = env!("PROBE_WIFI_SSID");
 const WIFI_PASS: &str = env!("PROBE_WIFI_PASS");
 const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
-const ACCESS_CODE: Option<&str> = option_env!("PROBE_ACCESS_CODE");
-const FTPS_PATH: Option<&str> = option_env!("PROBE_FTPS_PATH");
+const PIN_PROXY: Option<&str> = option_env!("PROBE_PIN_PROXY");
 
-use bambino::ftps::FTPS_PORT;
-use bambino::mqtt::MQTTS_PORT as MQTT_PORT;
-const CAMERA_PORT: u16 = 6000;
-
-const CYCLES: usize = 6;
-const SPACING: Duration = Duration::from_secs(3);
-/// Covers a `.3mf`'s plate and pick images (36 864 B on the OrcaSlicer-sliced file #629 measured).
-/// `embassy-hw-probe` reads less: its heap can't hold this beside two TLS sessions.
-const PREFIX_BYTES: usize = 40 * 1024;
-/// When the ports are checked after the last cycle, in seconds.
-const CHECKPOINTS: [u64; 3] = [0, 30, 130];
-/// Bound on one port check's connect.
-const PORT_CHECK_BOUND: Duration = Duration::from_secs(10);
-/// The FTPS work runs on its own thread: the main task's 8 KB stack (`sdkconfig.defaults`) is
-/// too small for the FTPS connect futures (`src/io/CLAUDE.md`). 32 KB overflowed in the first
-/// TLS handshake (`mbedtls_entropy_func`, under `esp_tls_conn_new_sync`) while the whole cycle
-/// future sat on the stack too; it is boxed now, and this is the margin on top.
+/// A server name neither certificate carries.
+const MADE_UP_NAME: &str = "pin-test-not-the-cert-name";
+/// The TLS work runs on its own thread: the main task's 8 KB stack (`sdkconfig.defaults`) is
+/// too small for a TLS handshake (`src/io/CLAUDE.md`).
 const WORKER_STACK: usize = 48 * 1024;
 
-type Ftps = FtpsClient<EspIdfTcpStream, EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer>;
+type TlsStream = <EspIdfTlsConnector as TlsConnector<EspIdfTcpStream>>::Stream;
 
-fn addr(port: u16) -> SocketAddr {
-    let ip: std::net::Ipv4Addr = PRINTER_IP
-        .parse()
-        .expect("PROBE_PRINTER_IP is an IPv4 address");
-    SocketAddr::from((ip, port))
-}
-
-fn listing_time() -> CurrentDateTime {
-    CurrentDateTime::new(2026, 10, 14, 12, 0)
+/// One TLS peer: where to dial and what server name to send.
+#[derive(Clone, Copy)]
+struct Peer {
+    label: &'static str,
+    host: &'static str,
+    port: u16,
+    sni: &'static str,
 }
 
 /// SHA-256 through ESP-IDF's own mbedTLS, so the probe needs no hashing dependency.
@@ -99,129 +78,65 @@ fn sha256_hex(data: &[u8]) -> String {
     out.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Runs one bambino call, logging how long it took.
-async fn call<T>(
-    label: &str,
-    fut: impl core::future::Future<Output = Result<T, bambino::Error>>,
-) -> Result<T, String> {
-    let started = Instant::now();
-    match fut.await {
-        Ok(v) => {
-            log::info!("    {label}: ok, {} ms", started.elapsed().as_millis());
-            Ok(v)
-        }
-        Err(e) => {
-            let e = format!("{label}: {e:?}");
-            log::warn!("    {e}");
-            Err(e)
-        }
-    }
+/// Dials `peer` and runs `connector`'s handshake; the caller drops the session.
+async fn handshake(connector: &EspIdfTlsConnector, peer: Peer) -> Result<TlsStream, SocketError> {
+    let raw = EspIdfRawStreamFactory.dial(peer.host, peer.port).await?;
+    connector.connect(peer.sni, raw).await
 }
 
-async fn connect_ftps(access_code: &str) -> Result<Ftps, String> {
-    let raw = EspIdfRawStreamFactory
-        .dial(PRINTER_IP, FTPS_PORT)
+/// Captures `peer`'s leaf the way a consumer would: `unverified()` and `peer_chain_der`.
+async fn capture(peer: Peer) -> Result<Vec<u8>, String> {
+    let connector = EspIdfTlsConnector::unverified();
+    let stream = handshake(&connector, peer)
         .await
-        .map_err(|e| format!("control dial: {e:?}"))?;
-    let timer = EspIdfTimer::new().map_err(|e| format!("timer: {e:?}"))?;
-    call(
-        "FtpsClient::connect",
-        FtpsClient::connect(
-            raw,
-            EspIdfTlsConnector::unverified(),
-            EspIdfRawStreamFactory,
-            PrinterIdentity::new(PRINTER_IP, PRINTER_SERIAL, access_code),
-            timer,
-            TlsVersionCheck::Enforce,
-        ),
-    )
-    .await
+        .map_err(|e| format!("unverified handshake: {e:?}"))?;
+    let chain = connector
+        .peer_chain_der(&stream)
+        .ok_or("peer_chain_der returned None (CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE?)")?;
+    let leaf = chain.into_iter().next().ok_or("empty peer chain")?;
+    // The hash, not the subject: a printer leaf's CN is its serial.
+    log::info!(
+        "  captured {} leaf: {} B, SHA-256 {}",
+        peer.label,
+        leaf.len(),
+        sha256_hex(&leaf)
+    );
+    Ok(leaf)
 }
 
-/// One cycle: a prefix read, then a timed fresh login and listing. Returns the cycle's summary.
-async fn cycle(access_code: &str, path: &str, buf: &mut [u8], n: usize) -> Result<String, String> {
-    let mut ftps = connect_ftps(access_code).await?;
-    let got = call("download_prefix", ftps.download_prefix(path, buf)).await?;
-    let poisoned = ftps.is_poisoned();
-    if n == 1 {
-        log::info!(
-            "  prefix SHA-256 {} ({got} B, starts {:02x?})",
-            sha256_hex(&buf[..got]),
-            &buf[..got.min(8)]
-        );
-    }
-    // A poisoned client skips QUIT: the printer has already closed the control connection.
-    ftps.disconnect().await;
-
-    let started = Instant::now();
-    let mut fresh = connect_ftps(access_code).await?;
-    let listed = call("list /", fresh.list_directory("/", listing_time())).await?;
-    let relogin_ms = started.elapsed().as_millis();
-    fresh.disconnect().await;
-
-    let stopped = if got < buf.len() {
-        "FILE SHORTER THAN THE BUFFER: not an early stop"
-    } else if poisoned {
-        "stopped early, client poisoned"
-    } else {
-        "FULL BUFFER BUT CLIENT NOT POISONED"
+/// Runs one `pinned()` handshake and judges it against what the case expects.
+fn case(n: usize, pin_label: &str, pin: &[u8], peer: Peer, expect_ok: bool) -> (String, String) {
+    let connector = EspIdfTlsConnector::pinned(pin.to_vec());
+    let result = block_on(Box::pin(handshake(&connector, peer))).map(drop);
+    let pass = match &result {
+        Ok(()) => expect_ok,
+        Err(SocketError::CertificateInvalid(CertificateFailure::PinMismatch)) => !expect_ok,
+        Err(_) => false,
     };
-    Ok(format!(
-        "{got} B, {stopped}; fresh login + LIST ({} entries) {relogin_ms} ms",
-        listed.len()
-    ))
+    let step = format!("{n}. {pin_label} pin vs {}", peer.label);
+    let outcome = format!("{}: {result:?}", if pass { "PASS" } else { "FAIL" });
+    log::info!("  {step}: {outcome}");
+    (step, outcome)
 }
 
-/// Whether `port` accepts a plain TCP connection within `PORT_CHECK_BOUND`, closed cleanly.
-fn accepts(port: u16) -> bool {
-    match TcpStream::connect_timeout(&addr(port), PORT_CHECK_BOUND) {
-        Ok(stream) => {
-            drop(stream);
-            true
+fn run(proxy: Peer, printer: Peer) -> Vec<(String, String)> {
+    let proxy_leaf = block_on(Box::pin(capture(proxy)));
+    let printer_leaf = block_on(Box::pin(capture(printer)));
+    let (proxy_leaf, printer_leaf) = match (proxy_leaf, printer_leaf) {
+        (Ok(p), Ok(q)) => (p, q),
+        (p, q) => {
+            return vec![(
+                String::from("capture"),
+                format!("FAILED: proxy {:?}, printer {:?}", p.err(), q.err()),
+            )];
         }
-        Err(e) => {
-            log::warn!("    {port}: connect failed: {e}");
-            false
-        }
-    }
-}
-
-fn unreachable_ports() -> Vec<u16> {
-    [MQTT_PORT, FTPS_PORT, CAMERA_PORT]
-        .into_iter()
-        .filter(|port| !accepts(*port))
-        .collect()
-}
-
-fn run(access_code: &'static str, path: &'static str) -> Vec<(String, String)> {
-    let mut results = Vec::new();
-    let mut buf = vec![0u8; PREFIX_BYTES];
-    for n in 1..=CYCLES {
-        // Boxed: `block_on` keeps its future on this thread's stack, and the cycle future holds
-        // room for the connect, prefix-read and listing futures at once.
-        let result = match block_on(Box::pin(cycle(access_code, path, &mut buf, n))) {
-            Ok(r) => r,
-            Err(e) => format!("FAILED: {e}"),
-        };
-        log::info!("  cycle {n}: {result}");
-        results.push((format!("cycle {n}"), result));
-        std::thread::sleep(SPACING);
-    }
-    let started = Instant::now();
-    for at in CHECKPOINTS {
-        if let Some(wait) = Duration::from_secs(at).checked_sub(started.elapsed()) {
-            std::thread::sleep(wait);
-        }
-        let down = unreachable_ports();
-        let result = if down.is_empty() {
-            String::from("all ports accepting")
-        } else {
-            format!("PORTS NOT ACCEPTING {down:?}")
-        };
-        log::info!("  +{at}s after the last cycle: {result}");
-        results.push((format!("+{at}s"), result));
-    }
-    results
+    };
+    vec![
+        case(1, "proxy", &proxy_leaf, proxy, true),
+        case(2, "printer", &printer_leaf, printer, true),
+        case(3, "printer", &printer_leaf, proxy, false),
+        case(4, "proxy", &proxy_leaf, printer, false),
+    ]
 }
 
 fn main() {
@@ -236,14 +151,29 @@ fn main() {
         log::warn!("could not raise bambino::io to debug: {e:?}");
     }
 
-    log::info!("esp32-hw-probe: FtpsClient::download_prefix on ESP-IDF (#629)");
+    log::info!("esp32-hw-probe: EspIdfTlsConnector::pinned (#642)");
 
-    let (Some(access_code), Some(path)) = (ACCESS_CODE, FTPS_PATH) else {
+    let Some((proxy_host, proxy_port)) = PIN_PROXY
+        .and_then(|p| p.rsplit_once(':'))
+        .and_then(|(host, port)| Some((host, port.parse::<u16>().ok()?)))
+    else {
         log::error!(
-            "STOPPED: set PROBE_ACCESS_CODE and PROBE_FTPS_PATH (a .3mf on the card larger than \
-             {PREFIX_BYTES} B) in esp32-hw-probe/.env, rebuild and flash."
+            "STOPPED: set PROBE_PIN_PROXY=<ip>:<port> of the openssl s_server in \
+             esp32-hw-probe/.env, rebuild and flash."
         );
         park();
+    };
+    let proxy = Peer {
+        label: "proxy",
+        host: proxy_host,
+        port: proxy_port,
+        sni: MADE_UP_NAME,
+    };
+    let printer = Peer {
+        label: "printer",
+        host: PRINTER_IP,
+        port: MQTTS_PORT,
+        sni: PRINTER_SERIAL,
     };
 
     let peripherals = Peripherals::take().unwrap_or_else(|e| fail_setup("Peripherals", e));
@@ -255,26 +185,16 @@ fn main() {
         Err(e) => fail_setup("Wi-Fi", e),
     };
 
-    let unreachable = unreachable_ports();
-    if !unreachable.is_empty() {
-        log::error!(
-            "STOPPED: the printer does not accept connections on {unreachable:?}. Fix that \
-             (check from a computer with `nc -z <printer-ip> <port>`), then reset the board."
-        );
-        park();
-    }
-    log::info!("preflight: 8883, 990 and 6000 all accept connections");
-
     let worker = std::thread::Builder::new()
         .stack_size(WORKER_STACK)
-        .spawn(move || run(access_code, path));
+        .spawn(move || run(proxy, printer));
     let results = match worker.map(|handle| handle.join()) {
         Ok(Ok(results)) => results,
         Ok(Err(_)) => vec![(String::from("worker"), String::from("PANICKED"))],
         Err(e) => vec![(String::from("worker"), format!("could not start: {e}"))],
     };
 
-    log::info!("================ download_prefix on ESP-IDF ================");
+    log::info!("================ EspIdfTlsConnector::pinned ================");
     for (step, result) in &results {
         log::info!("  {step}: {result}");
     }
