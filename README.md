@@ -4,7 +4,7 @@ Async Rust library for talking to Bambu Lab 3D printers over your local network.
 
 This project is still in development. The API may radically change from commit to commit.
 
-**🤖 DISCLOSURE:** This was built with heavy assistance from AI. This exists because I wanted it for a personal project, and I barely know Rust myself! 3D printers are expensive and deal with [high temperatures](#safety-notice), so bear this in mind before you unleash my slop upon your baby. 
+**🤖 DISCLOSURE:** This was built with heavy assistance from AI. This exists because I wanted it for a personal project, and I barely know Rust! 3D printers are expensive and deal with [high temperatures](#safety-notice), so bear this in mind before you unleash my slop upon your baby. 
 
 This project is not affiliated with or supported by Bambu Lab.
 
@@ -15,15 +15,17 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 - **Discovery**: find printers on your LAN via SSDP (ports 2021/1990)
 - **MQTT control**: connect to the printer's local broker (port 8883), send commands, receive telemetry
 - **File transfer**: implicit FTPS (port 990) for listing, uploading, downloading, and managing files on the SD card
-- **Internal storage**: the port-6000 file tunnel newer printers (P2S, X2D, H2 series) serve, for listing and downloading files FTPS can't see and reading the running job's files without knowing where the job is stored
+- **Internal storage**: the port-6000 file tunnel newer printers (X1, X2D, P2S, H2 series) serve, for listing and downloading files FTPS can't see and reading the running job's files without knowing where the job is stored
 - **Camera**: binary JPEG streaming client (port 6000, A1/P1 series, A2L); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
 - **Model quirks**: per-model differences handled polymorphically: FTPS TLS requirements, fan step resolution, Z-axis homing safety, door sensors, camera protocols, nozzle counts (single/IDEX/tool changer), temperature limits, and chamber heater capabilities
 
 ## Two levels of API
 
-`PrinterClient` is the high-level interface; it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits in the typed setters, raw G-code rejected when it homes unsafely or targets a heater past its limit, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
+`PrinterClient` is the high-level interface; it wraps MQTT (and optionally FTPS, the JPEG "chamber image" camera, and the file tunnel) with model-aware safety checks: temperature clamping to hardware limits in the typed setters, raw G-code rejected when it homes unsafely or targets a heater past its limit, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
-For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::ftps().await?` provide direct access to the underlying `MqttClient` and `FtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
+Its camera channel is the binary JPEG "chamber image" stream on port 6000 (A1, P1 series, A2L). The RTSPS video on port 322 (X1, X2, H2, P2S series) is left to the consumer: this crate provides URL, proxy and timestamp helpers for it but no RTSP client or video decoding (see [Camera](#camera)).
+
+For advanced use cases, `PrinterClient::mqtt().await?`, `ftps().await?`, `camera().await?` and `file_tunnel().await?` provide direct access to the underlying `MqttClient`, `FtpsClient`, `BinaryCameraStream` and `FileTunnel`, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
 
 The underlying modules (`mqtt`, `ftps`, `file_tunnel`, `discovery`, `camera`) are also public if you need direct protocol access; useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
@@ -363,7 +365,7 @@ let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job
 
 The tunnel also reads single members of a listed file (`read_file_member`), deletes files (`delete_file`), and cancels a stream it stops early instead of dropping the session. `printer.read_running_job_images(&mut buf)` reads the running job's plate image, thumbnail and pick image through the tunnel where it can, without knowing where the file is stored, and falls back to FTPS (`job_file`, then `read_plate_images`). `printer.read_plate_images(&file, plate, &mut buf)` reads the same images from any listed `.3mf`, independent of the running job.
 
-The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. P1 and A1 printers never serve it, and `file_tunnel()` refuses them without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB, and `.with_file_tunnel_max_frame_size(bytes)` lowers the default 4 MiB frame cap to fit the heap.
+The printer reports support with `fun` bit 31, which Bambu Studio uses to choose this service over FTPS. Printers with the JPEG chamber-image camera (A1, P1 series, A2L) never serve it, and `file_tunnel()` refuses them, and any printer that reported bit 31 clear, without dialing. On a printer assumed to serve it, a failed handshake is the signal to use FTPS. Chain `.with_timer()`, or a printer that ignores the login is only noticed when it drops the connection 60 s later. The tunnel is not part of `connect_all()`; on an ESP32-C6, each open TLS session costs about 48 KB, and `.with_file_tunnel_max_frame_size(bytes)` lowers the default 4 MiB frame cap to fit the heap.
 
 > **Not yet run against a printer that serves it.** The protocol follows Bambu Studio's source and two independent working clients; only the P1S's refusal has been checked on hardware. Upload is the least certain part: it sends every chunk without waiting for a reply, which rests on one of those clients' P2S captures.
 
@@ -421,7 +423,7 @@ if let Some(t) = printer_now {
 
 Feed that into `list_directory`'s `now: CurrentDateTime` parameter, and it automatically reconstructs missing years against the best reference available.
 
-`PrinterClient::list_files` (and `list_files_each`) can do this for you. Build the client with `.with_printer_clock_probe(true)` and the first listing on each FTPS session runs this probe, then rebuilds years against the printer's clock, advanced by the time since the probe. A new session probes again, since a reboot ends the session and resets the clock. Without it, `list_files` uses the host's clock (or, without `std` or with a host clock reading before 2000, reports `FileTime::NoYear` for a file whose year is missing). The probe is off by default because it writes to the card: the file shows briefly on the printer's screen. Turn it on when you display or compare file dates. If the probe fails (no `MDTM`, a full card), that session falls back to the host's clock and the listing still succeeds.
+`PrinterClient::list_files` (and `list_files_each`) can do this for you. Build the client with `.with_printer_clock_probe(true)` and the first listing on each FTPS session runs this probe, then rebuilds years against the printer's clock, advanced by the time since the probe. A new session probes again, since a reboot ends the session and resets the clock. To probe once and keep the reading across sessions, take it with `printer.printer_clock_reading()` after a listing and hand it back with `printer.set_printer_clock_reading(Some(reading))`; no listing probes while one is set. It is valid only until the printer reboots, which bambino can't detect, so clear it (`set_printer_clock_reading(None)`) when the printer may have restarted. With neither the probe nor a kept reading, `list_files` uses the host's clock (or, without `std` or with a host clock reading before 2000, reports `FileTime::NoYear` for a file whose year is missing). The probe is off by default because it writes to the card: the file shows briefly on the printer's screen. Turn it on when you display or compare file dates. If the probe fails (no `MDTM`, a full card), that session falls back to the host's clock and the listing still succeeds.
 
 > Without `MDTM`, a similar probe could be done with `list_directory` (upload, fetch list, read time of the file name you uploaded), but only partly since recent files in a `LIST` return lack the year.
 
@@ -503,10 +505,10 @@ let url = build_rtsps_url(printer_ip, access_code)?; // printer_ip: IpAddr
 // → rtsps://bblp:<code>@<ip>:322/streaming/live/1
 ```
 
-`build_rtsps_url` validates that `access_code` is 1 to 32 ASCII letters or digits
-(printer-issued LAN access codes are 8) and returns
-`Result<String, Error>`. It takes the IP as an `IpAddr`, so a spoofed host string can't
-inject URL userinfo; parse a configured `&str` with `.parse()?` first.
+`build_rtsps_url` validates that `access_code` is exactly 8 ASCII letters or digits, as
+printer-issued LAN access codes are, and returns `Result<String, Error>`. It takes the IP as
+an `IpAddr`, so a spoofed host string can't inject URL userinfo; parse a configured `&str`
+with `.parse()?` first.
 
 Since the printer's TLS leaf is issued by Bambu's private `BBL CA` rather than a publicly-trusted root, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to rewrite the request-line URI in transit:
 
@@ -555,7 +557,7 @@ let connector = TokioTlsConnector::verified(
 
 To build a `ClientConfig` yourself, use `build_unsafe_client_config` / `build_verified_client_config` (same arguments) and `bambino::io::tokio::rustls`, the version-matched `rustls` re-export; a `TokioTlsConnector` converts from `Arc<ClientConfig>` with `.into()`.
 
-`TokioTlsConnector::verified()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `TokioTlsConnector::unverified()` is unaffected, it never checks certificate identity.
+`TokioTlsConnector::verified()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `TokioTlsConnector::unverified()` never checks certificate identity.
 
 `TokioTlsConnector::pinned(leaf, versions)` (or `build_pinned_client_config`) trusts exactly one certificate: the printer's DER leaf, as `peer_chain_der` returned it from an earlier `unverified()` connection. The peer's leaf is compared byte for byte and the handshake signature is still checked, but no chain, name or dates are, so it works for a printer whose CA you don't hold and for a TLS proxy reached under another name. A different certificate fails with `CertificateFailure::PinMismatch`, which, unlike `UntrustedAnchor`, means the identity you pinned has changed, not first contact. `EspIdfTlsConnector::pinned` does the same on ESP-IDF; Embassy has no equivalent.
 
@@ -581,7 +583,7 @@ Note the `default-features = false`. The platform features are additive rather t
 
 All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerProvider`, etc.) so library code is platform-agnostic. Platform-specific implementations live in `io::tokio`, `io::esp_idf`, and `io::embassy`.
 
-Every teardown path (`disconnect_mqtt`, `disconnect_ftps`, `disconnect_camera`, `FtpsClient::disconnect`, and the end of each FTPS transfer) calls `TlsConnector::close`, which sends `close_notify` so the printer sees an orderly shutdown instead of a truncated connection. It defaults to a no-op, so a custom connector need not implement it; the tokio and Embassy backends do, and ESP-IDF keeps the default because `esp_idf_svc`'s `EspTls` exposes no shutdown seam. Closing is not the same as freeing: on Embassy, MbedTLS releases a session's memory when the stream is *dropped*, not when it is closed — ~48 KB per session on an ESP32-C6. Each of those teardown paths therefore drops the stream as well, so a disconnected client doesn't keep a session's worth of heap.
+Every teardown path (`disconnect_mqtt`, `disconnect_ftps`, `disconnect_camera`, `disconnect_file_tunnel`, `FtpsClient::disconnect`, and the end of each FTPS transfer) calls `TlsConnector::close`, which sends `close_notify` so the printer sees an orderly shutdown instead of a truncated connection. It defaults to a no-op, so a custom connector need not implement it; the tokio and Embassy backends do, and ESP-IDF keeps the default because `esp_idf_svc`'s `EspTls` exposes no shutdown seam. Closing is not the same as freeing: on Embassy, MbedTLS releases a session's memory when the stream is *dropped*, not when it is closed — ~48 KB per session on an ESP32-C6. Each of those teardown paths therefore drops the stream as well, so a disconnected client doesn't keep a session's worth of heap.
 
 **Embassy note:** `discover_devices()` is not available on Embassy. The convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
@@ -721,9 +723,12 @@ Options:
       --with-certs <PATH>
                       Verify the printer's TLS certificate against these CA certs
                       instead of skipping verification entirely. Accepts a single
-                      PEM/DER file or a directory of them. Applies to every
-                      printer-facing subcommand (MQTT, FTPS, camera) except
-                      inspect-cert, which never verifies.
+                      PEM/DER file or a directory of them (e.g. --with-certs
+                      certs/). Applies to every printer-facing subcommand (MQTT,
+                      FTPS, camera) except inspect-cert, which never verifies
+                      because its job is to capture whatever certificate the
+                      printer presents. Without it the CLI performs no
+                      certificate verification at all
   -h, --help          Print help
 
 Most commands require positional args: <IP> <SERIAL> <ACCESS_CODE>
