@@ -322,7 +322,7 @@ channels can take clones of one connector instead of each holding its own PEM bu
   deadline entirely, matching `set_command_timeout`'s "0 disables" convention
   and `client::connect::with_connect_timeout`'s precedent — otherwise the very
   first would-block poll would immediately exceed a zero-length budget.
-  Chain onto `unverified()`/`with_certs()`.
+  Chain onto `unverified()`/`with_certs()`/`pinned()`.
 
 #### Trait Implementations
 
