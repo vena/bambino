@@ -180,6 +180,16 @@ pub enum CertificateFailure {
     /// Only the ESP-IDF backend can see how many anchors a handshake actually held, so only it
     /// produces this (GitHub issue #384).
     IncompleteTrustStore,
+    /// A pinned connector's peer presented a leaf certificate that differs from the pinned one.
+    ///
+    /// Produced only by the pinned connectors (`TokioTlsConnector::pinned`,
+    /// `EspIdfTlsConnector::pinned`), which trust exactly one certificate by byte comparison
+    /// and check nothing else (GitHub issue #642). **Not** a trust-on-first-use candidate, unlike
+    /// [`UntrustedAnchor`](Self::UntrustedAnchor): the caller already holds a pin for this
+    /// printer, so a different certificate means the printer's identity changed (a replaced
+    /// certificate, a different device at that address, or an interception). Whether to re-pin
+    /// is the caller's decision, and it should not look like first contact.
+    PinMismatch,
     /// Rejected for a reason with no portable counterpart above.
     Unspecified,
 }
@@ -454,6 +464,34 @@ pub(crate) fn account_for_trust_store(
     failure
 }
 
+/// Checks a completed handshake's peer chain against a pinned leaf certificate, failing closed when the chain is unavailable.
+///
+/// `chain` is what `TlsConnector::peer_chain_der` returned, leaf first. `None` means the
+/// platform could not report the chain (on ESP-IDF, `CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE`
+/// is off), so the pin cannot be checked and the connection is refused rather than let through.
+/// An empty chain is `Missing`. Only the leaf is compared: the pin is the identity, so the
+/// rest of the chain carries no weight (GitHub issue #642).
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) fn check_pinned_leaf<C: AsRef<[u8]>>(
+    chain: Option<&[C]>,
+    pin: &[u8],
+) -> Result<(), SocketError> {
+    let Some(chain) = chain else {
+        return Err(SocketError::Other(
+            "pinned connector cannot read the peer certificate, so the pin cannot be checked \
+             (enable CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE)"
+                .into(),
+        ));
+    };
+    match chain.first() {
+        None => Err(SocketError::CertificateInvalid(CertificateFailure::Missing)),
+        Some(leaf) if leaf.as_ref() == pin => Ok(()),
+        Some(_) => Err(SocketError::CertificateInvalid(
+            CertificateFailure::PinMismatch,
+        )),
+    }
+}
+
 /// Maps a `std::io::Error` to a `SocketError` through the same two tables every backend shares.
 ///
 /// [`map_io_error_kind`] then [`map_embedded_io_error_kind`], so a std backend and a no_std one
@@ -663,6 +701,7 @@ impl core::fmt::Display for CertificateFailure {
             Self::Missing => "peer presented no certificate",
             Self::Malformed => "certificate could not be parsed",
             Self::IncompleteTrustStore => "no anchor matched, but some anchors failed to load",
+            Self::PinMismatch => "certificate differs from the pinned one",
             Self::Unspecified => "certificate rejected for an unspecified reason",
         })
     }
@@ -1437,6 +1476,29 @@ mod mbedtls_error_tests {
             account_for_trust_store(CertificateFailure::UntrustedAnchor, 0, 5),
             CertificateFailure::IncompleteTrustStore
         );
+    }
+
+    #[test]
+    fn pinned_leaf_is_compared_by_bytes_and_fails_closed() {
+        let pin: &[u8] = b"leaf";
+        let other: &[u8] = b"other";
+        assert_eq!(check_pinned_leaf(Some(&[pin, other][..]), pin), Ok(()));
+        // Only the leaf counts: the pin appearing further up the chain is not a match.
+        assert_eq!(
+            check_pinned_leaf(Some(&[other, pin][..]), pin),
+            Err(SocketError::CertificateInvalid(
+                CertificateFailure::PinMismatch
+            ))
+        );
+        assert_eq!(
+            check_pinned_leaf::<&[u8]>(Some(&[]), pin),
+            Err(SocketError::CertificateInvalid(CertificateFailure::Missing))
+        );
+        // No chain to read must refuse, never pass.
+        assert!(matches!(
+            check_pinned_leaf::<&[u8]>(None, pin),
+            Err(SocketError::Other(_))
+        ));
     }
 
     #[test]

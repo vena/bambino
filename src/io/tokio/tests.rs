@@ -682,3 +682,84 @@ fn test_check_ca_capable_rejects_malformed_key_usage_rather_than_treating_it_as_
         "a malformed keyUsage must fail closed, not read as unrestricted"
     );
 }
+
+/// A self-signed cert for `name` and the loopback port of a TLS server presenting it to one client.
+async fn spawn_pinned_test_server(name: &str) -> (CertificateDer<'static>, u16) {
+    let cert = rcgen::generate_simple_self_signed(vec![name.to_string()]).unwrap();
+    let cert_der = cert.cert.der().clone();
+    let key_der = PrivateKeyDer::try_from(cert.signing_key.serialize_der()).unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(crypto_provider())
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der.clone()], key_der)
+        .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = ::tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    ::tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        // A rejected handshake is the expected outcome in half the tests.
+        let _ = acceptor.accept(tcp).await;
+    });
+    (cert_der, port)
+}
+
+async fn connect_pinned(
+    pin: CertificateDer<'static>,
+    port: u16,
+    sni: &str,
+) -> Result<(), SocketError> {
+    let raw = ::tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    TokioTlsConnector::pinned(pin, TlsVersions::Default)
+        .connect(sni, TokioIo::new(raw))
+        .await
+        .map(|_| ())
+}
+
+/// The pin is the identity: a matching cert is accepted under a name it does not carry (GitHub issue #642).
+#[tokio::test]
+async fn test_pinned_connector_accepts_its_pin_under_any_name() {
+    let (cert, port) = spawn_pinned_test_server("proxy.invalid").await;
+    assert_eq!(
+        connect_pinned(cert, port, "not-the-cert-name").await,
+        Ok(())
+    );
+}
+
+/// A different cert is `PinMismatch`, never `UntrustedAnchor`, which would invite re-capture.
+#[tokio::test]
+async fn test_pinned_connector_rejects_another_cert_as_pin_mismatch() {
+    let (_, port) = spawn_pinned_test_server("proxy.invalid").await;
+    let other = rcgen::generate_simple_self_signed(vec!["proxy.invalid".to_string()])
+        .unwrap()
+        .cert
+        .der()
+        .clone();
+    assert_eq!(
+        connect_pinned(other, port, "proxy.invalid").await,
+        Err(SocketError::CertificateInvalid(
+            CertificateFailure::PinMismatch
+        ))
+    );
+}
+
+#[test]
+fn test_rustls_other_error_maps_to_pin_mismatch_only_for_the_pin_marker() {
+    let pin = rustls::CertificateError::Other(rustls::OtherError(Arc::new(PinMismatchError)));
+    assert_eq!(
+        map_rustls_certificate_error(&pin),
+        CertificateFailure::PinMismatch
+    );
+    let unrelated = rustls::CertificateError::Other(rustls::OtherError(Arc::new(
+        std::io::Error::other("custom verifier"),
+    )));
+    assert_eq!(
+        map_rustls_certificate_error(&unrelated),
+        CertificateFailure::Unspecified
+    );
+}

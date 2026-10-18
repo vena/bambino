@@ -162,6 +162,9 @@ fn map_rustls_certificate_error(err: &rustls::CertificateError) -> CertificateFa
         }
         E::InvalidPurpose | E::InvalidPurposeContext { .. } => CertificateFailure::InvalidPurpose,
         E::BadEncoding => CertificateFailure::Malformed,
+        E::Other(other) if other.0.downcast_ref::<PinMismatchError>().is_some() => {
+            CertificateFailure::PinMismatch
+        }
         _ => CertificateFailure::Unspecified,
     }
 }
@@ -171,7 +174,9 @@ mod cert_verify;
 /// [`build_verified_client_config`] — can name these verifiers. `.claude/rules/
 /// tls-identity-sni.md` documents `CnFallbackServerVerifier` at this path, which a private
 /// `use` made unreachable.
-pub use cert_verify::{CnFallbackServerVerifier, NoCertificateVerification};
+pub use cert_verify::{
+    CnFallbackServerVerifier, NoCertificateVerification, PinMismatchError, PinnedCertVerifier,
+};
 
 /// The crypto provider every config and verifier in this backend uses.
 pub(crate) fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
@@ -230,6 +235,22 @@ pub fn build_verified_client_config(
     Ok(Arc::new(config))
 }
 
+/// Builds a `ClientConfig` that trusts exactly `pin`, the printer's DER leaf certificate — see [`PinnedCertVerifier`].
+///
+/// For a caller that captured the certificate with `TlsConnector::peer_chain_der` and now
+/// trusts that certificate alone. No chain, name or date check: a mismatch fails the handshake
+/// with `CertificateFailure::PinMismatch`. See [`build_unsafe_client_config`] for when
+/// `versions` must be [`TlsVersions::Tls12Only`].
+pub fn build_pinned_client_config(
+    pin: CertificateDer<'static>,
+    versions: TlsVersions,
+) -> Arc<rustls::ClientConfig> {
+    let config = dangerous_builder(versions)
+        .with_custom_certificate_verifier(Arc::new(PinnedCertVerifier::new(pin)))
+        .with_no_client_auth();
+    Arc::new(config)
+}
+
 /// TLS Secure connector wrapping Tokio-Rustls.
 ///
 /// `Clone` shares the underlying `ClientConfig`, so one connector can serve every
@@ -257,6 +278,11 @@ impl TokioTlsConnector {
         versions: TlsVersions,
     ) -> Result<Self, rustls::Error> {
         build_verified_client_config(ca_certs, client_auth, versions).map(Self::from)
+    }
+
+    /// A connector that trusts exactly one certificate — see [`build_pinned_client_config`].
+    pub fn pinned(pin: CertificateDer<'static>, versions: TlsVersions) -> Self {
+        build_pinned_client_config(pin, versions).into()
     }
 }
 

@@ -293,6 +293,95 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
     }
 }
 
+/// Certificate verifier that trusts exactly one certificate, compared byte for byte with the peer's leaf.
+///
+/// The pin is the identity, so nothing else about the certificate is checked: no chain, no
+/// name (the pin need not name the SNI, e.g. a proxy or a printer reached under another name),
+/// no validity dates (GitHub issue #642). The handshake signature *is* checked, through the same
+/// `x509-parser` path as [`CnFallbackServerVerifier`], so the peer must hold the pinned key and
+/// a v1 Bambu leaf works as a pin.
+///
+/// A mismatch is reported as [`PinMismatchError`] inside `CertificateError::Other`, which
+/// `map_rustls_certificate_error` turns into `CertificateFailure::PinMismatch`.
+pub struct PinnedCertVerifier {
+    pin: CertificateDer<'static>,
+    algs: WebPkiSupportedAlgorithms,
+}
+
+impl PinnedCertVerifier {
+    /// Builds the verifier for `pin`, the DER leaf certificate to trust (as `peer_chain_der` returns it).
+    pub fn new(pin: CertificateDer<'static>) -> Self {
+        Self {
+            pin,
+            algs: super::crypto_provider().signature_verification_algorithms,
+        }
+    }
+}
+
+impl core::fmt::Debug for PinnedCertVerifier {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PinnedCertVerifier").finish()
+    }
+}
+
+/// The error [`PinnedCertVerifier`] rejects a differing leaf with, carried in `CertificateError::Other`.
+#[derive(Debug)]
+pub struct PinMismatchError;
+
+impl core::fmt::Display for PinMismatchError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("peer certificate differs from the pinned certificate")
+    }
+}
+
+impl std::error::Error for PinMismatchError {}
+
+impl ServerCertVerifier for PinnedCertVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        if end_entity.as_ref() == self.pin.as_ref() {
+            return Ok(ServerCertVerified::assertion());
+        }
+        log::warn!("Rejecting TLS peer: its certificate differs from the pinned certificate");
+        Err(RustlsError::InvalidCertificate(CertificateError::Other(
+            rustls::OtherError(std::sync::Arc::new(PinMismatchError)),
+        )))
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        verify_handshake_signature(cert, message, dss, &self.algs, true)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        if !scheme_supported_in_tls13(dss.scheme) {
+            return Err(RustlsError::PeerMisbehaved(
+                rustls::PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,
+            ));
+        }
+        verify_handshake_signature(cert, message, dss, &self.algs, false)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algs.supported_schemes()
+    }
+}
+
 /// Rejects `cert` as `NotValidYet` or `Expired` when `now` is outside its validity period.
 fn check_validity(cert: &X509Certificate<'_>, now: ASN1Time) -> Result<(), RustlsError> {
     if cert.validity().is_valid_at(now) {

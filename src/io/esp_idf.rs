@@ -491,6 +491,8 @@ struct EspIdfTlsCerts {
     /// How many DER anchors the caller supplied, i.e. how many `ca_pem` should load. The
     /// baseline a failed handshake's trust store is compared against (GitHub issue #384).
     anchor_count: usize,
+    /// The one DER leaf a `pinned()` connector trusts, compared after an unverified handshake (GitHub issue #642).
+    pin: Option<Vec<u8>>,
     client_cert: Option<Vec<u8>>,
     client_key: Option<Vec<u8>>,
 }
@@ -500,6 +502,7 @@ impl EspIdfTlsCerts {
         Self {
             ca_pem: None,
             anchor_count: 0,
+            pin: None,
             client_cert: None,
             client_key: None,
         }
@@ -536,6 +539,7 @@ impl EspIdfTlsCerts {
         Ok(Self {
             ca_pem: Some(ca_pem),
             anchor_count,
+            pin: None,
             client_cert,
             client_key,
         })
@@ -1504,6 +1508,32 @@ impl EspIdfTlsConnector {
         })
     }
 
+    /// Creates a connector that trusts exactly one certificate, `pin`, the printer's DER leaf as `peer_chain_der` returned it.
+    ///
+    /// For a pin that [`Self::with_certs`] cannot verify: mbedTLS accepts an end-entity
+    /// certificate as an anchor only when it is self-issued, and then still checks its name, so a
+    /// CA-issued printer leaf never verifies and a self-signed proxy cert fails on the SNI (GitHub
+    /// issue #642). The pin is the identity, so no chain, name or date is checked; SNI is still
+    /// sent as given.
+    ///
+    /// The handshake runs as in [`Self::unverified`] (same hook, same
+    /// `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` requirement), and `connect` then compares the peer's
+    /// leaf with `pin` before returning the stream, so nothing is sent over a session that fails
+    /// the check. mbedTLS still verifies the handshake signature against the presented
+    /// certificate's key, so the peer must hold the pinned key. A differing leaf fails with
+    /// [`CertificateFailure::PinMismatch`](crate::io::CertificateFailure::PinMismatch).
+    ///
+    /// **Requires `CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE`**, as `peer_chain_der` does. With it
+    /// off the leaf can't be read and every `connect` fails closed with a `SocketError::Other`.
+    pub fn pinned(pin: Vec<u8>) -> Self {
+        let mut certs = EspIdfTlsCerts::new();
+        certs.pin = Some(pin);
+        Self {
+            certs: std::sync::Arc::new(certs),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        }
+    }
+
     /// Sets a handshake deadline for direct use of this connector; disabled by default.
     ///
     /// Under `PrinterClient`, leave it unset: `PrinterClient::with_connect_timeout` already bounds
@@ -1554,7 +1584,8 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                 "EspIdfTlsConnector has no trust anchor and this build has \
                  CONFIG_MBEDTLS_CERTIFICATE_BUNDLE disabled, so there is no crt_bundle_attach \
                  seam left to skip server-certificate verification through (GitHub issue #168). \
-                 Use with_certs() with a real CA, or enable CONFIG_MBEDTLS_CERTIFICATE_BUNDLE."
+                 Use with_certs() with a real CA, or enable CONFIG_MBEDTLS_CERTIFICATE_BUNDLE \
+                 (pinned() needs it too)."
                     .into(),
             ));
         }
@@ -1697,6 +1728,19 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     }
                     return Err(map_esp_tls_connect_error(&e, esp_err, mbedtls_err));
                 }
+            }
+        }
+
+        // Before the stream is handed out, so nothing is ever sent over a session that fails the
+        // pin. `close()` is a no-op on this backend, so dropping `tls` here is the whole teardown.
+        if let Some(pin) = &self.certs.pin {
+            let chain = query_peer_chain_der(&tls);
+            if let Err(e) = crate::io::check_pinned_leaf(chain.as_deref(), pin) {
+                log::error!(
+                    "ESP-TLS peer {} failed the certificate pin: {e}",
+                    RedactedHost(host)
+                );
+                return Err(e);
             }
         }
 
