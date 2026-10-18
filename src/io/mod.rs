@@ -184,11 +184,11 @@ pub enum CertificateFailure {
     ///
     /// Produced only by the pinned connectors (`TokioTlsConnector::pinned`,
     /// `EspIdfTlsConnector::pinned`), which trust exactly one certificate by byte comparison
-    /// and check nothing else (GitHub issue #642). **Not** a trust-on-first-use candidate, unlike
-    /// [`UntrustedAnchor`](Self::UntrustedAnchor): the caller already holds a pin for this
-    /// printer, so a different certificate means the printer's identity changed (a replaced
-    /// certificate, a different device at that address, or an interception). Whether to re-pin
-    /// is the caller's decision, and it should not look like first contact.
+    /// and check no chain, name or dates (GitHub issue #642). **Not** a trust-on-first-use
+    /// candidate, unlike [`UntrustedAnchor`](Self::UntrustedAnchor): the caller already holds a
+    /// pin for this printer, so a different certificate means the printer's identity changed (a
+    /// replaced certificate, a different device at that address, or an interception). Whether to
+    /// re-pin is the caller's decision, and it should not look like first contact.
     PinMismatch,
     /// Rejected for a reason with no portable counterpart above.
     Unspecified,
@@ -479,7 +479,7 @@ pub(crate) fn check_pinned_leaf<C: AsRef<[u8]>>(
     let Some(chain) = chain else {
         return Err(SocketError::Other(
             "pinned connector cannot read the peer certificate, so the pin cannot be checked \
-             (enable CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE)"
+             (is CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE enabled?)"
                 .into(),
         ));
     };
@@ -836,6 +836,8 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     /// and deliberately treats certificates as runtime input, so trust-on-first-use has to be
     /// built on top of it. Storage and policy (where a pin lives, what happens on a mismatch)
     /// belong to the caller; all this provides is read access to what the peer actually sent.
+    /// To enforce a captured leaf on later connections, use `TokioTlsConnector::pinned` or
+    /// `EspIdfTlsConnector::pinned`, which compare it inside `connect` (GitHub issue #642).
     ///
     /// Returns `None` where the platform cannot report it — a *lack of information*, never
     /// "the peer sent nothing" and never "skip validation". A caller enforcing a pin must treat
@@ -845,7 +847,7 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     /// decides what pinning is possible. Confirmed on a P1S: two certificates, the `CN=<serial>`
     /// leaf followed by the self-signed `CN=BBL CA` root (`CA:TRUE`) — so an anchor *can* be
     /// captured at first contact and fed back through `with_certs(..)` for genuine chain
-    /// verification, rather than being limited to a leaf-fingerprint comparison. Only the P1S has
+    /// verification, as an alternative to pinning the leaf. Only the P1S has
     /// been checked; use `bambino-cli inspect-cert` to confirm any other model rather than
     /// assuming it generalizes.
     ///

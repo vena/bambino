@@ -478,7 +478,7 @@ fn map_esp_tls_connect_error(
     )
 }
 
-/// Cert bundle used by `EspIdfTlsConnector`'s `ca_pem`/`client_cert`/`client_key` fields and `unverified()`/`with_certs()` constructors.
+/// Cert bundle used by `EspIdfTlsConnector`'s `ca_pem`/`client_cert`/`client_key` fields and `unverified()`/`with_certs()`/`pinned()` constructors.
 /// Factored out so a future cert-related option (e.g. ALPN config) only needs to be added in
 /// one place.
 ///
@@ -1554,7 +1554,7 @@ impl EspIdfTlsConnector {
     /// deadline entirely, matching `set_command_timeout`'s "0 disables" convention
     /// and `client::connect::with_connect_timeout`'s precedent — otherwise the very
     /// first would-block poll would immediately exceed a zero-length budget.
-    /// Chain onto `unverified()`/`with_certs()`.
+    /// Chain onto `unverified()`/`with_certs()`/`pinned()`.
     #[must_use]
     pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
         self.connect_timeout = connect_timeout;
