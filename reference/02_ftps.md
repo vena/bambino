@@ -62,6 +62,8 @@ So `/` + `gcode_file` names the job's file whenever it is at the root, which is 
 
 Directory listings and file metadata are parsed from standard UNIX listing arrays returned by the `LIST` command over the passive data channel.
 
+**The server does not sort on request.** `LIST -t /cache` is answered `550` on a P1S (2026-10-18), while a plain `LIST /cache` in the same session succeeded, most likely because the server reads `-t /cache` as a path (inferred; the reply carries no text). FTP has no standard sort or limit, so a "newest first" listing means fetching the whole directory and sorting it on the client. The file service's `LIST_INFO` [REF-FILESVC] has no sort, limit or offset field either; Bambu Studio (`PrinterFileSystem::ListAllFiles`) and ha-bambulab (`sort_newest_first` in `media_sources.py`) both sort the reply themselves.
+
 #### UNIX Listing Parser
 Directory payloads are returned as CRLF-separated strings conforming to standard UNIX format:
 
