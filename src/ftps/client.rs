@@ -228,7 +228,10 @@ fn split_parent(path: &str) -> Option<(&str, &str)> {
 }
 
 /// Printer clock passed to the existence-check listing in `finish_removal`, which reads only names, never dates.
-const NAMES_ONLY_LISTING_CLOCK: CurrentDateTime = CurrentDateTime::new(1970, 1, 1, 0, 0);
+///
+/// The dates still decide which entries parse: a year-less entry whose day no candidate year has
+/// is dropped. The last minute of a leap year keeps every entry, a Feb 29 one included (#644).
+const NAMES_ONLY_LISTING_CLOCK: CurrentDateTime = CurrentDateTime::new(2024, 12, 31, 23, 59);
 
 /// Bundles the args a login-step command shares across calls, so each call site only spells
 /// out what varies: the command, its log label, the expected reply code, and the rejection.

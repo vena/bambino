@@ -512,6 +512,19 @@ async fn test_ftps_directory_operations() {
         "a refused DELE must not report success: {refused:?}"
     );
 
+    let refused = client.delete_file("/model/leap").await;
+    assert!(
+        matches!(
+            refused,
+            Err(Error::FtpReply {
+                command: "DELE",
+                code: 550,
+                ..
+            })
+        ),
+        "a Feb 29 entry must survive the existence check: {refused:?}"
+    );
+
     server_handle.await.expect("Mock server panicked");
 }
 

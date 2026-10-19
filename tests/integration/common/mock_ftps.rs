@@ -481,6 +481,14 @@ pub async fn run_mock_server_dir_ops(
         b"drwxr-xr-x    2 1000     1000           0 Jun 17 12:14 full\r\n",
     )
     .await;
+
+    // The same refusal for a target listed as `Feb 29 HH:MM`, a day no non-leap year has (#644).
+    ctl.expect("DELE /model/leap\r\n", b"550 \r\n").await;
+    ctl.serve_listing(
+        "/model",
+        b"drwxr-xr-x    2 1000     1000           0 Feb 29 12:14 leap\r\n",
+    )
+    .await;
 }
 
 /// Mock server for `get_available_space()` when AVBL is unsupported.
