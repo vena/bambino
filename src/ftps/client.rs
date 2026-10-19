@@ -229,8 +229,11 @@ fn split_parent(path: &str) -> Option<(&str, &str)> {
 
 /// Printer clock passed to the existence-check listing in `finish_removal`, which reads only names, never dates.
 ///
-/// The dates still decide which entries parse: a year-less entry whose day no candidate year has
-/// is dropped. The last minute of a leap year keeps every entry, a Feb 29 one included (#644).
+/// The years it gives are thrown away, but the dates still decide which entries parse: a
+/// year-less entry goes into the reference year or the one before, and is dropped when neither
+/// has its day. From the last minute of a leap year, every entry goes into that year, so a
+/// Feb 29 one parses (#644). A live clock would not do: it drops them whenever neither candidate
+/// is a leap year, as with 2026 and 2025.
 const NAMES_ONLY_LISTING_CLOCK: CurrentDateTime = CurrentDateTime::new(2024, 12, 31, 23, 59);
 
 /// Bundles the args a login-step command shares across calls, so each call site only spells
