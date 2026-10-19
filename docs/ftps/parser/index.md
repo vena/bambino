@@ -300,13 +300,13 @@ the untouched remainder verbatim as the filename — preserves internal multi-sp
 runs exactly, rather than re-tokenizing and rejoining with a single space.
 
 **Temporal Rollover Mitigation:**
-UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
-was updated within the last six months. In this scenario the year is taken from `now`, which
-must carry the *printer's* clock and not the host's (see [`CurrentDateTime`](#currentdatetime)). If comparing the
-parsed datetime markers against that reference reveals
-that the parsed datetime is in the future, the file belongs to last year's calendar cycle
-(e.g., parsing a December modification date in January). In this event, we decrement the
-calculated year by 1.
+UNIX listing formats omit the modification year and provide a timestamp (HH:MM) for a file
+modified near the server's clock. That includes files *ahead* of it: a P1S lists entries up to
+42 hours later than its own clock this way. The year is rebuilt against `now`, which must carry
+the *printer's* clock and not the host's (see [`CurrentDateTime`](#currentdatetime)), as whichever of `now.year`
+and the year before puts the entry nearer `now`. So an entry rolls back a year only when
+`now.year` would put it more than half a year ahead (e.g., a December modification date read
+in January).
 
 
 ---
