@@ -62,6 +62,11 @@ Non-obvious type decisions and behavioral invariants live close to the code they
 - Single-directory invariants → a nested `CLAUDE.md` in that directory (currently: `src/types/telemetry/`, `src/camera/`, `src/ftps/`, `src/io/`, plus the two hardware probes).
 - Only truly global content (Key Invariants above, build/test commands, verification gate, architecture overview) stays here.
 
+**`ctx_read` doesn't load these.** Nested `CLAUDE.md` files and `.claude/rules/` load automatically on a native `Read` but not on `ctx_read` (verified 2026-10-19 in a subagent; assumed the same for a main session). Before working out or reviewing a change to a file you read with `ctx_*` tools, load them yourself:
+
+1. `ctx_read` the `CLAUDE.md` in the file's directory and in each parent directory below the repo root, where one exists.
+2. `ctx_search` the `.claude/rules/` directory for the pattern `^(paths:|  - ")` with `max_results` 500. That lists every rule's `paths:` globs, whether written as a list or inline. `ctx_read` each rule whose globs match a file you will edit.
+
 ## Key Conventions
 
 - `serde_json` is used with `default-features = false` — always use `serde_json::to_vec` (not `to_string`) for payloads.

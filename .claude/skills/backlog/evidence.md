@@ -1,6 +1,6 @@
 # What counts as confirmation
 
-**BambuStudio and bambuddy agreeing is confirmation — align with them.** Not "strong evidence pending hardware". State it plainly, drop the hedging, and change the code to match; there is nothing further to wait for. They are independent in the way that matters: BambuStudio is the vendor's own client, bambuddy an independent reverse-engineering of the same wire. A capture from our own printer corroborates and is worth citing, but is not required for a shape both already agree on.
+**BambuStudio and bambuddy agreeing is confirmation — align with them.** Change the code to match; there is nothing further to wait for. They are independent in the way that matters: BambuStudio is the vendor's own client, bambuddy an independent reverse-engineering of the same wire. A capture from our own printer corroborates and is worth citing, but is not required for a shape both already agree on.
 
 **Those two specifically.** ha-bambulab is good supporting evidence and often the most readable account of a field, but it does not carry confirmation on its own or as the second source — a finding resting on ha-bambulab plus one other still needs BambuStudio and bambuddy checked. Cite it freely; don't count it.
 
