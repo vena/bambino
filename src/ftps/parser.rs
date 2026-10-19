@@ -289,6 +289,13 @@ fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Minutes from 1970-01-01 00:00 to `t`, ignoring its seconds.
+///
+/// A Feb 29 in a non-leap year counts as Mar 1, which is close enough to rank a rollover candidate.
+fn minutes_since_epoch(t: FtpTimestamp) -> i64 {
+    days_from_civil(t.year, t.month, t.day) * 1440 + i64::from(t.hour) * 60 + i64::from(t.minute)
+}
+
 /// Returns `t` moved `secs` seconds later, carrying into the minute, hour, day, month and year.
 ///
 /// A leap second (`second == 60`) carries like any other second.
@@ -343,13 +350,13 @@ impl From<FtpTimestamp> for CurrentDateTime {
 /// runs exactly, rather than re-tokenizing and rejoining with a single space.
 ///
 /// **Temporal Rollover Mitigation:**
-/// UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
-/// was updated within the last six months. In this scenario the year is taken from `now`, which
-/// must carry the *printer's* clock and not the host's (see [`CurrentDateTime`]). If comparing the
-/// parsed datetime markers against that reference reveals
-/// that the parsed datetime is in the future, the file belongs to last year's calendar cycle
-/// (e.g., parsing a December modification date in January). In this event, we decrement the
-/// calculated year by 1.
+/// UNIX listing formats omit the modification year and provide a timestamp (HH:MM) for a file
+/// modified near the server's clock. That includes files *ahead* of it: a P1S lists entries up to
+/// 42 hours later than its own clock this way. The year is rebuilt against `now`, which must carry
+/// the *printer's* clock and not the host's (see [`CurrentDateTime`]), as whichever of `now.year`
+/// and the year before puts the entry nearer `now`. So an entry rolls back a year only when
+/// `now.year` would put it more than half a year ahead (e.g., a December modification date read
+/// in January).
 pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
     let mut files = Vec::new();
     for line in payload.lines() {
@@ -464,9 +471,15 @@ pub(crate) fn parse_listing_line(line: &str, now: CurrentDateTime) -> Option<Ftp
 
     let mut year = current_year;
     if year_is_inferred {
-        // Rollover calculation: If parsed datetime attributes exceed our current system markers,
-        // we have crossed a calendar year boundary. Drop the year parameter accordingly.
-        if at(current_year) > now_ts {
+        // The server shows HH:MM for an entry near its clock on either side: a P1S lists files
+        // up to 42 h *ahead* of its clock this way (#643). So the entry belongs to whichever
+        // candidate year puts it nearer the reference, and rolls back only when `current_year`
+        // would put it more than half a year ahead (a December entry read in January). A tie
+        // keeps `current_year`.
+        let reference = minutes_since_epoch(now_ts);
+        let ahead = minutes_since_epoch(at(current_year)) - reference;
+        let behind = reference - minutes_since_epoch(at(current_year - 1));
+        if behind < ahead {
             year = current_year - 1;
         }
     } else {
@@ -486,34 +499,18 @@ pub(crate) fn parse_listing_line(line: &str, now: CurrentDateTime) -> Option<Ftp
     // rejected instead of silently accepted.
     //
     // For the inferred-year (HH:MM) branch, an invalid day here doesn't mean the line is
-    // calendar-invalid — it can mean the rollover heuristic picked the wrong one of its two
-    // candidate years (e.g. a Feb 29 entry landing in a non-leap `current_year - 1`). Retry
-    // against the other candidate before dropping the entry.
+    // calendar-invalid — it can mean the nearer of the two candidate years isn't a leap year
+    // (a Feb 29 entry, #165). The other candidate is sound only when it is `current_year - 1`,
+    // behind the reference. When it is `current_year`, being the farther candidate means lying
+    // more than half a year ahead, outside the window the rollover above keeps (#249).
     if day > days_in_month(month, year) {
-        if year_is_inferred {
-            let alternate_year = if year == current_year {
-                current_year - 1
-            } else {
-                current_year
-            };
-            // Calendar validity alone is not enough. Retrying forward — from
-            // `current_year - 1` back to `current_year` — can only be sound if the entry
-            // still lands at or before the reference clock, which is the exact invariant
-            // the rollover comparison above enforces in the first place. Without this, a
-            // `Feb 29 10:00` line read on 2024-01-15 rolls back to the non-leap 2023,
-            // fails the day check, and is then "repaired" to 2024-02-29 — six weeks in
-            // the future. Retrying backward to `current_year - 1` moves the entry further
-            // into the past and never violates the invariant, so it needs no extra guard.
-            let alternate_is_future = at(alternate_year) > now_ts;
-            if day <= days_in_month(month, alternate_year) && !alternate_is_future {
-                year = alternate_year;
-            } else {
-                log::warn!(
-                    "Dropping LIST entry with no sound rollover-candidate year (calendar-invalid, or future-dated relative to the reference clock)"
-                );
-                return None;
-            }
+        let earlier = current_year - 1;
+        if year_is_inferred && year == current_year && day <= days_in_month(month, earlier) {
+            year = earlier;
         } else {
+            if year_is_inferred {
+                log::warn!("Dropping LIST entry with no calendar-valid rollover-candidate year");
+            }
             return None;
         }
     }
@@ -712,34 +709,62 @@ mod tests {
     }
 
     #[test]
-    fn test_feb_29_rollover_retry_never_reconstructs_a_future_date() {
-        // 2024 is a leap year, 2023 is not. `Feb 29 10:00` read on 2024-01-15 rolls back to
-        // 2023, fails the day check, and the retry's only other candidate is 2024 — which
-        // would place the entry six weeks in the future, the exact condition the rollover
-        // comparison exists to prevent. There is no sound year, so the entry is dropped.
+    fn test_feb_29_entry_weeks_ahead_keeps_the_reference_year() {
+        // Read on 2024-01-15, `Feb 29 10:00` is six weeks ahead in 2024 and over ten months
+        // behind in 2023, so 2024 is the nearer candidate, and it is a leap year. An entry
+        // ahead of the reference is inside the server's HH:MM window (#643), the same as
+        // `Feb 28 10:00` would be.
         let files = parse_unix_listing(
             "-rwxrwxrwx   1 root     root           12 Feb 29 10:00 leapfile.3mf",
-            CurrentDateTime {
-                year: 2024,
-                month: 1,
-                day: 15,
-                hour: 0,
-                minute: 0,
-            },
+            CurrentDateTime::new(2024, 1, 15, 0, 0),
         );
-        assert!(
-            files.is_empty(),
-            "the retry must not repair a Feb 29 entry into a future-dated one, got {files:?}"
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].modified.year, 2024);
+    }
+
+    #[test]
+    fn test_feb_29_entry_with_no_leap_candidate_is_dropped() {
+        // Neither 2023 nor 2022 has a Feb 29, so no candidate year is calendar-valid.
+        let files = parse_unix_listing(
+            "-rwxrwxrwx   1 root     root           12 Feb 29 10:00 leapfile.3mf",
+            CurrentDateTime::new(2023, 1, 15, 0, 0),
         );
+        assert!(files.is_empty(), "got {files:?}");
+    }
+
+    #[test]
+    fn test_entries_ahead_of_a_lagging_printer_clock_keep_its_year() {
+        // Observed on a P1S (#643): its clock read 2026-10-02 07:56 and it listed these three,
+        // up to 42 h later than that, in the HH:MM form. They are its newest files.
+        let payload = "-rw-r--r--    1 1000     1000      1024 Oct  2 08:39 a.3mf\n\
+                       -rw-r--r--    1 1000     1000      1024 Oct  3 23:32 b.3mf\n\
+                       -rw-r--r--    1 1000     1000      1024 Oct  4 02:13 c.3mf\n";
+        let files = parse_unix_listing(payload, CurrentDateTime::new(2026, 10, 2, 7, 56));
+        assert_eq!(files.len(), 3);
+        for f in &files {
+            assert_eq!(f.modified.year, 2026, "{}", f.name);
+            assert!(f.year_is_inferred);
+        }
+    }
+
+    #[test]
+    fn test_rollover_window_edge_is_half_a_year_ahead() {
+        // From 2026-01-01 00:00, Jul 2 12:00 is 182 d 12 h ahead in 2026 and exactly as far
+        // behind in 2025. The tie keeps 2026; a minute later, 2025 is nearer.
+        let now = CurrentDateTime::new(2026, 1, 1, 0, 0);
+        let payload = "-rw-r--r--    1 1000     1000      1024 Jul  2 12:00 edge.3mf\n\
+                       -rw-r--r--    1 1000     1000      1024 Jul  2 12:01 past.3mf\n";
+        let files = parse_unix_listing(payload, now);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].modified.year, 2026);
+        assert_eq!(files[1].modified.year, 2025);
     }
 
     #[test]
     fn test_feb_29_rollover_retry_still_recovers_a_past_dated_entry() {
-        // The backward retry, which is what closed #165 added and which this guard must not
-        // break: read on 2025-03-10, `Feb 29 10:00` is not after the reference clock, so the
-        // initial pick is 2025 — not a leap year, so the day check fails. The alternate
-        // candidate 2024 is both a leap year and further into the past, so it is sound and
-        // the entry is recovered rather than dropped.
+        // The backward retry #165 added: read on 2025-03-10, `Feb 29 10:00` is nearer in 2025,
+        // which isn't a leap year, so the day check fails. The other candidate, 2024, is a
+        // leap year behind the reference, so the entry is recovered rather than dropped.
         let files = parse_unix_listing(
             "-rwxrwxrwx   1 root     root           12 Feb 29 10:00 leapfile.3mf",
             CurrentDateTime {
@@ -831,8 +856,7 @@ mod tests {
         // Today is January 2nd, 2026 (01:15).
         // We parse a file modified on December 31st containing a timestamp of 23:59.
         // It has no year representation, so standard logic yields December 31st, 2026.
-        // Because that datetime resides in our system's relative future, rollover math must
-        // automatically correct this to December 31st, 2025.
+        // That is almost a year ahead, so the entry is nearer in December 31st, 2025.
         let payload = "-rw-r--r--    1 1000     1000          100 Dec 31 23:59 print_job.gcode";
         let files = parse_unix_listing(
             payload,

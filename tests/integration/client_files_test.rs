@@ -411,8 +411,11 @@ async fn test_delete_file_deletes_the_listed_path() {
     server.await.expect("FTPS mock panicked");
 }
 
-/// A root listing whose one model has no year: `Mar 01 10:00`.
-const RECENT: &str = "-rw-r--r--    1 1000     1000          10 Mar 01 10:00 recent.3mf\r\n";
+/// A root listing whose one model has no year: `Sep 01 10:00`.
+///
+/// The year goes back only when the entry would be over half a year ahead of the clock, so it
+/// is last year's against a clock on Feb 02 and this year's against one on Apr 02.
+const RECENT: &str = "-rw-r--r--    1 1000     1000          10 Sep 01 10:00 recent.3mf\r\n";
 
 /// The probe steps, with `mdtm` as the `MDTM` reply.
 fn probe(mdtm: &str) -> Vec<Step> {
@@ -445,7 +448,7 @@ async fn test_probe_is_off_by_default() {
         panic!("host clock gives a year");
     };
     assert!(year_inferred);
-    assert_eq!((at.month, at.day, at.hour, at.minute), (3, 1, 10, 0));
+    assert_eq!((at.month, at.day, at.hour, at.minute), (9, 1, 10, 0));
     server.await.expect("FTPS mock panicked");
 }
 
@@ -453,7 +456,7 @@ async fn test_probe_is_off_by_default() {
 async fn test_probe_runs_once_per_session() {
     let mut fx = Fixture::new();
     fx.client = fx.client.with_printer_clock_probe(true);
-    // The printer's clock reads 2026-02-02, so `Mar 01` is last year's.
+    // The printer's clock reads 2026-02-02, so `Sep 01` is last year's.
     let mut steps = probe("213 20260202085730");
     steps.extend([
         list("/cache", ""),
@@ -466,7 +469,7 @@ async fn test_probe_runs_once_per_session() {
     let expected = FileTime::Calendar {
         at: FtpTimestamp {
             year: 2025,
-            month: 3,
+            month: 9,
             day: 1,
             hour: 10,
             minute: 0,
@@ -480,7 +483,7 @@ async fn test_probe_runs_once_per_session() {
     fx.client.disconnect_ftps().await;
     server.await.expect("FTPS mock panicked");
 
-    // A new session probes again: this time the printer's clock is past `Mar 01`.
+    // A new session probes again: this time the printer's clock is near enough to `Sep 01`.
     let mut steps = probe("213 20260402085730");
     steps.extend([list("/cache", ""), list("/", RECENT)]);
     let server = fx.session(steps).await;
@@ -530,7 +533,7 @@ async fn test_kept_reading_lists_later_sessions_without_probing() {
     let mut fx = Fixture::new();
     fx.client = fx.client.with_printer_clock_probe(true);
     assert_eq!(fx.client.printer_clock_reading(), None);
-    // The printer's clock reads 2026-02-02, so `Mar 01` is last year's.
+    // The printer's clock reads 2026-02-02, so `Sep 01` is last year's.
     let mut steps = probe("213 20260202085730");
     steps.extend([
         list("/cache", ""),
@@ -589,7 +592,7 @@ async fn test_cleared_reading_falls_back_to_the_probe() {
 
     fx.client.set_printer_clock_reading(Some(reading));
     fx.client.set_printer_clock_reading(None);
-    // The printer rebooted and its clock now reads past `Mar 01`: the probe runs again.
+    // The printer rebooted and its clock now reads near enough to `Sep 01`: the probe runs again.
     let mut steps = probe("213 20260402085730");
     steps.extend([list("/cache", ""), list("/", RECENT)]);
     let server = fx.session(steps).await;
