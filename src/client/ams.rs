@@ -170,6 +170,35 @@ where
             .unit_model()
     }
 
+    /// Derives an `ams_mapping2` for `filaments` from the cached AMS telemetry, as BambuStudio does before every send; does no I/O.
+    ///
+    /// `filaments` is the plate's filament list, from
+    /// [`read_plate_filaments`](crate::ftps::project::read_plate_filaments) on a file the caller
+    /// holds, or built by the caller. The result's
+    /// [`mapping2`](crate::ams::AmsMappingResult::mapping2) goes to
+    /// [`PrintJobConfig::with_ams_mapping2`](crate::mqtt::PrintJobConfig::with_ams_mapping2).
+    /// `ams()` and `vir_slot()` (dual-nozzle models only) are what it matches against, so poll
+    /// telemetry first: with none cached, every filament is unmatched, which is not an error.
+    ///
+    /// **Check [`unmatched`](crate::ams::AmsMappingResult::unmatched) before starting the job.**
+    /// A filament nothing loaded matched is an unmapped entry, and
+    /// [`start_print`](Self::start_print) with one the plate uses fails with an AMS mapping error
+    /// on the printer. Whether to send anyway, ask the user or stop is the caller's decision.
+    /// [`derive_ams_mapping`](crate::ams::derive_ams_mapping) has the match rules and where they
+    /// differ from BambuStudio.
+    #[must_use]
+    pub fn derive_ams_mapping(
+        &self,
+        filaments: &crate::ftps::project::PlateFilaments,
+    ) -> crate::ams::AmsMappingResult {
+        crate::ams::derive_ams_mapping(
+            filaments,
+            self.ams(),
+            self.vir_slot().unwrap_or(&[]),
+            self.quirks().physical_nozzle_count() > 1,
+        )
+    }
+
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
     ///
     /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or an A2L-attached

@@ -12,7 +12,16 @@
 //! after the data, not in the local header), so the walk can't skip an entry by its header. It
 //! finds a stored PNG's end after its `IEND` chunk, and a deflated entry's end by the data
 //! descriptor that follows it (its compressed size equals the distance walked, and a ZIP header
-//! follows). It never inflates. See `reference/02_ftps.md` [REF-FTPS-3MF-FRONT].
+//! follows). The front walk never inflates. See `reference/02_ftps.md` [REF-FTPS-3MF-FRONT].
+//!
+//! The one thing here that does inflate is [`read_plate_filaments`], which reads a plate's
+//! filament list from `Metadata/slice_info.config`: that member sits near the end of the file,
+//! deflated, so it is found through the ZIP's central directory (see the `slice_info` module) from
+//! a file the caller holds, not from the front prefix.
+
+mod slice_info;
+
+pub use slice_info::{PlateFilament, PlateFilaments, parse_slice_info, read_plate_filaments};
 
 #[cfg(not(feature = "std"))]
 use alloc::format;

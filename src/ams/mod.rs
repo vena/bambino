@@ -6,10 +6,12 @@
 //! including multi-AMS index resolution, spool presence detection, and stale tray data
 //! cleanup. Supports standard AMS units, AMS-HT dry chambers, and virtual external spools.
 
+pub mod auto_map;
 pub(crate) mod ids;
 pub mod mapping;
 pub mod parser;
 
+pub use auto_map::{AmsMappingResult, FilamentMatch, color_distance, derive_ams_mapping};
 pub use ids::normalize_ams_unit_id;
 pub use mapping::{
     AmsEntryKind, AmsLiteSlot, AmsMapping2Entry, AmsPoolComposition, MaterialSource,

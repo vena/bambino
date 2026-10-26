@@ -318,6 +318,21 @@ No sender found leaves the mapping to the printer. Both derive one from the file
 
 What the printer does with a job sent without a mapping, or started from its own screen, has no source. A job sliced for AMS slots and sent with `use_ams: false` prints from the external spool. bambino's `PrintJobConfig::new` defaults to exactly that, so a consumer that does not ask the user must derive a mapping as above.
 
+**What bambino provides** (#656), in two parts that don't depend on each other:
+
+*   `ftps::project::read_plate_filaments(source, plate)` reads a plate's filament list (`id` 1-based, `type`, `color`, `tray_info_idx`, and the plate's `filament_maps`) from a `.3mf` the **caller holds**, through an `UploadSource`. `Metadata/slice_info.config` sits near the end of the file and is deflated, so it is found through the ZIP's end of central directory, then its central entry and local header; Zip64 is refused. `parse_slice_info` is the same parse over text that is already inflated. Reading the list from the printer is not offered: FTPS has no `REST`, so it would be a download of the whole file, and the file tunnel is #636. The format comes from BambuStudio's exporter (`_BBS_3MF_Exporter`, `bbs_3mf.cpp`: `slice_filaments_info`, `FILAMENT_MAP_ATTR`). The file has `tray_info_idx` but no `setting_id`.
+*   `ams::derive_ams_mapping` (and `PrinterClient::derive_ams_mapping`, which feeds it the cached `ams()` and `vir_slot()`) ports `ams_filament_mapping`: the same distance (`type` hard, then `setting_id`, `filament_id`, colour in CIELAB ΔE76 plus alpha), the same greedy rounds and `_prefer_tray_by_remain`. It returns the `ams_mapping2` array `PrintJobConfig::with_ams_mapping2` takes and, per filament, the tray it matched, so the caller can report an unmatched one. A filament nothing matched is `{255, 255}`; a job that uses it fails on the printer with an AMS mapping error, and whether to send it anyway is the caller's decision.
+
+Where it deviates from BambuStudio (the module doc of `src/ams/auto_map.rs` is the full list):
+
+*   The tie-break reads the tray the matrix column names; BambuStudio indexes its tray map by key with a column position (`tray_filaments[picked_tar_idx]`), which reads the wrong tray whenever flat indexes have gaps.
+*   Two empty `filament_id`s are not an exact match in the tie-break (BambuStudio's `==` says they are).
+*   The used-tray retry runs after the unused-tray pass has covered every remaining filament, not as soon as one filament finds nothing.
+*   A single-nozzle printer ignores a unit's extruder binding. A tray counts as loaded by `AmsTray::is_loaded`, since the cache keeps an emptied tray's old fields.
+*   For a unit reporting `0xE` ("not fixed"), BambuStudio uses both extruders only when a Filament Track Switch is installed (`DevFilaSystem.cpp`, `ParseAmsInfo`: `extuder_id == 0xE && GetFilaSwitch()->IsInstalled()` with a valid `bind_switch_in`), and none otherwise. bambino doesn't model the switch's own telemetry (bambuddy detects it from the presence of `device.fila_switch`, `_parse_fila_switch` in `bambu_mqtt.py`), so it checks the `bind_switch_in` inlet alone. Unverified on hardware.
+*   With `use_ams = true` BambuStudio never maps a single-nozzle printer to its external spool, and bambino follows. On two extruders it matches each side separately, using that side's external spool only when no AMS unit is bound to it. A filament whose `filament_maps` value is missing or not 1 or 2 is left unmatched on a dual-nozzle printer.
+*   The sub-class (`setting_id`) branch is in the code but never fires for a file's filaments, which carry none.
+
 #### Select Calibration Profile Command (`extrusion_cali_sel`)
 To bind a stored pressure advance (K-profile) to an AMS slot, `"ams_id"`, `"tray_id"` and `"slot_id"` must be transmitted. `"tray_id"` must be formatted as the absolute global tray ID; `"slot_id"` is the local slot — `tray_id - ams_id * 4` for a standard AMS, `tray_id - 24` for an AMS Lite on an A2L, and `0` for an AMS-HT or external spool. BambuStudio `commnad_select_pa_calibration` (`DeviceManager.cpp`) and bambuddy (`bambu_mqtt.py`) both send `slot_id` (#315). Furthermore, the `setting_id` field must be strictly omitted to prevent database mislinking.
 

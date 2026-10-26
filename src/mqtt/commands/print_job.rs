@@ -261,7 +261,11 @@ impl PrintJobConfig {
     /// this default prints from the external spool. No sender leaves the mapping out:
     /// BambuStudio derives one from the file's filaments and the loaded trays before every
     /// send, and bambuddy computes one when a job has none. Pass the mapping through
-    /// [`with_ams`](Self::with_ams) or [`with_ams_mapping2`](Self::with_ams_mapping2). See
+    /// [`with_ams`](Self::with_ams) or [`with_ams_mapping2`](Self::with_ams_mapping2). A caller
+    /// that doesn't ask the user can derive one: read the plate's filaments with
+    /// [`read_plate_filaments`](crate::ftps::project::read_plate_filaments) from a file it holds,
+    /// then [`PrinterClient::derive_ams_mapping`](crate::client::PrinterClient::derive_ams_mapping),
+    /// and check the result for unmatched filaments before sending. See
     /// `reference/05_materials_ams.md`, "Choosing a Mapping When the User Is Not Asked".
     pub fn new(
         job_filename: &str,
