@@ -254,16 +254,26 @@ pub struct PlateImages<'b> {
     /// `Metadata/pick_<N>.png`, or `None` when the file has none for this plate. Decode its
     /// pixels with [`pick_identify_id`](crate::ftps::project::pick_identify_id).
     pub pick_image: Option<&'b [u8]>,
+    /// The plates the file holds G-code for, in archive order, or `None` when the call didn't
+    /// read the list (it was given a plate, or the file isn't a [`FileKind::Model`]).
+    ///
+    /// `Some` on every call made with `plate: None`, including when the list holds no plate or
+    /// several and so `plate` and the images are `None`. A print-start screen can call
+    /// [`read_plate_images(file, None, buf)`](PrinterClient::read_plate_images) once: one plate
+    /// gives its images, several give this list to offer, and a second call with `Some(n)`
+    /// reads that plate's images.
+    pub gcode_plates: Option<Vec<u32>>,
 }
 
 impl PlateImages<'_> {
-    /// No plate and no images.
+    /// No plate and no images, and no list read.
     const NONE: Self = Self {
         plate: None,
         from_file: false,
         plate_image: None,
         small_image: None,
         pick_image: None,
+        gcode_plates: None,
     };
 }
 
@@ -548,6 +558,38 @@ where
         }
     }
 
+    /// Lists the plates a print file's `.3mf` holds G-code for, read from its front into `buf`.
+    ///
+    /// The plates are in archive order; an empty list means the file holds no G-code, and a
+    /// non-[`FileKind::Model`] file returns an empty list without a request, as
+    /// [`read_plate_images`](Self::read_plate_images) returns no images. To get a plate's images
+    /// from the same read, call `read_plate_images` with `None` instead: it carries this list.
+    ///
+    /// One FTPS read, which usually ends the session: see [`FtpsClient::download_prefix`]. `buf`
+    /// needs room for the file's front section and the list of plate G-code after it: about
+    /// 30–55 KB on the files measured.
+    ///
+    /// # Errors
+    ///
+    /// As [`FtpsClient::read_job_prefix`], plus whatever connecting FTPS returns.
+    pub async fn read_gcode_plates(
+        &mut self,
+        file: &PrinterFile,
+        buf: &mut [u8],
+    ) -> Result<Vec<u32>, Error> {
+        if file.kind != FileKind::Model {
+            return Ok(Vec::new());
+        }
+        match &file.address {
+            FileAddress::Ftps { path } => Ok(self
+                .ftps()
+                .await?
+                .read_job_prefix(path, buf)
+                .await?
+                .gcode_plates),
+        }
+    }
+
     /// Reads one plate's image, thumbnail and pick image from the front of a print file's `.3mf`, into `buf`.
     ///
     /// `Some(n)` reads plate `n`'s images. `None` takes the plate from the file's own list of
@@ -592,21 +634,29 @@ where
                         plate_image,
                         small_image,
                         pick_image,
+                        gcode_plates: None,
                     });
                 }
                 let prefix = self.ftps().await?.read_job_prefix(path, buf).await?;
-                let [plate] = prefix.gcode_plates.as_slice() else {
-                    return Ok(PlateImages::NONE);
+                let bytes = prefix.bytes;
+                let gcode_plates = prefix.gcode_plates;
+                let [plate] = gcode_plates.as_slice() else {
+                    return Ok(PlateImages {
+                        gcode_plates: Some(gcode_plates),
+                        ..PlateImages::NONE
+                    });
                 };
-                let names = plate_member_names(*plate);
+                let plate = *plate;
+                let names = plate_member_names(plate);
                 let [plate_image, small_image, pick_image] =
-                    front_members(prefix.bytes, names.each_ref().map(String::as_str))?;
+                    front_members(bytes, names.each_ref().map(String::as_str))?;
                 Ok(PlateImages {
-                    plate: Some(*plate),
+                    plate: Some(plate),
                     from_file: true,
                     plate_image,
                     small_image,
                     pick_image,
+                    gcode_plates: Some(gcode_plates),
                 })
             }
         }

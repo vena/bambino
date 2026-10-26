@@ -310,6 +310,82 @@ async fn read_listed(
     result
 }
 
+/// What [`read_listed_lists`] asks of the listed file.
+#[derive(Clone, Copy)]
+enum Ask {
+    /// `read_gcode_plates`.
+    Plates,
+    /// `read_plate_images(plate)`.
+    Images(Option<u32>),
+}
+
+/// Lists `/other.3mf` holding `file`, asks `ask`, and returns the plate list it carried, with
+/// `read_plate_images`' plate and the first image's presence.
+async fn read_listed_lists(file: Vec<u8>, ask: Ask) -> (Option<Vec<u32>>, Option<u32>, bool) {
+    let (ftps, server) = ftps_session(vec![
+        Step::List("/cache".into(), Vec::new()),
+        Step::List(
+            "/".into(),
+            b"-rw-r--r--    1 1000     1000       75230 Jun 17  2025 other.3mf\r\n".to_vec(),
+        ),
+        Step::RetrStopped("/other.3mf".into(), file),
+    ])
+    .await;
+    let mut client = client_after(Vec::new()).await.with_attached_ftps(ftps);
+    let files = client.list_files(FileKind::Model).await.expect("list");
+    let [listed] = files.as_slice() else {
+        panic!("expected one file, got {files:?}");
+    };
+    let mut buf = vec![0u8; 64 * 1024];
+    let result = match ask {
+        Ask::Plates => {
+            let plates = client
+                .read_gcode_plates(listed, &mut buf)
+                .await
+                .expect("read");
+            (Some(plates), None, false)
+        }
+        Ask::Images(plate) => {
+            let images = client
+                .read_plate_images(listed, plate, &mut buf)
+                .await
+                .expect("read");
+            (
+                images.gcode_plates,
+                images.plate,
+                images.plate_image.is_some(),
+            )
+        }
+    };
+    server.await.expect("FTPS mock panicked");
+    result
+}
+
+#[tokio::test]
+async fn test_read_gcode_plates_lists_every_sliced_plate() {
+    let (plates, _, _) = read_listed_lists(two_plate_file(&[1, 2]), Ask::Plates).await;
+    assert_eq!(plates, Some(vec![1, 2]));
+}
+
+#[tokio::test]
+async fn test_read_plate_images_carries_the_plate_list() {
+    // One plate: its images and the list.
+    assert_eq!(
+        read_listed_lists(two_plate_file(&[2]), Ask::Images(None)).await,
+        (Some(vec![2]), Some(2), true)
+    );
+    // Two plates: no plate, but the list to offer.
+    assert_eq!(
+        read_listed_lists(two_plate_file(&[1, 2]), Ask::Images(None)).await,
+        (Some(vec![1, 2]), None, false)
+    );
+    // A plate given: the list isn't read.
+    assert_eq!(
+        read_listed_lists(two_plate_file(&[1, 2]), Ask::Images(Some(1))).await,
+        (None, Some(1), true)
+    );
+}
+
 #[tokio::test]
 async fn test_read_plate_images_takes_the_plate_from_the_file() {
     let (plate, from_file, images) = read_listed(Vec::new(), two_plate_file(&[2]), None).await;
