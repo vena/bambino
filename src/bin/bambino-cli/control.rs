@@ -420,7 +420,6 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             distance,
             feedrate,
         } => {
-            let feedrate = feedrate.unwrap_or(3000);
             println!("Dispatching motion G-code G0 relative move...");
             // `None` means the library dropped a zero-distance move without publishing.
             match client.move_relative(axis, distance, feedrate).await? {

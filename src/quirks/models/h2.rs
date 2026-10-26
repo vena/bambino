@@ -15,7 +15,8 @@
 use crate::ams::AmsPoolComposition;
 use crate::camera::CameraProtocol;
 use crate::quirks::{
-    BedMax, BuildVolume, DoorSensor, DryRule, ModelQuirks, NozzleLayout, SafetyLimits,
+    BedMax, BuildVolume, DoorSensor, DryRule, FEEDRATE_30_MM_S, FEEDRATE_1000_MM_S, ModelQuirks,
+    NozzleLayout, SafetyLimits,
 };
 
 /// H2S build volume Z depth (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row.
@@ -92,6 +93,8 @@ const fn h2(
                 bed_temp_max: BedMax::Flat(H2_BED_TEMP_MAX),
                 chamber_heater_temp_max: Some(H2_CHAMBER_TEMP_MAX),
                 bed_on_z: true,
+                max_feedrate_xy: FEEDRATE_1000_MM_S,
+                max_feedrate_z: FEEDRATE_30_MM_S,
             },
             CameraProtocol::Rtsps,
             AmsPoolComposition::Independent {

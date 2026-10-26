@@ -165,14 +165,24 @@ where
     /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
     /// returns `Ok(None)`.
     ///
+    /// `feedrate` is in mm/min. `None` sends the model's
+    /// [`jog_feedrate(axis)`](crate::quirks::ModelQuirks::jog_feedrate): BambuStudio's
+    /// device-panel jog speed, 3000 for X and Y and 900 for Z. `Some(f)` is sent as given, bounded
+    /// by [`max_feedrate(axis)`](crate::quirks::ModelQuirks::max_feedrate), the first (normal-mode)
+    /// `machine_max_speed_x`/`_y`/`_z` of the model's BambuStudio machine profile times 60.
+    ///
     /// # Errors
     ///
-    /// [`Error::ModelMismatch`] when `distance` is non-finite or exceeds the axis's travel.
+    /// [`Error::ModelMismatch`] when `distance` is non-finite or exceeds the axis's travel, or
+    /// when an explicit `feedrate` exceeds
+    /// [`max_feedrate(axis)`](crate::quirks::ModelQuirks::max_feedrate). Nothing is sent.
+    ///
+    /// [`Error::InvalidArgument`] when `feedrate` is `Some(0)`.
     pub async fn move_relative(
         &mut self,
         axis: Axis,
         distance: f32,
-        feedrate: u32,
+        feedrate: Option<u32>,
     ) -> Result<Option<CommandHandle>, Error> {
         if self.is_axis_homed(axis) == Some(false) {
             log::warn!(
@@ -185,6 +195,24 @@ where
             // travel-limit violation. Nothing is published, so there is no command to hand back.
             return Ok(None);
         }
+        let feedrate = match feedrate {
+            None => self.quirks().jog_feedrate(axis),
+            Some(0) => {
+                return Err(Error::InvalidArgument(
+                    "move_relative feedrate must be nonzero".into(),
+                ));
+            }
+            Some(f) => {
+                let max = self.quirks().max_feedrate(axis);
+                if f > max {
+                    return Err(Error::ModelMismatch(
+                        format!("{axis}-axis feedrate {f} exceeds model maximum {max} mm/min")
+                            .into(),
+                    ));
+                }
+                f
+            }
+        };
         let gcode = self
             .quirks()
             .relative_move_gcode(axis, distance, feedrate)

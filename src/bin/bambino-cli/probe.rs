@@ -220,10 +220,10 @@ async fn capture_pushall(
 async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error> {
     match test {
         ProbeTest::MoveZUnhomed => {
-            client.move_relative(Axis::Z, 1.0, 500).await?;
+            client.move_relative(Axis::Z, 1.0, Some(500)).await?;
         }
         ProbeTest::MoveXUnhomed => {
-            client.move_relative(Axis::X, 5.0, 1000).await?;
+            client.move_relative(Axis::X, 5.0, Some(1000)).await?;
         }
         ProbeTest::PauseWhenIdle => {
             client.pause_print().await?;

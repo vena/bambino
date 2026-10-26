@@ -307,6 +307,23 @@ impl BuildVolume {
     }
 }
 
+/// BambuStudio's device-panel jog speed for X and Y (mm/min): the `Ctrl_Axis("X"/"Y", ...)` calls
+/// in `StatusPanel.cpp`, sent as `G1 <axis><v> F<speed>` by `DevAxis::Ctrl_Axis`
+/// (`DeviceCore/DevAxisCtrl.cpp`). The same on every model.
+pub(crate) const JOG_FEEDRATE_XY: u32 = 3000;
+/// BambuStudio's device-panel jog speed for Z (mm/min): the `Ctrl_Axis("Z", ...)` calls in
+/// `StatusPanel.cpp`. The same on every model.
+pub(crate) const JOG_FEEDRATE_Z: u32 = 900;
+
+/// 500 mm/s in mm/min: the normal-mode `machine_max_speed_x`/`_y` of A1, A1 mini, A2L, P1P, P1S, X1, X1 Carbon and X1E.
+pub(crate) const FEEDRATE_500_MM_S: u32 = 500 * 60;
+/// 1000 mm/s in mm/min: the normal-mode `machine_max_speed_x`/`_y` of H2D, H2D Pro, H2C, H2S, P2S and X2D.
+pub(crate) const FEEDRATE_1000_MM_S: u32 = 1000 * 60;
+/// 20 mm/s in mm/min: the normal-mode `machine_max_speed_z` of P1P, P1S, X1, X1 Carbon, X1E, P2S and X2D.
+pub(crate) const FEEDRATE_20_MM_S: u32 = 20 * 60;
+/// 30 mm/s in mm/min: the normal-mode `machine_max_speed_z` of A1, A1 mini, A2L, H2D, H2D Pro, H2C and H2S.
+pub(crate) const FEEDRATE_30_MM_S: u32 = 30 * 60;
+
 /// A model's heated-bed ceiling, flat or dependent on mains voltage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BedMax {
@@ -328,6 +345,10 @@ pub(crate) struct SafetyLimits {
     pub chamber_heater_temp_max: Option<u16>,
     /// Whether the build plate moves along Z (CoreXY) rather than Y (bed-slinger).
     pub bed_on_z: bool,
+    /// Fastest X and Y move the model's motion system accepts, in mm/min.
+    pub max_feedrate_xy: u32,
+    /// Fastest Z move the model's motion system accepts, in mm/min.
+    pub max_feedrate_z: u32,
 }
 
 /// One printer model's hardware variations and transport exceptions, as data.
@@ -347,6 +368,8 @@ pub struct ModelQuirks {
     bed_temp_max: BedMax,
     chamber_heater_temp_max: Option<u16>,
     bed_on_z: bool,
+    max_feedrate_xy: u32,
+    max_feedrate_z: u32,
     camera: CameraProtocol,
     ams_pool: crate::ams::AmsPoolComposition,
     dry: DryRule,
@@ -389,6 +412,8 @@ impl ModelQuirks {
             bed_temp_max: limits.bed_temp_max,
             chamber_heater_temp_max: limits.chamber_heater_temp_max,
             bed_on_z: limits.bed_on_z,
+            max_feedrate_xy: limits.max_feedrate_xy,
+            max_feedrate_z: limits.max_feedrate_z,
             camera,
             ams_pool,
             dry,
@@ -450,6 +475,33 @@ impl ModelQuirks {
     #[must_use]
     pub fn door_sensor(&self) -> DoorSensor {
         self.door
+    }
+
+    /// Returns BambuStudio's device-panel jog speed for `axis`, in mm/min [REF-MOTO-GCODE].
+    ///
+    /// X and Y are 3000, Z is 900, on every model. Source: BambuStudio `StatusPanel.cpp`, the
+    /// `Ctrl_Axis` calls, which `DevAxis::Ctrl_Axis` (`DeviceCore/DevAxisCtrl.cpp`) sends as
+    /// `G1 <axis><v> F<speed>`.
+    #[must_use]
+    pub fn jog_feedrate(&self, axis: Axis) -> u32 {
+        match axis {
+            Axis::X | Axis::Y => JOG_FEEDRATE_XY,
+            Axis::Z => JOG_FEEDRATE_Z,
+        }
+    }
+
+    /// Returns the fastest move on `axis` this model accepts, in mm/min [REF-MOTO-GCODE].
+    ///
+    /// The first element (normal mode; the second is silent mode) of `machine_max_speed_x`, `_y`
+    /// or `_z` in BambuStudio's `resources/profiles/BBL/machine/*.json`, in mm/s, times 60.
+    /// `PrinterClient::move_relative` refuses a faster explicit feedrate. The fallback row for an
+    /// unrecognized model uses the lowest value of every listed model.
+    #[must_use]
+    pub fn max_feedrate(&self, axis: Axis) -> u32 {
+        match axis {
+            Axis::X | Axis::Y => self.max_feedrate_xy,
+            Axis::Z => self.max_feedrate_z,
+        }
     }
 
     /// Returns the camera streaming protocol used by this model's hardware [REF-NET-PORTS].
@@ -1761,6 +1813,12 @@ mod tests {
     #[test]
     fn test_a1_quirks() {
         let q = PrinterModel::A1.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 30000);
+        assert_eq!(q.max_feedrate(Axis::Y), 30000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(q.uses_plaintext_ftps_data_channel());
         assert!(!q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::None);
@@ -1788,6 +1846,12 @@ mod tests {
     #[test]
     fn test_a2l_quirks() {
         let q = PrinterModel::A2L.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 30000);
+        assert_eq!(q.max_feedrate(Axis::Y), 30000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::None);
@@ -1815,6 +1879,12 @@ mod tests {
     #[test]
     fn test_a1_mini_quirks() {
         let q = PrinterModel::A1Mini.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 30000);
+        assert_eq!(q.max_feedrate(Axis::Y), 30000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(q.uses_plaintext_ftps_data_channel());
         assert!(!q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::None);
@@ -1843,6 +1913,12 @@ mod tests {
     fn test_p1_quirks() {
         for model in [PrinterModel::P1P, PrinterModel::P1S] {
             let q = model.quirks();
+            assert_eq!(q.max_feedrate(Axis::X), 30000);
+            assert_eq!(q.max_feedrate(Axis::Y), 30000);
+            assert_eq!(q.max_feedrate(Axis::Z), 1200);
+            assert_eq!(q.jog_feedrate(Axis::X), 3000);
+            assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+            assert_eq!(q.jog_feedrate(Axis::Z), 900);
             assert!(!q.uses_plaintext_ftps_data_channel());
             assert!(!q.requires_ftps_tls_1_2());
             assert_eq!(q.door_sensor(), DoorSensor::None);
@@ -1871,6 +1947,12 @@ mod tests {
     #[test]
     fn test_p2s_quirks() {
         let q = PrinterModel::P2S.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1200);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::Stat);
@@ -1898,6 +1980,12 @@ mod tests {
     #[test]
     fn test_x1c_quirks() {
         let q = PrinterModel::X1C.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 30000);
+        assert_eq!(q.max_feedrate(Axis::Y), 30000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1200);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::HomeFlag);
@@ -1944,6 +2032,12 @@ mod tests {
     #[test]
     fn test_x1e_quirks() {
         let q = PrinterModel::X1E.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 30000);
+        assert_eq!(q.max_feedrate(Axis::Y), 30000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1200);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::HomeFlag);
@@ -1969,6 +2063,12 @@ mod tests {
     #[test]
     fn test_x2d_quirks() {
         let q = PrinterModel::X2D.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1200);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::Stat);
@@ -1995,6 +2095,12 @@ mod tests {
     #[test]
     fn test_h2s_quirks() {
         let q = PrinterModel::H2S.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.requires_ftps_tls_1_2());
         assert_eq!(q.door_sensor(), DoorSensor::Stat);
@@ -2020,6 +2126,12 @@ mod tests {
     #[test]
     fn test_h2d_quirks() {
         let q = PrinterModel::H2D.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
@@ -2041,6 +2153,12 @@ mod tests {
     #[test]
     fn test_h2d_pro_quirks() {
         let q = PrinterModel::H2DPro.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
@@ -2061,6 +2179,12 @@ mod tests {
     #[test]
     fn test_h2c_quirks() {
         let q = PrinterModel::H2C.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 7);
         assert!(q.supports_nozzle_offset_calibration());
@@ -2082,6 +2206,12 @@ mod tests {
     #[test]
     fn test_unknown_fallback_quirks() {
         let q = PrinterModel::Unknown.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 30000);
+        assert_eq!(q.max_feedrate(Axis::Y), 30000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1200);
+        assert_eq!(q.jog_feedrate(Axis::X), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Y), 3000);
+        assert_eq!(q.jog_feedrate(Axis::Z), 900);
         assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);

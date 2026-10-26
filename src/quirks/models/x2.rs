@@ -8,7 +8,8 @@
 use crate::ams::AmsPoolComposition;
 use crate::camera::CameraProtocol;
 use crate::quirks::{
-    BedMax, BuildVolume, DoorSensor, DryRule, ModelQuirks, NozzleLayout, SafetyLimits,
+    BedMax, BuildVolume, DoorSensor, DryRule, FEEDRATE_20_MM_S, FEEDRATE_1000_MM_S, ModelQuirks,
+    NozzleLayout, SafetyLimits,
 };
 
 /// Build volume Z depth (mm) — uses the conservative aux/dual-nozzle value, not the main-nozzle value; see module docs.
@@ -98,6 +99,8 @@ pub(crate) const X2D: ModelQuirks = ModelQuirks {
             bed_temp_max: BedMax::Flat(X2D_BED_TEMP_MAX),
             chamber_heater_temp_max: Some(X2D_CHAMBER_TEMP_MAX),
             bed_on_z: true,
+            max_feedrate_xy: FEEDRATE_1000_MM_S,
+            max_feedrate_z: FEEDRATE_20_MM_S,
         },
         CameraProtocol::Rtsps,
         AmsPoolComposition::Independent {

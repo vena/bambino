@@ -4,7 +4,10 @@
 
 use crate::ams::AmsPoolComposition;
 use crate::camera::CameraProtocol;
-use crate::quirks::{BedMax, BuildVolume, DoorSensor, DryRule, ModelQuirks, SafetyLimits};
+use crate::quirks::{
+    BedMax, BuildVolume, DoorSensor, DryRule, FEEDRATE_20_MM_S, FEEDRATE_1000_MM_S, ModelQuirks,
+    SafetyLimits,
+};
 
 /// Build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const P2S_Z_MAX: f32 = 256.0;
@@ -68,6 +71,8 @@ pub(crate) const P2S: ModelQuirks = ModelQuirks {
             bed_temp_max: BedMax::Flat(P2S_BED_TEMP_MAX),
             chamber_heater_temp_max: None,
             bed_on_z: true,
+            max_feedrate_xy: FEEDRATE_1000_MM_S,
+            max_feedrate_z: FEEDRATE_20_MM_S,
         },
         CameraProtocol::Rtsps,
         AmsPoolComposition::Independent {

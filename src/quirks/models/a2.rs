@@ -4,7 +4,9 @@
 
 use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
-use crate::quirks::{BedMax, BuildVolume, DryRule, ModelQuirks, SafetyLimits};
+use crate::quirks::{
+    BedMax, BuildVolume, DryRule, FEEDRATE_30_MM_S, FEEDRATE_500_MM_S, ModelQuirks, SafetyLimits,
+};
 
 /// A2L build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm).
 pub const A2L_Z_MAX: f32 = 325.0;
@@ -39,6 +41,8 @@ pub(crate) const A2L: ModelQuirks = ModelQuirks {
             bed_temp_max: BedMax::Flat(A2L_BED_TEMP_MAX),
             chamber_heater_temp_max: None,
             bed_on_z: false,
+            max_feedrate_xy: FEEDRATE_500_MM_S,
+            max_feedrate_z: FEEDRATE_30_MM_S,
         },
         CameraProtocol::BinaryJpeg,
         // A shared pool of 4 plus one AMS Lite at the same time (`MODEL_MATRIX.csv`).

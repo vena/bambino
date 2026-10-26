@@ -10,6 +10,25 @@ All toolhead positioning, thermal profiles, and climate adjustments are executed
 
 Multiple G-code commands can be executed sequentially by separating distinct G-code lines with newline characters (`\n`) within a single serialized JSON parameter string.
 
+#### Relative-Move Feedrates [REF-MOTO-GCODE]
+
+`PrinterClient::move_relative` takes `feedrate: Option<u32>` in mm/min.
+
+**Jog speeds** (`None`), the same on every model: X and Y `3000`, Z `900`. Source: BambuStudio `StatusPanel.cpp`, the `Ctrl_Axis("X"/"Y", 1.0, ±1/±10, 3000)` and `Ctrl_Axis("Z", 1.0, ±1/±10, 900)` calls. The sender, `DevAxis::Ctrl_Axis` in `DeviceCore/DevAxisCtrl.cpp`, emits `G1 <axis><v> F<speed>`.
+
+**Maximum feedrates** (`Some(f)` above the bound is refused with `Error::ModelMismatch`; `Some(0)` with `Error::InvalidArgument`). Source: the first element (normal mode; the second is silent mode) of `machine_max_speed_x`, `machine_max_speed_y` and `machine_max_speed_z` in BambuStudio `resources/profiles/BBL/machine/*.json`, in mm/s, multiplied by 60. X and Y are equal on every model.
+
+| Models | X / Y (mm/s) | Z (mm/s) | X / Y (mm/min) | Z (mm/min) |
+|---|---|---|---|---|
+| A1, A1 mini, A2L | 500 | 30 | 30000 | 1800 |
+| P1P, P1S, X1, X1 Carbon, X1E | 500 | 20 | 30000 | 1200 |
+| H2D, H2D Pro, H2C, H2S | 1000 | 30 | 60000 | 1800 |
+| P2S, X2D | 1000 | 20 | 60000 | 1200 |
+
+The fallback row for an unrecognized model uses the lowest value of each column (30000 and 1200).
+
+---
+
 ---
 
 ### 4.2 State Telemetry Decoding [REF-THER-DECODE]

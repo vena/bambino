@@ -4,7 +4,9 @@
 
 use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
-use crate::quirks::{BedMax, BuildVolume, DryRule, ModelQuirks, SafetyLimits};
+use crate::quirks::{
+    BedMax, BuildVolume, DryRule, FEEDRATE_20_MM_S, FEEDRATE_500_MM_S, ModelQuirks, SafetyLimits,
+};
 
 /// Build volume Z depth (mm) shared by P1P and P1S, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const P1_Z_MAX: f32 = 256.0;
@@ -38,6 +40,8 @@ const P1S_BASE: ModelQuirks = ModelQuirks::new(
         bed_temp_max: BedMax::Flat(P1_BED_TEMP_MAX),
         chamber_heater_temp_max: None,
         bed_on_z: true,
+        max_feedrate_xy: FEEDRATE_500_MM_S,
+        max_feedrate_z: FEEDRATE_20_MM_S,
     },
     CameraProtocol::BinaryJpeg,
     AmsPoolComposition::Shared {

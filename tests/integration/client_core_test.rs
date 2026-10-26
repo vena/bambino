@@ -74,7 +74,7 @@ async fn test_kinematic_and_extrusion_moves() {
             // Read Z move packet: BambuStudio's M211 save/enable/restore and reference coordinate wraps
             assert_eq!(
                 read_gcode_param(&mut server_stream).await,
-                "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode\nM211 R\n"
+                "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F900\nG90\nM1002 pop_ref_mode\nM211 R\n"
             );
 
             // Read X move packet: plain relative move G91 -> G0 -> G90
@@ -86,11 +86,11 @@ async fn test_kinematic_and_extrusion_moves() {
         .await;
 
     client
-        .move_relative(bambino::client::Axis::Z, 10.0, 3000)
+        .move_relative(bambino::client::Axis::Z, 10.0, Some(900))
         .await
         .expect("Z move failed");
     client
-        .move_relative(bambino::client::Axis::X, -15.5, 6000)
+        .move_relative(bambino::client::Axis::X, -15.5, Some(6000))
         .await
         .expect("X move failed");
     client.extrude(10.0, 900).await.expect("Extrusion failed");
@@ -118,7 +118,7 @@ async fn test_move_relative_zero_distance_is_noop() {
     // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
     // otherwise collapse it into (it returns the same empty string for zero and out-of-range).
     let z_result = client
-        .move_relative(bambino::client::Axis::Z, 0.0, 3000)
+        .move_relative(bambino::client::Axis::Z, 0.0, Some(900))
         .await
         .expect("zero-distance Z move should succeed as a no-op");
     assert_eq!(
@@ -128,7 +128,7 @@ async fn test_move_relative_zero_distance_is_noop() {
 
     // Zero-distance X move: same no-op contract, off the Z-only travel-limit code path.
     let x_zero_result = client
-        .move_relative(bambino::client::Axis::X, 0.0, 1000)
+        .move_relative(bambino::client::Axis::X, 0.0, Some(1000))
         .await
         .expect("zero-distance X move should succeed as a no-op");
     assert_eq!(
@@ -139,7 +139,7 @@ async fn test_move_relative_zero_distance_is_noop() {
     // Non-zero move on the same client still publishes normally, and its handle names exactly
     // what reached the wire (issue #283).
     let handle = client
-        .move_relative(bambino::client::Axis::X, 5.0, 1000)
+        .move_relative(bambino::client::Axis::X, 5.0, Some(1000))
         .await
         .expect("non-zero X move failed")
         .expect("a published move must return a handle");
@@ -161,7 +161,7 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
     // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
     // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
     let result = client
-        .move_relative(bambino::client::Axis::Z, 300.0, 3000)
+        .move_relative(bambino::client::Axis::Z, 300.0, Some(900))
         .await;
     assert!(matches!(result, Err(Error::ModelMismatch(_))));
 
@@ -178,9 +178,81 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
     let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
 
     let result = client
-        .move_relative(bambino::client::Axis::X, 300.0, 3000)
+        .move_relative(bambino::client::Axis::X, 300.0, Some(3000))
         .await;
     assert!(matches!(result, Err(Error::ModelMismatch(_))));
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_move_relative_none_feedrate_sends_jog_speed() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            assert_eq!(
+                read_gcode_param(&mut server_stream).await,
+                "G91\nG0 X10.00 F3000\nG90\n"
+            );
+            assert_eq!(
+                read_gcode_param(&mut server_stream).await,
+                "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z1.00 F900\nG90\nM1002 pop_ref_mode\nM211 R\n"
+            );
+        })
+        .await;
+
+    client
+        .move_relative(bambino::client::Axis::X, 10.0, None)
+        .await
+        .expect("X jog failed");
+    client
+        .move_relative(bambino::client::Axis::Z, 1.0, None)
+        .await
+        .expect("Z jog failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_move_relative_refuses_feedrate_above_model_max() {
+    // P1S: X/Y max 30000 mm/min, Z max 1200 mm/min. The refused calls must send nothing, so the
+    // first (and only) publish the broker sees is the at-maximum Z move below.
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            assert_eq!(
+                read_gcode_param(&mut server_stream).await,
+                "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z1.00 F1200\nG90\nM1002 pop_ref_mode\nM211 R\n"
+            );
+        })
+        .await;
+
+    for (axis, feedrate) in [
+        (bambino::client::Axis::X, 30_001),
+        (bambino::client::Axis::Y, 30_001),
+        (bambino::client::Axis::Z, 1_201),
+    ] {
+        let result = client.move_relative(axis, 1.0, Some(feedrate)).await;
+        assert!(matches!(result, Err(Error::ModelMismatch(_))), "{axis}");
+    }
+    // The bound itself is accepted.
+    client
+        .move_relative(bambino::client::Axis::Z, 1.0, Some(1_200))
+        .await
+        .expect("feedrate at the model maximum must be accepted");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_move_relative_refuses_zero_feedrate() {
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
+
+    let result = client
+        .move_relative(bambino::client::Axis::X, 1.0, Some(0))
+        .await;
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     drop(client);
     broker_task.await.expect("Broker task panicked");

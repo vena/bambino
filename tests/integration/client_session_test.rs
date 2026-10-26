@@ -70,7 +70,7 @@ async fn test_home_flag_cache_and_advisory_warnings() {
     assert_eq!(client.is_all_axes_homed(), Some(false));
 
     client
-        .move_relative(bambino::client::Axis::Z, 5.0, 1000)
+        .move_relative(bambino::client::Axis::Z, 5.0, Some(1000))
         .await
         .expect("move_relative should proceed despite unhomed Z");
     client

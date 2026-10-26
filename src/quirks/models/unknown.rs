@@ -16,7 +16,9 @@
 
 use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
-use crate::quirks::{BedMax, BuildVolume, DryRule, ModelQuirks, SafetyLimits};
+use crate::quirks::{
+    BedMax, BuildVolume, DryRule, FEEDRATE_20_MM_S, FEEDRATE_500_MM_S, ModelQuirks, SafetyLimits,
+};
 
 /// Travel ceiling (mm), applied to all three axes — the smallest build volume in the family
 /// (A1 Mini), per `MODEL_MATRIX.csv`'s Build Volume row.
@@ -44,6 +46,8 @@ pub(crate) const UNKNOWN: ModelQuirks = ModelQuirks::new(
         bed_temp_max: BedMax::Flat(UNKNOWN_BED_TEMP_MAX),
         chamber_heater_temp_max: None,
         bed_on_z: true,
+        max_feedrate_xy: FEEDRATE_500_MM_S,
+        max_feedrate_z: FEEDRATE_20_MM_S,
     },
     CameraProtocol::Rtsps,
     AmsPoolComposition::Shared {

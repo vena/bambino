@@ -8,7 +8,9 @@
 
 use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
-use crate::quirks::{BedMax, BuildVolume, DryRule, ModelQuirks, SafetyLimits};
+use crate::quirks::{
+    BedMax, BuildVolume, DryRule, FEEDRATE_30_MM_S, FEEDRATE_500_MM_S, ModelQuirks, SafetyLimits,
+};
 
 /// A1 build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const A1_Z_MAX: f32 = 256.0;
@@ -43,6 +45,8 @@ const fn a1(side: f32, bed_max: u16) -> ModelQuirks {
                 bed_temp_max: BedMax::Flat(bed_max),
                 chamber_heater_temp_max: None,
                 bed_on_z: false,
+                max_feedrate_xy: FEEDRATE_500_MM_S,
+                max_feedrate_z: FEEDRATE_30_MM_S,
             },
             CameraProtocol::BinaryJpeg,
             // A shared pool of 4, or one AMS Lite instead (`MODEL_MATRIX.csv`).
