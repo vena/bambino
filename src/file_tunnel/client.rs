@@ -857,11 +857,22 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         let last = chunk_count - 1;
         let mut offset = start;
         for index in 0..chunk_count {
-            let n = match read_next(&mut source, offset, &mut buf).await {
-                Ok(n) => n,
-                // Earlier chunks are out, so the printer is waiting for the rest.
-                Err(e) => return self.poison(e),
-            };
+            // Fill the whole chunk: the chunk count above assumes every chunk but the last is
+            // `chunk_len` long, and a source may return less per read.
+            let want = usize::try_from(total - offset).map_or(chunk_len, |r| r.min(chunk_len));
+            let mut n = 0;
+            while n < want {
+                match read_next(&mut source, offset + n as u64, &mut buf[n..want]).await {
+                    Ok(read) => n += read,
+                    Err(e) if index == 0 => {
+                        // No chunk is out yet: cancel the upload, as before the offset.
+                        self.abandon(timer, sequence).await;
+                        return Err(e);
+                    }
+                    // Earlier chunks are out, so the printer is waiting for the rest.
+                    Err(e) => return self.poison(e),
+                }
+            }
             let chunk = &buf[..n];
             digest.consume(chunk);
             let file_md5 = (index == last).then(|| format!("{:x}", digest.clone().finalize()));
@@ -1761,6 +1772,50 @@ mod tests {
             .flat_map(|(_, bin)| bin.iter().copied())
             .collect();
         assert_eq!(rejoined, data[1024..]);
+    }
+
+    /// A source that hands back at most 5 bytes per read.
+    struct Trickle<'a>(&'a [u8]);
+
+    impl crate::upload::UploadSource for Trickle<'_> {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+
+        async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, Error> {
+            let rest = &self.0[offset as usize..];
+            let n = rest.len().min(buf.len()).min(5);
+            buf[..n].copy_from_slice(&rest[..n]);
+            Ok(n)
+        }
+    }
+
+    #[tokio::test]
+    async fn short_reads_still_fill_every_chunk() {
+        let data: Vec<u8> = (0..2148usize).map(|i| (i % 253) as u8).collect();
+        let mut client = connected(&[
+            reply(r#"{"cmdtype":5,"result":1,"sequence":1,"reply":{"chunk_size":1,"offset":0}}"#),
+            reply(r#"{"cmdtype":5,"result":0,"sequence":1}"#),
+        ])
+        .await;
+        client
+            .upload(&DummyTimer, "emmc", "job.gcode.3mf", Trickle(&data))
+            .await
+            .unwrap();
+        let sent = written_frames(client.stream());
+        let chunks: Vec<_> = sent[3..].iter().map(|(_, p)| p::split_payload(p)).collect();
+        let sizes: Vec<usize> = chunks.iter().map(|(_, bin)| bin.len() as usize).collect();
+        assert_eq!(sizes, [1024, 1024, 100]);
+        assert!(
+            core::str::from_utf8(chunks[2].0)
+                .unwrap()
+                .contains(&md5_hex(&data))
+        );
+        let rejoined: Vec<u8> = chunks
+            .iter()
+            .flat_map(|(_, bin)| bin.iter().copied())
+            .collect();
+        assert_eq!(rejoined, data);
     }
 
     #[tokio::test]
