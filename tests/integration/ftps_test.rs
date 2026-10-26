@@ -1480,3 +1480,105 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
     client.disconnect().await;
     server_handle.await.expect("Mock server panicked");
 }
+
+/// A source that hands out at most `step` bytes per read, wherever it is asked to read from.
+struct TrickleSource {
+    data: Vec<u8>,
+    step: usize,
+    /// Bytes the source claims to hold, when different from `data.len()`.
+    claimed_len: Option<u64>,
+}
+
+impl bambino::upload::UploadSource for TrickleSource {
+    fn len(&self) -> u64 {
+        self.claimed_len.unwrap_or(self.data.len() as u64)
+    }
+
+    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, Error> {
+        let start = (offset as usize).min(self.data.len());
+        let n = buf.len().min(self.step).min(self.data.len() - start);
+        buf[..n].copy_from_slice(&self.data[start..start + n]);
+        Ok(n)
+    }
+}
+
+#[tokio::test]
+async fn test_ftps_upload_from_a_source_returning_short_reads() {
+    // Chunks of 5 bytes, so the source is asked many times per FTPS chunk: the upload must
+    // still deliver every byte once, in order.
+    let payload: Vec<u8> = (0..77_881usize).map(|i| (i % 251) as u8).collect();
+    let source = TrickleSource {
+        data: payload.clone(),
+        step: 5,
+        claimed_len: None,
+    };
+
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_upload_multi_chunk(
+        server_control,
+        data_container.clone(),
+        payload.len(),
+    ));
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    client
+        .upload_from("/model/big.bin", source)
+        .await
+        .expect("upload_from failed");
+
+    let received = server_handle.await.expect("Mock server panicked");
+    assert_eq!(received, payload);
+    client.disconnect().await;
+}
+
+#[tokio::test]
+async fn test_ftps_upload_from_a_source_ending_early_poisons_the_client() {
+    let source = TrickleSource {
+        data: vec![9u8; 100],
+        step: 40,
+        claimed_len: Some(500),
+    };
+
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_script(
+        server_control,
+        data_container.clone(),
+        vec![mock_ftps::Step::StorAbandoned("/model/job.3mf".into())],
+    ));
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client.upload_from("/model/job.3mf", source).await;
+    match result {
+        Err(Error::InvalidArgument(msg)) => {
+            assert!(msg.contains("offset 100"), "names the offset: {msg}")
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    assert!(client.is_poisoned());
+    client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_upload_from_over_the_limit_sends_nothing() {
+    let source = TrickleSource {
+        data: Vec::new(),
+        step: 1,
+        claimed_len: Some(u64::MAX),
+    };
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_script(
+        server_control,
+        data_container.clone(),
+        vec![],
+    ));
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+    let result = client.upload_from("/model/job.3mf", source).await;
+    assert!(
+        matches!(result, Err(Error::InvalidArgument(_))),
+        "{result:?}"
+    );
+    assert!(!client.is_poisoned());
+    client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
+}

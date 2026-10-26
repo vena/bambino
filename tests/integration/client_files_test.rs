@@ -681,3 +681,81 @@ async fn test_supplied_reading_without_probe_replaces_the_host_clock() {
     assert_eq!(recent_year(&mut fx).await, 2000);
     server.await.expect("FTPS mock panicked");
 }
+
+#[tokio::test]
+async fn test_upload_file_returns_the_card_root_file_with_its_mdtm_time() {
+    let mut fx = Fixture::new();
+    let server = fx
+        .session(vec![
+            Step::Stor("/job.3mf".into(), 10),
+            Step::expect("SIZE /job.3mf", "213 10"),
+            Step::expect("MDTM /job.3mf", "213 20230415101530"),
+        ])
+        .await;
+    let file = fx
+        .client
+        .upload_file(StorageKind::External, "job.3mf", &b"0123456789"[..])
+        .await
+        .expect("upload");
+    assert_eq!(file.name, "job.3mf");
+    assert_eq!(file.path(), "/job.3mf");
+    assert_eq!(file.size, 10);
+    assert_eq!(file.kind, FileKind::Model);
+    assert_eq!(file.storage, StorageKind::External);
+    assert_eq!(
+        file.modified,
+        FileTime::Calendar {
+            at: FtpTimestamp {
+                year: 2023,
+                month: 4,
+                day: 15,
+                hour: 10,
+                minute: 15,
+                second: 30,
+            },
+            year_inferred: false,
+        }
+    );
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_upload_file_without_mdtm_has_an_unknown_time() {
+    let mut fx = Fixture::new();
+    let server = fx
+        .session(vec![
+            Step::Stor("/job.3mf".into(), 3),
+            Step::expect("SIZE /job.3mf", "213 3"),
+            Step::expect("MDTM /job.3mf", "502 Not implemented."),
+        ])
+        .await;
+    let file = fx
+        .client
+        .upload_file(StorageKind::External, "job.3mf", &b"abc"[..])
+        .await
+        .expect("upload");
+    assert_eq!(file.modified, FileTime::Unknown);
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_upload_file_refuses_internal_storage_and_bad_names_without_sending() {
+    // The script has no steps, and no session is queued: any FTPS use fails the test.
+    let mut fx = Fixture::new();
+    let result = fx
+        .client
+        .upload_file(StorageKind::Internal, "job.3mf", &b"abc"[..])
+        .await;
+    assert!(matches!(result, Err(Error::NotConfigured(_))), "{result:?}");
+    for name in ["", "a/b.3mf", "/job.3mf", "job.gcode", "3mf"] {
+        let result = fx
+            .client
+            .upload_file(StorageKind::External, name, &b"abc"[..])
+            .await;
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(_))),
+            "{name:?}: {result:?}"
+        );
+    }
+    assert!(!fx.client.is_ftps_connected());
+}

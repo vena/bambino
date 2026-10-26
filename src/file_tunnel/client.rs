@@ -10,6 +10,7 @@ use crate::error::Error;
 use crate::ftps::protocol::{ftps_deadline_ms, write_bounded};
 use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, TimerProvider, TlsConnector, read_chunk, with_deadline};
+use crate::upload::{UploadSource, read_next};
 
 use super::protocol::{
     self as p, DownloadReply, DownloadReq, Envelope, FileDelReq, FrameHeader, ListInfoReply,
@@ -748,7 +749,7 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         Ok(())
     }
 
-    /// Uploads `data` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
+    /// Uploads `source` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
     ///
     /// `storage` is a label from [`media_ability`](Self::media_ability), such as `emmc`; there is
     /// no default. To print the file afterwards from internal storage, start the job with
@@ -768,7 +769,7 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         timer: &T,
         storage: &str,
         name: &str,
-        data: &[u8],
+        mut source: impl UploadSource,
     ) -> Result<(), Error> {
         self.check_poisoned()?;
         if storage.is_empty() || name.is_empty() {
@@ -777,10 +778,10 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             ));
         }
         // Studio refuses an empty file (`UploadFileTask` reads nothing and fails).
-        if data.is_empty() {
+        if source.is_empty() {
             return Err(Error::InvalidArgument("upload of an empty file".into()));
         }
-        let total = data.len() as u64;
+        let total = source.len();
         let sequence = self
             .send_request(
                 timer,
@@ -820,9 +821,7 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             .checked_mul(1024)
             .and_then(|n| usize::try_from(n).ok())
             .filter(|&n| n > 0 && n <= self.max_frame_payload);
-        let start = usize::try_from(init.offset)
-            .ok()
-            .filter(|&o| o < data.len());
+        let start = Some(init.offset).filter(|&o| o < total);
         let (Some(chunk_len), Some(start)) = (chunk_len, start) else {
             // The printer is waiting for chunks this client won't send: cancel the upload.
             self.abandon(timer, sequence).await;
@@ -835,17 +834,42 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                 .into(),
             ));
         };
-        // open-bamboo-networking: the MD5 of the entire file, on the last chunk only.
-        let file_md5 = format!("{:x}", md5::compute(data));
-        let chunks = data[start..].chunks(chunk_len);
-        let last = chunks.len().saturating_sub(1);
-        for (index, chunk) in chunks.enumerate() {
-            let offset = start + index * chunk_len;
+        // open-bamboo-networking: the MD5 of the entire file, on the last chunk only. A resumed
+        // upload hashes the bytes before the offset too, which are read here and not sent.
+        let mut digest = md5::Context::new();
+        let mut buf = vec![0u8; chunk_len];
+        let mut hashed: u64 = 0;
+        while hashed < start {
+            let want = usize::try_from(start - hashed).map_or(chunk_len, |r| r.min(chunk_len));
+            let n = match read_next(&mut source, hashed, &mut buf[..want]).await {
+                Ok(n) => n,
+                Err(e) => {
+                    // The printer is waiting for chunks that won't come: cancel the upload.
+                    self.abandon(timer, sequence).await;
+                    return Err(e);
+                }
+            };
+            digest.consume(&buf[..n]);
+            hashed += n as u64;
+        }
+        let remaining = total - start;
+        let chunk_count = remaining.div_ceil(chunk_len as u64);
+        let last = chunk_count - 1;
+        let mut offset = start;
+        for index in 0..chunk_count {
+            let n = match read_next(&mut source, offset, &mut buf).await {
+                Ok(n) => n,
+                // Earlier chunks are out, so the printer is waiting for the rest.
+                Err(e) => return self.poison(e),
+            };
+            let chunk = &buf[..n];
+            digest.consume(chunk);
+            let file_md5 = (index == last).then(|| format!("{:x}", digest.clone().finalize()));
             let req = UploadChunkReq {
                 frag_id: index as u32,
-                offset: offset as u64,
+                offset,
                 size: chunk.len(),
-                file_md5: (index == last).then_some(file_md5.as_str()),
+                file_md5: file_md5.as_deref(),
             };
             let frame = p::encode_request(cmd::FILE_UPLOAD, sequence, &req, chunk)?;
             if let Err(e) = write_frame(
@@ -859,10 +883,11 @@ impl<S: AsyncIo> FileTunnelClient<S> {
             {
                 return self.poison(e);
             }
+            offset += n as u64;
         }
         // One final reply; skip any progress frames a firmware sends in between, at most one per
         // chunk plus the usual slack.
-        for _ in 0..=last + MAX_SKIPPED_FRAMES {
+        for _ in 0..=last as usize + MAX_SKIPPED_FRAMES {
             let payload = self
                 .read_reply_frame(timer, cmd::FILE_UPLOAD, sequence)
                 .await?;
@@ -1133,8 +1158,13 @@ impl<S: AsyncIo, T: TimerProvider> FileTunnel<'_, S, T> {
     }
 
     /// See [`FileTunnelClient::upload`].
-    pub async fn upload(&mut self, storage: &str, name: &str, data: &[u8]) -> Result<(), Error> {
-        self.client.upload(self.timer, storage, name, data).await
+    pub async fn upload(
+        &mut self,
+        storage: &str,
+        name: &str,
+        source: impl UploadSource,
+    ) -> Result<(), Error> {
+        self.client.upload(self.timer, storage, name, source).await
     }
 
     /// See [`FileTunnelClient::is_poisoned`].
@@ -1662,7 +1692,7 @@ mod tests {
         ])
         .await;
         client
-            .upload(&DummyTimer, "emmc", "job.gcode.3mf", &data)
+            .upload(&DummyTimer, "emmc", "job.gcode.3mf", &data[..])
             .await
             .unwrap();
         let sent = written_frames(client.stream());
@@ -1697,6 +1727,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resumed_upload_hashes_the_whole_file() {
+        // Distinct bytes, so an MD5 over only the sent tail would differ from the whole file's.
+        let data: Vec<u8> = (0..2148usize).map(|i| (i % 253) as u8).collect();
+        let mut client = connected(&[
+            reply(
+                r#"{"cmdtype":5,"result":1,"sequence":1,"reply":{"chunk_size":1,"offset":1024}}"#,
+            ),
+            reply(r#"{"cmdtype":5,"result":0,"sequence":1}"#),
+        ])
+        .await;
+        client
+            .upload(&DummyTimer, "emmc", "job.gcode.3mf", &data[..])
+            .await
+            .unwrap();
+        let sent = written_frames(client.stream());
+        let chunks: Vec<_> = sent[3..].iter().map(|(_, p)| p::split_payload(p)).collect();
+        assert_eq!(chunks.len(), 2);
+        let json = |i: usize| core::str::from_utf8(chunks[i].0).unwrap();
+        assert_eq!(
+            json(0),
+            r#"{"mtype":12289,"cmdtype":5,"sequence":1,"req":{"frag_id":0,"offset":1024,"size":1024}}"#
+        );
+        assert_eq!(
+            json(1),
+            format!(
+                r#"{{"mtype":12289,"cmdtype":5,"sequence":1,"req":{{"frag_id":1,"offset":2048,"size":100,"file_md5":"{}"}}}}"#,
+                md5_hex(&data)
+            )
+        );
+        let rejoined: Vec<u8> = chunks
+            .iter()
+            .flat_map(|(_, bin)| bin.iter().copied())
+            .collect();
+        assert_eq!(rejoined, data[1024..]);
+    }
+
+    #[tokio::test]
     async fn unusable_upload_init_is_cancelled() {
         // A zero chunk size can't be sent; the printer is left expecting chunks, so cancel.
         let mut client = connected(&[
@@ -1705,7 +1772,9 @@ mod tests {
         ])
         .await;
         assert!(matches!(
-            client.upload(&DummyTimer, "emmc", "a.3mf", b"data").await,
+            client
+                .upload(&DummyTimer, "emmc", "a.3mf", &b"data"[..])
+                .await,
             Err(Error::ProtocolViolation(_))
         ));
         let sent = written_frames(client.stream());
@@ -1720,7 +1789,7 @@ mod tests {
     async fn refused_upload_init_sends_no_chunks() {
         let mut client = connected(&[reply(r#"{"cmdtype":5,"result":20,"sequence":1}"#)]).await;
         let err = client
-            .upload(&DummyTimer, "emmc", "big.3mf", b"data")
+            .upload(&DummyTimer, "emmc", "big.3mf", &b"data"[..])
             .await
             .unwrap_err();
         assert!(matches!(

@@ -995,6 +995,9 @@ pub enum Step {
     Stor(String, usize),
     /// Answers `RETR path` with `550`, as for a file that isn't there.
     RetrMissing(String),
+    /// Accepts `STOR path` and reads the data channel until the client closes it, answering
+    /// nothing more: the client gave up mid-transfer, so no `226` is owed.
+    StorAbandoned(String),
 }
 
 impl Step {
@@ -1043,6 +1046,14 @@ pub async fn run_script(
                 )
                 .await;
                 let _ = server_data.write_all(&data).await;
+                return;
+            }
+            Step::StorAbandoned(path) => {
+                let mut server_data = ctl.pasv().await;
+                ctl.expect(&format!("STOR {path}\r\n"), b"150 Ok to send data.\r\n")
+                    .await;
+                let mut sink = Vec::new();
+                let _ = server_data.read_to_end(&mut sink).await;
                 return;
             }
             Step::Stor(path, len) => {

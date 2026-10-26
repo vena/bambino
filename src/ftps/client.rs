@@ -10,6 +10,8 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use embedded_io_async::{Error as _, Write};
@@ -23,6 +25,7 @@ use crate::ftps::project::{GcodeWalk, JobPrefix, Walk, walk_front, walk_gcode_pl
 use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::PrinterModel;
+use crate::upload::{UploadSource, read_next};
 
 use super::protocol::*;
 
@@ -888,7 +891,7 @@ where
         self.finish_removal("DELE", remote_path, reply).await
     }
 
-    /// Uploads a binary payload directly to MicroSD card storage.
+    /// Uploads a source's bytes to MicroSD card storage, reading it a chunk at a time.
     ///
     /// **Flush and Close Race Mitigation:**
     /// 1. Send a TLS `close_notify` on the passive data channel once the payload is written,
@@ -902,15 +905,26 @@ where
     ///    model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
     ///    [`Error::DiskWriteFailure`]; a final reply other than `226`/`426` is [`Error::FtpReply`].
     ///
-    /// A payload larger than [`MAX_TRANSFER_BYTES`](crate::ftps::MAX_TRANSFER_BYTES) is refused
+    /// A source larger than [`MAX_TRANSFER_BYTES`](crate::ftps::MAX_TRANSFER_BYTES) is refused
     /// with [`Error::InvalidArgument`] before anything is sent: `download_file` would refuse to
     /// read it back.
-    pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error> {
-        if data.len() > FTPS_MAX_TRANSFER_BYTES {
+    ///
+    /// **A source error ends this session.** One that fails, returns no bytes before its
+    /// [`len`](UploadSource::len), or returns more than asked for fails the upload mid-transfer,
+    /// with the data channel half written and the final reply still owed. The client is poisoned,
+    /// and `PrinterClient::ftps()` reconnects.
+    ///
+    /// The source is read into one heap buffer of `FTPS_UPLOAD_CHUNK_SIZE` bytes (64 KiB).
+    pub async fn upload_from(
+        &mut self,
+        remote_path: &str,
+        mut source: impl UploadSource,
+    ) -> Result<(), Error> {
+        let total = source.len();
+        if total > FTPS_MAX_TRANSFER_BYTES as u64 {
             return Err(Error::InvalidArgument(
                 format!(
-                    "upload of {} bytes exceeds the {FTPS_MAX_TRANSFER_BYTES}-byte transfer limit",
-                    data.len()
+                    "upload of {total} bytes exceeds the {FTPS_MAX_TRANSFER_BYTES}-byte transfer limit"
                 )
                 .into(),
             ));
@@ -918,14 +932,25 @@ where
         let mut data_channel = self.open_transfer("STOR", remote_path).await?;
 
         // One `write_all` per chunk, each with its own fresh write deadline.
-        for chunk in data.chunks(FTPS_UPLOAD_CHUNK_SIZE) {
+        let mut buf = vec![0u8; FTPS_UPLOAD_CHUNK_SIZE];
+        let mut offset: u64 = 0;
+        while offset < total {
+            let n = match read_next(&mut source, offset, &mut buf).await {
+                Ok(n) => n,
+                Err(e) => {
+                    // The final reply is still owed.
+                    self.poisoned = true;
+                    return Err(e);
+                }
+            };
             let deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
             if let Err(e) =
-                write_bounded(data_channel.write_all(chunk), &self.timer, deadline_ms).await
+                write_bounded(data_channel.write_all(&buf[..n]), &self.timer, deadline_ms).await
             {
                 self.poisoned = true;
                 return Err(e);
             }
+            offset += n as u64;
         }
         let deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
         if let Err(e) = write_bounded(data_channel.flush(), &self.timer, deadline_ms).await {
@@ -935,11 +960,19 @@ where
 
         self.finish_transfer("STOR", data_channel).await?;
         let remote_size = self.get_file_size(remote_path).await?;
-        if remote_size == data.len() as u64 {
+        if remote_size == total {
             Ok(())
         } else {
             Err(Error::DiskWriteFailure)
         }
+    }
+
+    /// Uploads a binary payload directly to MicroSD card storage.
+    ///
+    /// A thin wrapper over [`upload_from`](Self::upload_from) with the slice as the source; see
+    /// it for the flush, close and `SIZE` behaviour and the transfer limit.
+    pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error> {
+        self.upload_from(remote_path, data).await
     }
 
     /// Downloads the contents of a remote file from MicroSD storage via the RETR command.

@@ -110,6 +110,7 @@ pub mod ftps;
 pub mod mqtt;
 pub mod quirks;
 pub mod types;
+pub mod upload;
 
 // Platform-agnostic test doubles (`MockTimer`, `MockIo`) shared by every `#[cfg(test)]` module.
 // Deliberately not gated on any platform feature: a test double that pulled in `crate::io::tokio`

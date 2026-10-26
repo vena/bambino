@@ -20,6 +20,7 @@ use crate::ftps::project::front_members;
 use crate::ftps::protocol::FTP_FILE_NOT_FOUND;
 use crate::ftps::{CurrentDateTime, FtpFile, FtpTimestamp, FtpsClient};
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::upload::UploadSource;
 
 use super::PrinterClient;
 use super::job::plate_member_names;
@@ -512,6 +513,82 @@ where
         match &file.address {
             FileAddress::Ftps { path } => self.ftps().await?.delete_file(path).await,
         }
+    }
+
+    /// Uploads a `.3mf` to the printer's storage and returns the file, ready for [`start_print`](Self::start_print).
+    ///
+    /// `source` is read a chunk at a time, so a file larger than RAM can be sent from a card or
+    /// disk: pass a slice, or a file of your own as `&mut file` (see [`UploadSource`]).
+    /// [`StorageKind::External`] sends it over FTPS to the card's root as `/<name>`, where Bambu
+    /// Studio's LAN send puts it (`reference/02_ftps.md`). Internal storage needs the file tunnel
+    /// (#636) and is refused with [`Error::NotConfigured`].
+    ///
+    /// `name` must be non-empty, hold no `/`, and end in `.3mf`, ignoring case. Only `.3mf`,
+    /// because the returned file is a [`FileKind::Model`], which is what
+    /// [`list_files`](Self::list_files)`(FileKind::Model)` lists. A name that fails is
+    /// [`Error::InvalidArgument`], with nothing sent. The file is overwritten if it exists.
+    ///
+    /// To print it, build a
+    /// [`PrintJobConfig`](crate::mqtt::PrintJobConfig) whose `job_filename` is `file.name`
+    /// (`PrintJobConfig::new`'s first argument; a card-root file is its bare name) and call
+    /// [`start_print`](Self::start_print).
+    ///
+    /// The upload is checked against the printer's `SIZE` once it ends
+    /// ([`FtpsClient::upload_from`]). The returned `modified` is the printer's `MDTM` reading, to
+    /// the second, or [`FileTime::Unknown`] when the firmware has no `MDTM` or the query fails
+    /// after the file was stored.
+    ///
+    /// **A source error ends the FTPS session**: the transfer is left half written, so the
+    /// session is dropped, and the next FTPS call reconnects. A source that returns no bytes
+    /// before its length is [`Error::InvalidArgument`], with the same effect.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a bad `name` or a source over
+    /// [`MAX_TRANSFER_BYTES`](crate::ftps::MAX_TRANSFER_BYTES), [`Error::NotConfigured`] for
+    /// internal storage or without FTPS, and whatever [`FtpsClient::upload_from`] returns.
+    pub async fn upload_file(
+        &mut self,
+        storage: StorageKind,
+        name: &str,
+        source: impl UploadSource,
+    ) -> Result<PrinterFile, Error> {
+        if name.is_empty() || name.contains('/') || !is_model_file(name) {
+            return Err(Error::InvalidArgument(
+                format!("upload name {name:?} must be a bare, non-empty .3mf file name").into(),
+            ));
+        }
+        match storage {
+            StorageKind::External => {}
+            StorageKind::Internal => {
+                return Err(Error::NotConfigured(
+                    "uploading to internal storage needs the file tunnel (#636)".into(),
+                ));
+            }
+        }
+        let size = source.len();
+        let path = format!("/{name}");
+        let ftps = self.ftps().await?;
+        ftps.upload_from(&path, source).await?;
+        let modified = match ftps.modification_time(&path).await {
+            Ok(Some(at)) => FileTime::Calendar {
+                at,
+                year_inferred: false,
+            },
+            Ok(None) => FileTime::Unknown,
+            Err(e) => {
+                log::warn!("uploaded {path}, but its MDTM failed: {e}");
+                FileTime::Unknown
+            }
+        };
+        Ok(PrinterFile {
+            name: String::from(name),
+            size,
+            modified,
+            kind: FileKind::Model,
+            storage: StorageKind::External,
+            address: FileAddress::Ftps { path },
+        })
     }
 
     /// Reads a listed timelapse's cover image, passing each read to `sink`, and returns its size, or `None` when it has none.
