@@ -1078,7 +1078,7 @@ Because an ack confirms receipt only, whether a command took effect has to be re
 | `gcode_line` fans (`set_fan_speed`) | `cooling_fan_speed`, `big_fan1_speed`, `big_fan2_speed` | — |
 | `ams_filament_drying` (`dry(..).send()`, `stop_drying`) | AMS unit `dry_status`, `dry_sub_status` | `dry_block_reasons` (`dry_sf_reason`), issue #277 |
 | `ams_change_filament`/`ams_control` (`change_filament`) | `ams_status` main/sub state, tray `tray_now` | ack `errno` (above), HMS |
-| `ams_filament_setting` | tray `tray_info_idx`/`tray_type` read back on the next push (bambuddy #2756) | ack `result` |
+| `ams_filament_setting` (`set_tray_filament`) | tray `tray_type`, `tray_color`, `tray_info_idx`, `nozzle_temp_min`/`nozzle_temp_max` read back on the next push (bambuddy #2756); the ack can say `success` over a corrupted colour (P1S) | ack `result` |
 | `extrusion_cali_sel` (`select_k_profile`) | tray `cali_idx` | ack `result` |
 | `extrusion_cali_set`/`_del` | `get_k_profiles` read-back (bambuddy `await_cali_ack` doc: "callers that need certainty read the calibration table back") | ack `result`/`reason` |
 | `ledctrl` (`set_led`) | `lights_report` node `mode` | — |

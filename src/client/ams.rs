@@ -4,13 +4,14 @@ use alloc::format;
 use alloc::string::{String, ToString};
 
 use crate::ams::ids::{
-    AMS_SLOTS_PER_UNIT, SLOT_UNLOAD, VALID_AMS_IDS_TEXT, is_bus_unit_id, is_external_spool_id,
-    is_unit_slot, is_valid_ams_id, normalize_ams_unit_id, wire_ams_id,
+    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_SLOTS_PER_UNIT, SLOT_UNLOAD, VALID_AMS_IDS_TEXT,
+    is_bus_unit_id, is_external_spool_id, is_unit_slot, is_valid_ams_id, normalize_ams_unit_id,
+    wire_ams_id,
 };
 use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
-use crate::mqtt::commands::ChangeTemps;
+use crate::mqtt::commands::{ChangeTemps, FilamentSpec, TrayFilamentDetails};
 use crate::types::VersionInfo;
 
 use super::{CommandHandle, PrinterClient};
@@ -233,6 +234,90 @@ where
         let slot_id = i32::from(slot_id);
         self.dispatch(|seq| crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq))
             .await
+    }
+
+    /// Sets the filament type, colour and nozzle temperature window of an AMS slot or external spool [REF-AMS-MAP].
+    ///
+    /// Takes the unit and its **local** slot, as [`select_k_profile`](Self::select_k_profile)
+    /// does; the wire's `tray_id` is derived by
+    /// [`AmsFilamentSettingRequest::new`](crate::mqtt::AmsFilamentSettingRequest::new).
+    ///
+    /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
+    ///   AMS Lite (`6` or its physical `16`; sent as `16`), or an external spool.
+    /// * `slot_id`: Slot within the unit (`0..=3`, `0` on AMS-HT), or `0` for an external spool.
+    /// * `filament` / `details`: what to store; see [`FilamentSpec`] and
+    ///   [`TrayFilamentDetails`].
+    ///
+    /// **External-spool addressing cheat-sheet.** This command (`ams_filament_setting`) uses
+    /// different `ams_id`/`tray_id` external-spool addressing than `extrusion_cali_sel`
+    /// ([`select_k_profile`](Self::select_k_profile)) — do not reuse one rule for both:
+    /// * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
+    ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
+    ///   `ams_id: 255` / `tray_id: 255`.
+    /// * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
+    ///   `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
+    ///   (`ams_id: 255`) require `tray_id: 254`.
+    ///
+    /// So an external spool is `ams_id` `255` with `slot_id` `0` on every model, and `254` with
+    /// `slot_id` `0` only on a model with more than one nozzle
+    /// ([`physical_nozzle_count`](crate::quirks::ModelQuirks::physical_nozzle_count));
+    /// `254` on a single-nozzle model is refused, since it would address physical AMS tray 0.
+    ///
+    /// **The ack does not say the change took effect.** Read the tray back in the next AMS push:
+    /// `tray_type`, `tray_color`, `tray_info_idx` and `nozzle_temp_min`/`nozzle_temp_max`. A P1S
+    /// acks `success` while storing a corrupted colour (see
+    /// [`AmsFilamentSettingRequest::with_color`](crate::mqtt::AmsFilamentSettingRequest::with_color)),
+    /// and `reference/03_mqtt_telemetry.md` ("Effect Signals") lists this command's signal.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for an address no unit answers to, or for an invalid
+    /// `details.color`; nothing is published in either case.
+    pub async fn set_tray_filament(
+        &mut self,
+        ams_id: u8,
+        slot_id: u8,
+        filament: FilamentSpec<'_>,
+        details: TrayFilamentDetails<'_>,
+    ) -> Result<CommandHandle, Error> {
+        let address_valid = if is_external_spool_id(ams_id) {
+            slot_id == 0
+                && (ams_id != AMS_EXTERNAL_SPOOL_DEPUTY_ID
+                    || self.quirks().physical_nozzle_count() > 1)
+        } else {
+            is_unit_slot(ams_id, slot_id)
+        };
+        if !address_valid {
+            return Err(Error::InvalidArgument(
+                format!(
+                    "set_tray_filament: ams_id {ams_id} slot_id {slot_id} is not a filament \
+                     address (ams_id 0..=3, 6 or 16, 128..=135; slot 0..=3, 0 on AMS-HT; or an \
+                     external spool, slot 0: ams_id 255, or 254 on a model with two nozzles)"
+                )
+                .into(),
+            ));
+        }
+
+        let ams_id = i32::from(wire_ams_id(ams_id));
+        let slot_id = i32::from(slot_id);
+        // Built before dispatch, with a placeholder sequence id the closure replaces, so an
+        // invalid colour is refused before anything is sent.
+        let mut request =
+            crate::mqtt::AmsFilamentSettingRequest::new(ams_id, slot_id, filament, 0u64);
+        if let Some(color) = details.color {
+            request = request.with_color(color)?;
+        }
+        if let Some(sub_brands) = details.sub_brands {
+            request = request.with_sub_brands(sub_brands);
+        }
+        if let Some(setting_id) = details.setting_id {
+            request = request.with_setting_id(setting_id);
+        }
+        self.dispatch(|seq| {
+            request.print.sequence_id = seq.into();
+            request
+        })
+        .await
     }
 
     /// Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].

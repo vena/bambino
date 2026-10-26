@@ -5,6 +5,7 @@
 use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus, SEQUENCE_ID_FLOOR};
 use bambino::error::Error;
 use bambino::models::PrinterModel;
+use bambino::mqtt::commands::{FilamentSpec, TrayFilamentDetails};
 use bambino::mqtt::{CalibrationMode, PrintJobConfig};
 use bambino::quirks::Support;
 use bambino::types::DryingMaterial;
@@ -1272,6 +1273,121 @@ async fn test_scan_rfid_wire_payload() {
     broker_task.await.expect("Broker task panicked");
 }
 
+const TEST_FILAMENT: FilamentSpec<'static> = FilamentSpec {
+    preset: "GFA00",
+    material: "PLA",
+    nozzle_temp_min: 190,
+    nozzle_temp_max: 230,
+};
+
+/// `set_tray_filament` sends the derived `tray_id`: the slot for a unit, `254` for an external spool.
+#[tokio::test]
+async fn test_set_tray_filament_wire_payload() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_filament_setting");
+            assert_eq!(json["print"]["ams_id"], 1);
+            assert_eq!(json["print"]["slot_id"], 2);
+            assert_eq!(json["print"]["tray_id"], 2);
+            assert_eq!(json["print"]["tray_info_idx"], "GFA00");
+            assert_eq!(json["print"]["tray_type"], "PLA");
+            assert_eq!(json["print"]["tray_color"], "09FF00FF");
+            assert_eq!(json["print"]["tray_sub_brands"], "Custom");
+            assert_eq!(json["print"]["setting_id"], "GFSA00");
+            assert_eq!(json["print"]["nozzle_temp_min"], 190);
+            assert_eq!(json["print"]["nozzle_temp_max"], 230);
+
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["ams_id"], 128);
+            assert_eq!(json["print"]["slot_id"], 0);
+            assert_eq!(json["print"]["tray_id"], 0);
+            assert!(json["print"].get("setting_id").is_none());
+
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["ams_id"], 255);
+            assert_eq!(json["print"]["slot_id"], 0);
+            assert_eq!(json["print"]["tray_id"], 254);
+        })
+        .await;
+
+    let details = TrayFilamentDetails {
+        color: Some("#09ff00"),
+        sub_brands: Some("Custom"),
+        setting_id: Some("GFSA00"),
+    };
+    client
+        .set_tray_filament(1, 2, TEST_FILAMENT, details)
+        .await
+        .expect("normal slot");
+    client
+        .set_tray_filament(128, 0, TEST_FILAMENT, TrayFilamentDetails::default())
+        .await
+        .expect("AMS-HT slot 0");
+    client
+        .set_tray_filament(255, 0, TEST_FILAMENT, TrayFilamentDetails::default())
+        .await
+        .expect("external spool");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Ext-L (`254`) is accepted only on a model with two nozzles.
+#[tokio::test]
+async fn test_set_tray_filament_deputy_spool_needs_two_nozzles() {
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
+    let result = client
+        .set_tray_filament(254, 0, TEST_FILAMENT, TrayFilamentDetails::default())
+        .await;
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    broker_task.await.expect("Broker task panicked");
+
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_filament_setting");
+            assert_eq!(json["print"]["ams_id"], 254);
+            assert_eq!(json["print"]["slot_id"], 0);
+            assert_eq!(json["print"]["tray_id"], 254);
+        })
+        .await;
+    client
+        .set_tray_filament(254, 0, TEST_FILAMENT, TrayFilamentDetails::default())
+        .await
+        .expect("Ext-L on a dual-nozzle model");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// An address no unit answers to, and an invalid colour, are refused with nothing published.
+#[tokio::test]
+async fn test_set_tray_filament_refuses_bad_address_and_colour() {
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
+    for (ams_id, slot_id) in [(0, 4), (4, 0), (128, 1), (255, 1)] {
+        let result = client
+            .set_tray_filament(
+                ams_id,
+                slot_id,
+                TEST_FILAMENT,
+                TrayFilamentDetails::default(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(_))),
+            "({ams_id}, {slot_id}): {result:?}"
+        );
+    }
+    let details = TrayFilamentDetails {
+        color: Some("not-hex"),
+        ..TrayFilamentDetails::default()
+    };
+    let result = client.set_tray_filament(0, 0, TEST_FILAMENT, details).await;
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    broker_task.await.expect("Broker task panicked");
+}
+
 /// The A2L-attached AMS Lite's normalized id and its physical id.
 const AMS_LITE_ON_A2L_IDS: [u8; 2] = [6, 16];
 
@@ -1304,6 +1420,12 @@ async fn test_ams_commands_address_ams_lite_on_a2l() {
                 assert_eq!(json["print"]["command"], "extrusion_cali_sel");
                 assert_eq!(json["print"]["ams_id"], 16);
                 assert_eq!(json["print"]["tray_id"], 25);
+
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "ams_filament_setting");
+                assert_eq!(json["print"]["ams_id"], 16);
+                assert_eq!(json["print"]["slot_id"], 1);
+                assert_eq!(json["print"]["tray_id"], 1);
             }
         })
         .await;
@@ -1325,6 +1447,10 @@ async fn test_ams_commands_address_ams_lite_on_a2l() {
             .select_k_profile(id, 1, 4, "GFA01", "0.4")
             .await
             .unwrap_or_else(|e| panic!("select_k_profile({id}) failed: {e:?}"));
+        client
+            .set_tray_filament(id, 1, TEST_FILAMENT, TrayFilamentDetails::default())
+            .await
+            .unwrap_or_else(|e| panic!("set_tray_filament({id}) failed: {e:?}"));
         // Issue #355: no AMS telemetry has arrived, but the address alone says AMS Lite — no
         // heater.
         let err = client.dry(id).temp(50).duration_hours(4).send().await;

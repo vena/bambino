@@ -23,6 +23,7 @@ pub mod status;
 pub use ams::{
     AmsChangeFilamentRequest, AmsControlOp, AmsControlRequest, AmsFilamentDryingRequest,
     AmsFilamentSettingRequest, AmsGetRfidRequest, ChangeTemps, DryingParams, FilamentSpec,
+    TrayFilamentDetails,
 };
 pub use control::{
     CalibrationRequest, CleanPrintErrorRequest, HmsActionRequest, IdleIgnoreRequest,

@@ -55,6 +55,25 @@ pub struct FilamentSpec<'a> {
     pub nozzle_temp_max: u32,
 }
 
+/// The optional parts of an `ams_filament_setting`, each applied only when `Some`.
+///
+/// Passed to `PrinterClient::set_tray_filament` beside the required [`FilamentSpec`]. Each field
+/// maps to the [`AmsFilamentSettingRequest`] builder of the same meaning:
+///
+/// * `color` is [`with_color`](AmsFilamentSettingRequest::with_color), so it is normalized and an
+///   invalid value is an error.
+/// * `sub_brands` is [`with_sub_brands`](AmsFilamentSettingRequest::with_sub_brands).
+/// * `setting_id` is [`with_setting_id`](AmsFilamentSettingRequest::with_setting_id).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrayFilamentDetails<'a> {
+    /// Tray colour as `RRGGBB` or `RRGGBBAA` hex, optionally `#`-prefixed.
+    pub color: Option<&'a str>,
+    /// Sub-brand label; the default is `"{material} Basic"`.
+    pub sub_brands: Option<&'a str>,
+    /// Long-form preset identifier, e.g. `"GFSL05_07"` or a `"PF"`-prefixed id.
+    pub setting_id: Option<&'a str>,
+}
+
 /// Overwrites physical attributes or custom slicer presets assigned to a specific tray.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentSettingPayload {
