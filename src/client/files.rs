@@ -1,4 +1,4 @@
-//! Listing, downloading and deleting a printer's print files and timelapses, and reading timelapse covers and print files' plate images, whichever service holds them.
+//! Listing, uploading, downloading and deleting a printer's print files and timelapses, and reading timelapse covers and print files' plate images, whichever service holds them.
 //!
 //! Only FTPS backs these calls today, so every file is on external storage. The port-6000 file
 //! tunnel (#636) will add a second [`FileAddress`] arm for internal storage without changing
@@ -108,7 +108,7 @@ pub enum FileTime {
     Unknown,
 }
 
-/// One file from [`PrinterClient::list_files`], [`PrinterClient::list_files_each`] or [`PrinterClient::job_file`].
+/// One file from [`PrinterClient::list_files`], [`PrinterClient::list_files_each`], [`PrinterClient::job_file`] or [`PrinterClient::upload_file`].
 ///
 /// Pass it back to [`PrinterClient::download_file`], [`PrinterClient::delete_file`],
 /// [`PrinterClient::read_thumbnail`] or [`PrinterClient::read_plate_images`]. It can't be built
@@ -671,7 +671,8 @@ where
     ///
     /// `Some(n)` reads plate `n`'s images. `None` takes the plate from the file's own list of
     /// plate G-code when it holds G-code for exactly one plate, and otherwise returns no plate
-    /// and no images: the images of a guessed plate would look right and be wrong. Either way the
+    /// and no images: the images of a guessed plate would look right and be wrong. With `None`
+    /// the result also carries that list ([`PlateImages::gcode_plates`]). Either way the
     /// plate is never taken from the running job: for its images, use
     /// [`read_running_job_images`](Self::read_running_job_images).
     ///

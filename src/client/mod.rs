@@ -37,6 +37,7 @@ pub mod types;
 pub use crate::file_tunnel::FileKind;
 pub use crate::mqtt::commands::{AirductMode, IdleIgnoreScope};
 pub use crate::quirks::Axis;
+#[doc(inline)]
 pub use crate::types::control::{
     AirPurificationMode, BuzzerMode, CalibrationOption, DoorOpenCheck, FanTarget,
     IdleHeatingProtection, LedNode, LightMode, NozzleBlobDetectMode, PrintSpeed, PrintStatus,

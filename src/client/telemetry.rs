@@ -125,8 +125,8 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_gcode_file: Option<String>,
     pub(crate) last_plate_idx: Option<u32>,
     pub(crate) last_job_start: Option<super::job::JobStart>,
-    // Every `lights_report` node seen in any frame, as a bit per `LedNode::ALL` index (see
-    // `light_bit`). A light never disappears, so this is a union and survives reconnects.
+    // Every `lights_report` node seen in any frame, one bit per `LedNode` (see `light_bit`).
+    // A light never disappears, so this is a union and survives reconnects.
     pub(crate) reported_lights: u8,
     // Whether a full status report (`FULL_REPORT_MIN_KEYS`) has carried `lights_report`. An
     // incremental frame may list only the node that changed, so only a full one makes the set

@@ -260,8 +260,8 @@ where
     ///
     /// So an external spool is `ams_id` `255` with `slot_id` `0` on every model, and `254` with
     /// `slot_id` `0` only on a model with more than one nozzle
-    /// ([`physical_nozzle_count`](crate::quirks::ModelQuirks::physical_nozzle_count));
-    /// `254` on a single-nozzle model is refused, since it would address physical AMS tray 0.
+    /// ([`physical_nozzle_count`](crate::quirks::ModelQuirks::physical_nozzle_count)). A
+    /// single-nozzle model has only the main external spool, so `254` is refused there.
     ///
     /// **The ack does not say the change took effect.** Read the tray back in the next AMS push:
     /// `tray_type`, `tray_color`, `tray_info_idx` and `nozzle_temp_min`/`nozzle_temp_max`. A P1S

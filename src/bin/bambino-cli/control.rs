@@ -61,7 +61,7 @@ pub enum ControlAction {
     /// Home all structural motion axes safely
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home")]
     Home,
-    /// Execute relative motion (e.g., move z -10 3000)
+    /// Execute relative motion (e.g., move z -10 900); FEEDRATE in mm/min, omitted = the model's jog speed
     #[command(
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]"
     )]

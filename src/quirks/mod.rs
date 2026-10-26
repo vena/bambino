@@ -481,7 +481,9 @@ impl ModelQuirks {
     ///
     /// X and Y are 3000, Z is 900, on every model. Source: BambuStudio `StatusPanel.cpp`, the
     /// `Ctrl_Axis` calls, which `DevAxis::Ctrl_Axis` (`DeviceCore/DevAxisCtrl.cpp`) sends as
-    /// `G1 <axis><v> F<speed>`.
+    /// `G1 <axis><v> F<speed>`. On a printer that supports the `xyz_ctrl` command BambuStudio
+    /// sends that instead, with no speed, so these are its speeds for the G-code path only
+    /// ([REF-MOTO-MQTTCTRL]); bambino always jogs with G-code.
     #[must_use]
     pub fn jog_feedrate(&self, axis: Axis) -> u32 {
         match axis {

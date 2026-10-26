@@ -19,7 +19,9 @@
 //! the same as `false`. The P1 and A1 families send no `fun2` at all
 //! (`reference/03_mqtt_telemetry.md`), and firmware version needs a `get_version` round trip
 //! that a caller may never have made. A quirk reading `None` should fall back to its model
-//! default, not treat it as a denial.
+//! default, not treat it as a denial. The exception is the reported lights, a set that only
+//! grows: an empty `reported_lights` is "nothing seen", and `lights_list_complete` says when
+//! that absence settles anything.
 //!
 //! Build one from a client with [`PrinterClient::quirk_context`](crate::client::PrinterClient::quirk_context),
 //! or reach for [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which
@@ -29,13 +31,13 @@
 
 use crate::types::control::LedNode;
 
-/// The `reported_lights` bit for `node`: its index in [`LedNode::ALL`].
+/// The `reported_lights` bit for `node`.
 pub(crate) fn light_bit(node: LedNode) -> u8 {
-    let index = LedNode::ALL
-        .iter()
-        .position(|&candidate| candidate == node)
-        .unwrap_or(0);
-    1 << index
+    match node {
+        LedNode::Chamber => 1 << 0,
+        LedNode::Chamber2 => 1 << 1,
+        LedNode::Work => 1 << 2,
+    }
 }
 
 /// Wire-derived inputs a quirk may consult, all optional.
@@ -93,7 +95,7 @@ pub struct QuirkContext<'a> {
     /// reads any version above it as "profiles available" (`DevCalib::IsVersionInited`).
     pub cali_version: Option<i32>,
 
-    /// The `lights_report` nodes the printer has reported, one bit per [`LedNode::ALL`] index.
+    /// The `lights_report` nodes the printer has reported, one bit per [`LedNode`]: `Chamber` 0, `Chamber2` 1, `Work` 2.
     ///
     /// A union over every frame seen. Set it with [`with_lights`](Self::with_lights).
     pub reported_lights: u8,

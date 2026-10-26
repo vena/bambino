@@ -7,7 +7,7 @@
 use bambino::PrinterModel;
 use bambino::camera::CameraProtocol;
 use bambino::models::supported_models;
-use bambino::quirks::{BuildVolume, DoorSensor, ModelQuirks, QuirkContext};
+use bambino::quirks::{Axis, BuildVolume, DoorSensor, ModelQuirks, QuirkContext};
 
 const MATRIX: &str = include_str!("../../MODEL_MATRIX.csv");
 
@@ -126,6 +126,16 @@ fn check(model: PrinterModel, q: &ModelQuirks, matrix: &[Vec<String>]) {
             expected,
             "{model} chamber heater"
         );
+    }
+    // BambuStudio machine profiles' normal-mode `machine_max_speed_*`, in mm/s; quirks hold mm/min.
+    if let Some(v) = get("Max X/Y Speed") {
+        let mm_min = u32::from(leading_u16(v)) * 60;
+        assert_eq!(q.max_feedrate(Axis::X), mm_min, "{model} max X speed");
+        assert_eq!(q.max_feedrate(Axis::Y), mm_min, "{model} max Y speed");
+    }
+    if let Some(v) = get("Max Z Speed") {
+        let mm_min = u32::from(leading_u16(v)) * 60;
+        assert_eq!(q.max_feedrate(Axis::Z), mm_min, "{model} max Z speed");
     }
     if let Some(v) = get("Door Sensor") {
         assert_eq!(

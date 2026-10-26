@@ -95,6 +95,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 ### [Chapter 4: Toolhead, Thermal, Motion & Climate Systems](04_toolhead_thermal_motion.md)
 *   **[REF-MOTO-GCODE] Section 4.1: Network Boundary & Interface Parameters**
     *   Synchronous G-code command line queue routing over MQTTS Port 8883 using the gcode_line control wrapper
+    *   Relative-move feedrates: BambuStudio jog speeds and per-model maximums
 *   **[REF-THER-DECODE] Section 4.2: State Telemetry Decoding**
     *   High-word/low-word temperature decoding, Right (T0)/Left (T1) IDEX thermal mappings, Hotend Configuration Query Stale Data Quirk, and Fan Speed Telemetry Quantization with oscillation artifacts [REF-CLIM-FANS]
     *   Bed temperature wire paths (`device.bed` vs `bed_temper`/`bed_target_temper`) and extruder state bitmask
@@ -123,9 +124,11 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Bus module firmware and serial number query (`get_version` response)
 *   **[REF-AMS-SP_CFG] Section 5.2: Spool Presets, Colors & RFID Serialization**
     *   RFID tag UIDs, preset short index lookup tables, and RRGGBBAA hex colors
+    *   Remaining filament (`remain`): Bambu-tagged spools only, `calibrate_remain_flag`, per-unit-type support
 *   **[REF-AMS-MAP] Section 5.3: AMS Slicer Mappings & Filament Changes**
     *   Flat ams_mapping array with unmapped external spool flat-mapping restrictions
     *   Structured ams_mapping2 objects and mandatory use_ams override on single-nozzle configurations [REF-AMS-USEAMS]
+    *   Choosing a mapping when the user is not asked: what BambuStudio and bambuddy derive
     *   Extrusion_cali_sel calibration profile mapping, single vs IDEX carriage rules, and single-nozzle virtual slot remappings
     *   Filament load & unload command structures and target remappings
 *   **[REF-AMS-DRYER] Section 5.4: Dry-Chamber Operations**
