@@ -947,7 +947,7 @@ struct PrinterFile {
 }
 ```
 
-One file from [`PrinterClient::list_files`](#printerclient), [`PrinterClient::list_files_each`](#printerclient) or [`PrinterClient::job_file`](#printerclient).
+One file from [`PrinterClient::list_files`](#printerclient), [`PrinterClient::list_files_each`](#printerclient), [`PrinterClient::job_file`](#printerclient) or [`PrinterClient::upload_file`](#printerclient).
 
 Pass it back to [`PrinterClient::download_file`](#printerclient), [`PrinterClient::delete_file`](#printerclient),
 [`PrinterClient::read_thumbnail`](#printerclient) or [`PrinterClient::read_plate_images`](#printerclient). It can't be built
@@ -1329,8 +1329,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   So an external spool is `ams_id` `255` with `slot_id` `0` on every model, and `254` with
   `slot_id` `0` only on a model with more than one nozzle
-  ([`physical_nozzle_count`](../quirks/index.md#modelquirks));
-  `254` on a single-nozzle model is refused, since it would address physical AMS tray 0.
+  ([`physical_nozzle_count`](../quirks/index.md#modelquirks)). A
+  single-nozzle model has only the main external spool, so `254` is refused there.
 
   **The ack does not say the change took effect.** Read the tray back in the next AMS push:
   `tray_type`, `tray_color`, `tray_info_idx` and `nozzle_temp_min`/`nozzle_temp_max`. A P1S
@@ -1936,7 +1936,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   `Some(n)` reads plate `n`'s images. `None` takes the plate from the file's own list of
   plate G-code when it holds G-code for exactly one plate, and otherwise returns no plate
-  and no images: the images of a guessed plate would look right and be wrong. Either way the
+  and no images: the images of a guessed plate would look right and be wrong. With `None`
+  the result also carries that list ([`gcode_plates`](../ftps/project/index.md#gcode-plates)). Either way the
   plate is never taken from the running job: for its images, use
   [`read_running_job_images`](#printerclient).
 

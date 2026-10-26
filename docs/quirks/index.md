@@ -143,7 +143,7 @@ site.
 
 - **`reported_lights`**: `u8`
 
-  The `lights_report` nodes the printer has reported, one bit per [`LedNode::ALL`](../types/control/index.md#lednode) index.
+  The `lights_report` nodes the printer has reported, one bit per [`LedNode`](../types/control/index.md#lednode): `Chamber` 0, `Chamber2` 1, `Work` 2.
   
   A union over every frame seen. Set it with [`with_lights`](context/index.md#quirkcontext).
 
@@ -351,7 +351,9 @@ must adapt to.
 
   X and Y are 3000, Z is 900, on every model. Source: BambuStudio `StatusPanel.cpp`, the
   `Ctrl_Axis` calls, which `DevAxis::Ctrl_Axis` (`DeviceCore/DevAxisCtrl.cpp`) sends as
-  `G1 <axis><v> F<speed>`.
+  `G1 <axis><v> F<speed>`. On a printer that supports the `xyz_ctrl` command BambuStudio
+  sends that instead, with no speed, so these are its speeds for the G-code path only
+  ([REF-MOTO-MQTTCTRL]); bambino always jogs with G-code.
 
 - <span id="modelquirks-max-feedrate"></span>`fn max_feedrate(&self, axis: Axis) -> u32` — [`Axis`](#axis)
 

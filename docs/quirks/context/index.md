@@ -25,7 +25,9 @@ Every field is `Option` because every one of them can be genuinely absent, and a
 the same as `false`. The P1 and A1 families send no `fun2` at all
 (`reference/03_mqtt_telemetry.md`), and firmware version needs a `get_version` round trip
 that a caller may never have made. A quirk reading `None` should fall back to its model
-default, not treat it as a denial.
+default, not treat it as a denial. The exception is the reported lights, a set that only
+grows: an empty `reported_lights` is "nothing seen", and `lights_list_complete` says when
+that absence settles anything.
 
 Build one from a client with [`PrinterClient::quirk_context`](../../client/index.md#printerclient),
 or reach for [`PrinterClient::capabilities`](../../client/index.md#printerclient), which
@@ -123,7 +125,7 @@ site.
 
 - **`reported_lights`**: `u8`
 
-  The `lights_report` nodes the printer has reported, one bit per [`LedNode::ALL`](../../types/control/index.md#lednode) index.
+  The `lights_report` nodes the printer has reported, one bit per [`LedNode`](../../types/control/index.md#lednode): `Chamber` 0, `Chamber2` 1, `Work` 2.
   
   A union over every frame seen. Set it with [`with_lights`](#quirkcontext).
 
