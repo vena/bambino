@@ -166,7 +166,7 @@ pub struct AmsStatusReport {
     /// Calibration tracking status.
     pub cali_stat: Option<i32>,
 
-    /// Whether AMS-side remaining-filament detection is enabled. Confirmed
+    /// Whether AMS-side remaining-filament detection is enabled (BambuStudio's "Update remaining capacity", which `ams_user_setting` sets). Confirmed
     /// independently by `bambu-printer-manager` (`bambucommands.py`, `bambutools.py`)
     /// and `OpenBambuAPI/local-printer-api.md` (community protocol spec).
     pub calibrate_remain_flag: Option<bool>,
@@ -456,6 +456,10 @@ pub struct AmsTray {
     pub tray_uuid: Option<String>,
 
     /// Remaining filament volume percentage (or -1 if uncalculated).
+    ///
+    /// Only estimated for a spool whose Bambu RFID tag was read (non-zero `tag_uid`); an
+    /// untagged spool reports `-1`, and the external spool reports `0`. See
+    /// `reference/05_materials_ams.md` ("Remaining Filament").
     pub remain: Option<i32>,
 
     /// Sub-brand or variant string (e.g. "PLA Matte", "Support for PLA").
@@ -1172,6 +1176,10 @@ impl AmsTray {
 
     /// Remaining filament in percent, or `None` for the firmware's `-1` "not calculated"
     /// sentinel or any other out-of-range value.
+    ///
+    /// The AMS estimates it only for a spool whose Bambu RFID tag it read, and only while its
+    /// `calibrate_remain_flag` setting is on (BambuStudio hides the value otherwise). The
+    /// external spool's `0` is not an estimate either: BambuStudio never shows one there.
     #[must_use]
     pub fn remain_percent(&self) -> Option<u8> {
         self.remain

@@ -220,6 +220,31 @@ For spools equipped with proprietary Bambu Lab RFID tags, the printer automatica
 *   `tag_uid`: Unique 16-character hexadecimal string read from the physical RFID tag.
 *   `tray_uuid`: Unique 32-character hexadecimal string representing the globally unique ID of the filament spool.
 
+#### Remaining Filament (`remain`)
+`remain` is the AMS's estimate of the filament left on a spool, `0`–`100` percent, or `-1` when it has none. `remain_g` is a separate weight in grams (`-1` = not provided).
+
+**Owner's observation (not from an upstream):** the AMS reads only Bambu spools' RFID tags, and calculates the percentage from that tag's rotation, so a spool without a Bambu tag reports `-1`.
+
+**What the upstreams show:**
+
+*   **A Bambu tag is required.** BambuStudio shows `remain` only for a tray whose `tag_uid` has a non-zero digit (`DevFilaSystem::IsBBL_Filament`), and only while remaining-capacity detection is on; otherwise it draws a full spool (`AMSinfo::parse_ams_info`, `Widgets/AMSItem.cpp`; `ViewModelDisplayBuilder.cpp`, `show_remain = !is_ext && is_bbl && tray.info_ready && detect_remain_enabled`). Its mapping code calls `-1` "the printer does not report a remain (e.g. non-genuine spools)" (`_parse_tray_info`, `DeviceCore/DevMapping.cpp`). The setting's own text: "AMS will attempt to estimate the remaining capacity of the Bambu Lab filaments." (`AMSSetting.cpp`).
+*   **Wire captures agree.** Across ha-bambulab's `pybambu/mock_data` fixtures (X1C, H2D, H2D Pro, P2S, X2D, H2S, A2L), every loaded tray with a non-zero `tag_uid` reports `0`–`100` and every tray with `tag_uid` `0000000000000000` reports `-1`. One exception: `MOCK-A1.json` (AMS Lite) reports `100` for four untagged trays.
+*   **`calibrate_remain_flag`** is the AMS-side switch for this estimate. BambuStudio sends it in `ams_user_setting` (`MachineObject::command_ams_user_settings`, `DeviceManager.cpp`) and reads it back from `print.ams.calibrate_remain_flag` (`DevFilaSystem.cpp`). The settings checkbox is shown only when the printer reports `support_update_remain`. With it off, BambuStudio hides `remain` client-side; no source says whether the firmware then sends `-1`.
+*   **Fetch status.** Bits 5–7 of a tray's `state` carry `RemainFetchStatus` (`0` done, `1` refreshing, `2` cloud timeout, `3` cloud no data, `4` initializing; `DevFilaSystem.h`). BambuStudio's filament manager ignores `remain` while it reads `1` or `4` (`wgtFilaManagerSync.cpp`).
+*   **bambuddy** writes `remain: 0` only when it clears a slot it has found empty (`tray_exist_bits` bit clear, or a not-loaded `state` in an incremental update; `bambu_mqtt.py`). That is its own scrubbing of stale data, not a printer value.
+
+**Answers:**
+
+| Question | Answer |
+| :--- | :--- |
+| Valid only for an RFID-read Bambu spool? | Yes on the original AMS, AMS 2 Pro and AMS-HT, per BambuStudio and the captures above. |
+| Does `calibrate_remain_flag` off force `-1`? | Unknown. BambuStudio hides the value instead of relying on the firmware. |
+| Do AMS Lite, AMS 2 Pro and AMS-HT all estimate it? | AMS 2 Pro (`info` type `3`, H2D/P2S) and AMS-HT (type `4`, `MOCK-MISC.json`, `65`) do. AMS Lite is unconfirmed: the only capture has no tagged spool and reports `100` for untagged ones. |
+| Does the external spool report it? | No. `vt_tray`/`vir_slot` report `0` in every capture, and BambuStudio never shows it there (`!is_ext`). |
+| A Bambu spool moved between slots? | Unknown; no source covers it. |
+
+bambino's `AmsTray::remain_percent()` returns `None` for `-1`; a consumer should also treat a value from an untagged tray or the external spool as not an estimate.
+
 #### Preset Identifiers (`tray_info_idx`)
 These are **two separate wire fields**, and conflating them is a real failure mode:
 
@@ -284,6 +309,14 @@ The `"ams_mapping2"` parameter is a JSON array of structured objects that mainta
 On single-nozzle platforms (such as the X1C, P1S, A1, and H2S), if all mapped filaments reside on the external spool (no active spool is routed to a physical AMS unit), the `use_ams` command parameter must be set strictly to `false` in the dispatch payload. If `use_ams: true` is transmitted when printing exclusively from the external spool, the print processor fails to build the material routing table, rejecting the task with error `07FF_8012`.
 
 This includes a multi-filament project whose unused filament slots are padded with `-1`: a mapping such as `[-1,-1,-1,-1,-1,-1,254]` is still all-external. Sent with `use_ams: true` on a P1S, it sat at "Heatbed preheating" for about 10 minutes before pausing with `07FF_8012` — so the failure is not an immediate rejection. bambino's `is_external_spool_safety_valid[_flat]` (`src/ams/mapping.rs`) keeps `use_ams: true` only when some entry is a physical AMS slot. *(Verification source: bambuddy issue #3087, fixed in its print scheduler by sending `use_ams: false` when every filament the plate prints is external.)*
+
+#### Choosing a Mapping When the User Is Not Asked
+No sender found leaves the mapping to the printer. Both derive one from the file's filament list and the AMS telemetry, and send it with the job:
+
+*   **BambuStudio** runs `DevMappingUtil::ams_filament_mapping` (`DeviceCore/DevMapping.cpp`) from `SelectMachineDialog::do_ams_mapping` (`SelectMachine.cpp`) before the user sees the dialog, also for a file printed from the printer's storage (`SyncAmsInfoDialog.cpp`). The match: filament type must agree, then the preset (`setting_id`), then the filament class (`filament_id`), then the nearest colour. On a tie between two exact `filament_id` matches it picks the tray with less filament left (`_prefer_tray_by_remain`). It then sets `use_ams` from the result: `true` if any filament maps to an AMS tray, `false` if all map to the external spool, and always `false` on a printer without an AMS (`SelectMachine.cpp`).
+*   **bambuddy** computes a mapping for a queued job that has none (`PrintScheduler._ensure_ams_mapping` / `_compute_ams_mapping_for_printer`, `print_scheduler.py`). When it can't, it keeps `use_ams: true` so that the firmware fails with an AMS-mapping error instead of printing from an empty external feed. On a printer with no AMS it maps every filament to the external spool, since a job sent with the AMS on is rejected with `0700_8012` there (bambuddy issue #3239).
+
+What the printer does with a job sent without a mapping, or started from its own screen, has no source. A job sliced for AMS slots and sent with `use_ams: false` prints from the external spool. bambino's `PrintJobConfig::new` defaults to exactly that, so a consumer that does not ask the user must derive a mapping as above.
 
 #### Select Calibration Profile Command (`extrusion_cali_sel`)
 To bind a stored pressure advance (K-profile) to an AMS slot, `"ams_id"`, `"tray_id"` and `"slot_id"` must be transmitted. `"tray_id"` must be formatted as the absolute global tray ID; `"slot_id"` is the local slot — `tray_id - ams_id * 4` for a standard AMS, `tray_id - 24` for an AMS Lite on an A2L, and `0` for an AMS-HT or external spool. BambuStudio `commnad_select_pa_calibration` (`DeviceManager.cpp`) and bambuddy (`bambu_mqtt.py`) both send `slot_id` (#315). Furthermore, the `setting_id` field must be strictly omitted to prevent database mislinking.

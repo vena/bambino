@@ -256,6 +256,13 @@ impl PrintJobConfig {
     /// Builds a job config with these defaults: bed leveling and flow calibration on,
     /// **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
     /// disabled, and the model's own nozzle-offset-calibration default.
+    ///
+    /// **AMS disabled means the external spool.** A job sliced for AMS slots and started with
+    /// this default prints from the external spool. No sender leaves the mapping out:
+    /// BambuStudio derives one from the file's filaments and the loaded trays before every
+    /// send, and bambuddy computes one when a job has none. Pass the mapping through
+    /// [`with_ams`](Self::with_ams) or [`with_ams_mapping2`](Self::with_ams_mapping2). See
+    /// `reference/05_materials_ams.md`, "Choosing a Mapping When the User Is Not Asked".
     pub fn new(
         job_filename: &str,
         plate_gcode_path: &str,
