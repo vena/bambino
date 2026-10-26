@@ -485,6 +485,13 @@ defaults for calibration flags.
   **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
   disabled, and the model's own nozzle-offset-calibration default.
 
+  **AMS disabled means the external spool.** A job sliced for AMS slots and started with
+  this default prints from the external spool. No sender leaves the mapping out:
+  BambuStudio derives one from the file's filaments and the loaded trays before every
+  send, and bambuddy computes one when a job has none. Pass the mapping through
+  [`with_ams`](commands/print_job/index.md#printjobconfig) or [`with_ams_mapping2`](commands/print_job/index.md#printjobconfig). See
+  `reference/05_materials_ams.md`, "Choosing a Mapping When the User Is Not Asked".
+
 - <span id="printjobconfig-from-internal-storage"></span>`fn from_internal_storage(self) -> Self`
 
   Prints `job_filename` from internal storage, where [`FileTunnelClient::upload`](../file_tunnel/index.md) to `emmc` put it, instead of from the card.
@@ -664,29 +671,38 @@ Which liveness condition [`MqttClient::tick_zombie_check`](client/index.md#mqttc
 enum AirductMode {
     Cooling,
     Heating,
-    Laser,
+    Exhaust,
+    FullCooling,
 }
 ```
 
-Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE].
 
-`Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
-`Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
-`Laser` (2): configuration for laser engraving module operation.
+Values and names follow BambuStudio's `AIR_DUCT` enum (`DeviceCore/DevFan.h`), and the
+variant docs quote its descriptions (`Widgets/FanControl.cpp`). The printer lists the modes it
+offers in `device.airduct.modeList`.
 
 #### Variants
 
 - **`Cooling`**
 
-  Closes internal recirculation dampers, routes hot air out through exhaust.
+  "Suitable for printing PLA/PETG/TPU materials and filters the chamber air."
 
 - **`Heating`**
 
-  Seals enclosure, closes exhaust flaps for heat retention.
+  "Suitable for printing ABS/ASA/PC/PA materials and circulates filters the chamber air."
 
-- **`Laser`**
+- **`Exhaust`**
 
-  Laser engraving module configuration.
+  Exhaust mode, which BambuStudio describes only by name.
+  
+  BambuStudio leaves it out of its mode list even when the printer reports it
+  (`DevFan.cpp`, `/*STUDIO-12796*/`), for a reason it does not give. Sendable here, but a
+  consumer offering modes to a user should consider hiding it as BambuStudio does.
+
+- **`FullCooling`**
+
+  "Strong cooling mode is suitable for printing PLA/TPU materials. In this mode, the printouts will be fully cooled."
 
 #### Trait Implementations
 
@@ -896,7 +912,7 @@ Where the printer finds a job's `.3mf`, which decides the start command's `url` 
 type AirductRequest = super::Print<AirductPayload>;
 ```
 
-Switches the enclosure airduct damper between cooling, heating, and laser modes.
+Switches the airduct between its modes ([`AirductMode`](commands/hardware/index.md#airductmode)).
 
 ### `AmsChangeFilamentRequest`
 

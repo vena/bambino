@@ -31,6 +31,7 @@ The client applies model-aware safety checks automatically:
   - [`types`](#types)
 - [Types](#types)
   - [`PrinterClient`](#printerclient)
+- [Traits](#traits)
 - [Constants](#constants)
   - [`DEFAULT_COMMAND_TIMEOUT`](#default-command-timeout)
   - [`DEFAULT_CONNECT_TIMEOUT`](#default-connect-timeout)
@@ -373,6 +374,12 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   Gate [`PrinterClient::file_tunnel`](#printerclient) and anything
   built on it on this; an `Assumed(true)` printer may still fail the handshake, which is the
   signal to use FTPS instead.
+
+- <span id="capabilities-light-support"></span>`fn light_support(&self, node: LedNode) -> Support` — [`LedNode`](../types/control/index.md#lednode), [`Support`](../quirks/index.md#support)
+
+  Whether the printer has the light `node` — see [`ModelQuirks::light_support`](../quirks/index.md#modelquirks).
+
+  `Assumed(true)` until a full status report has listed the printer's lights.
 
 - <span id="capabilities-prompt-sound-support"></span>`fn prompt_sound_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
@@ -822,6 +829,7 @@ struct PlateImages<'b> {
     pub plate_image: Option<&'b [u8]>,
     pub small_image: Option<&'b [u8]>,
     pub pick_image: Option<&'b [u8]>,
+    pub gcode_plates: Option<Vec<u32>>,
 }
 ```
 
@@ -850,6 +858,17 @@ A plate's images from the front of a print file's `.3mf`, from [`PrinterClient::
 
   `Metadata/pick_<N>.png`, or `None` when the file has none for this plate. Decode its
   pixels with [`pick_identify_id`](../ftps/project/index.md#pick-identify-id).
+
+- **`gcode_plates`**: `Option<Vec<u32>>`
+
+  The plates the file holds G-code for, in archive order, or `None` when the call didn't
+  read the list (it was given a plate, or the file isn't a [`FileKind::Model`](../file_tunnel/index.md#filekind)).
+  
+  `Some` on every call made with `plate: None`, including when the list holds no plate or
+  several and so `plate` and the images are `None`. A print-start screen can call
+  [`read_plate_images(file, None, buf)`](#printerclient) once: one plate
+  gives its images, several give this list to offer, and a second call with `Some(n)`
+  reads that plate's images.
 
 #### Trait Implementations
 
@@ -1283,6 +1302,46 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   the reader: returns [`Error::InvalidState`](../error/index.md#error) when the cached `ams.tray_now` is anything but
   `255` (unloaded), matching bambuddy (`bambu_mqtt.py`). BambuStudio refuses the
   same case with a dialog (`StatusPanel.cpp`). An unobserved `tray_now` passes.
+
+- <span id="superprinterclient-set-tray-filament"></span>`async fn set_tray_filament(&mut self, ams_id: u8, slot_id: u8, filament: FilamentSpec<'_>, details: TrayFilamentDetails<'_>) -> Result<CommandHandle, Error>` — [`FilamentSpec`](../mqtt/commands/ams/index.md#filamentspec), [`TrayFilamentDetails`](../mqtt/commands/ams/index.md#trayfilamentdetails), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets the filament type, colour and nozzle temperature window of an AMS slot or external spool [REF-AMS-MAP].
+
+  Takes the unit and its **local** slot, as [`select_k_profile`](#printerclient)
+  does; the wire's `tray_id` is derived by
+  [`AmsFilamentSettingRequest::new`](../mqtt/index.md).
+
+  * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
+    AMS Lite (`6` or its physical `16`; sent as `16`), or an external spool.
+  * `slot_id`: Slot within the unit (`0..=3`, `0` on AMS-HT), or `0` for an external spool.
+  * `filament` / `details`: what to store; see [`FilamentSpec`](../mqtt/commands/ams/index.md#filamentspec) and
+    [`TrayFilamentDetails`](../mqtt/commands/ams/index.md#trayfilamentdetails).
+
+  **External-spool addressing cheat-sheet.** This command (`ams_filament_setting`) uses
+  different `ams_id`/`tray_id` external-spool addressing than `extrusion_cali_sel`
+  ([`select_k_profile`](#printerclient)) — do not reuse one rule for both:
+  * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
+    Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
+    `ams_id: 255` / `tray_id: 255`.
+  * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
+    `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
+    (`ams_id: 255`) require `tray_id: 254`.
+
+  So an external spool is `ams_id` `255` with `slot_id` `0` on every model, and `254` with
+  `slot_id` `0` only on a model with more than one nozzle
+  ([`physical_nozzle_count`](../quirks/index.md#modelquirks));
+  `254` on a single-nozzle model is refused, since it would address physical AMS tray 0.
+
+  **The ack does not say the change took effect.** Read the tray back in the next AMS push:
+  `tray_type`, `tray_color`, `tray_info_idx` and `nozzle_temp_min`/`nozzle_temp_max`. A P1S
+  acks `success` while storing a corrupted colour (see
+  [`AmsFilamentSettingRequest::with_color`](../mqtt/index.md)),
+  and `reference/03_mqtt_telemetry.md` ("Effect Signals") lists this command's signal.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) for an address no unit answers to, or for an invalid
+  `details.color`; nothing is published in either case.
 
 - <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: u8, slot_id: u8, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -1804,6 +1863,41 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Deletes a listed file. Deleting one that is already gone succeeds.
 
+- <span id="superprinterclient-upload-file"></span>`async fn upload_file(&mut self, storage: StorageKind, name: &str, source: impl UploadSource) -> Result<PrinterFile, Error>` — [`StorageKind`](#storagekind), [`UploadSource`](../upload/index.md#uploadsource), [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Uploads a `.3mf` to the printer's storage and returns the file, ready for [`start_print`](#printerclient).
+
+  `source` is read a chunk at a time, so a file larger than RAM can be sent from a card or
+  disk: pass a slice, or a file of your own as `&mut file` (see [`UploadSource`](../upload/index.md#uploadsource)).
+  [`StorageKind::External`](files/index.md#storagekind) sends it over FTPS to the card's root as `/<name>`, where Bambu
+  Studio's LAN send puts it (`reference/02_ftps.md`). Internal storage needs the file tunnel
+  (#636) and is refused with [`Error::NotConfigured`](../error/index.md#error).
+
+  `name` must be non-empty, hold no `/`, and end in `.3mf`, ignoring case. Only `.3mf`,
+  because the returned file is a [`FileKind::Model`](../file_tunnel/index.md#filekind), which is what
+  [`list_files`](#printerclient)`(FileKind::Model)` lists. A name that fails is
+  [`Error::InvalidArgument`](../error/index.md#error), with nothing sent. The file is overwritten if it exists.
+
+  To print it, build a
+  [`PrintJobConfig`](../mqtt/index.md) whose `job_filename` is `file.name`
+  (`PrintJobConfig::new`'s first argument; a card-root file is its bare name) and call
+  [`start_print`](#printerclient).
+
+  The upload is checked against the printer's `SIZE` once it ends
+  ([`FtpsClient::upload_from`](../ftps/client/index.md#ftpsclient)). The returned `modified` is the printer's `MDTM` reading, to
+  the second, or [`FileTime::Unknown`](files/index.md#filetime) when the firmware has no `MDTM` or the query fails
+  after the file was stored.
+
+  **A source error ends the FTPS session**: the transfer is left half written, so the
+  session is dropped, and the next FTPS call reconnects. A source that returns no bytes
+  before its length is [`Error::InvalidArgument`](../error/index.md#error), with the same effect.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) for a bad `name` or a source over
+  [`MAX_TRANSFER_BYTES`](../ftps/index.md#max-transfer-bytes), [`Error::NotConfigured`](../error/index.md#error) for
+  internal storage or without FTPS, and whatever [`FtpsClient::upload_from`](../ftps/client/index.md#ftpsclient) returns.
+
 - <span id="superprinterclient-read-thumbnail"></span>`async fn read_thumbnail(&mut self, file: &PrinterFile, sink: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<Option<u64>, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
   Reads a listed timelapse's cover image, passing each read to `sink`, and returns its size, or `None` when it has none.
@@ -1818,6 +1912,23 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   a missing file from an unreadable one. A `550` after bytes reached `sink` (from the
   closing `SIZE` check) is an error, not `None`. The read and its `sink` behave as
   [`download_file`](#printerclient)'s.
+
+- <span id="superprinterclient-read-gcode-plates"></span>`async fn read_gcode_plates(&mut self, file: &PrinterFile, buf: &mut [u8]) -> Result<Vec<u32>, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+
+  Lists the plates a print file's `.3mf` holds G-code for, read from its front into `buf`.
+
+  The plates are in archive order; an empty list means the file holds no G-code, and a
+  non-[`FileKind::Model`](../file_tunnel/index.md#filekind) file returns an empty list without a request, as
+  [`read_plate_images`](#printerclient) returns no images. To get a plate's images
+  from the same read, call `read_plate_images` with `None` instead: it carries this list.
+
+  One FTPS read, which usually ends the session: see [`FtpsClient::download_prefix`](../ftps/client/index.md#ftpsclient). `buf`
+  needs room for the file's front section and the list of plate G-code after it: about
+  30–55 KB on the files measured.
+
+  # Errors
+
+  As [`FtpsClient::read_job_prefix`](../ftps/client/index.md#ftpsclient), plus whatever connecting FTPS returns.
 
 - <span id="superprinterclient-read-plate-images"></span>`async fn read_plate_images<'b>(&mut self, file: &PrinterFile, plate: Option<u32>, buf: &'b mut [u8]) -> Result<PlateImages<'b>, Error>` — [`PrinterFile`](#printerfile), [`PlateImages`](#plateimages), [`Error`](../error/index.md#error)
 
@@ -1882,6 +1993,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: LedNode, turn_on: bool) -> Result<CommandHandle, Error>` — [`LedNode`](../types/control/index.md#lednode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Turns an LED fixture on or off [REF-MQTT-LIFECYCLE].
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when the printer's own `lights_report` shows it lacks `node`
+  (see `Capabilities::light_support`).
+  Before a full status report has listed the printer's lights, every node is allowed.
 
 - <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: AirductMode) -> Result<CommandHandle, Error>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -2024,7 +2141,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `G28 Z` skips it and risks driving the bed into a misplaced toolhead, so those models get
   [`Error::ModelMismatch`](../error/index.md#error) and nothing is sent. Bed-slingers (A1, A1 Mini, A2L) accept it.
 
-- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: Axis, distance: f32, feedrate: u32) -> Result<Option<CommandHandle>, Error>` — [`Axis`](../quirks/index.md#axis), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: Axis, distance: f32, feedrate: Option<u32>) -> Result<Option<CommandHandle>, Error>` — [`Axis`](../quirks/index.md#axis), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dispatches a manual relative axis movement block.
 
@@ -2042,9 +2159,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
   returns `Ok(None)`.
 
+  `feedrate` is in mm/min. `None` sends the model's
+
+  device-panel jog speed, 3000 for X and Y and 900 for Z. `Some(f)` is sent as given, bounded
+  by [`max_feedrate(axis)`](../quirks/index.md#modelquirks), the first (normal-mode)
+  `machine_max_speed_x`/`_y`/`_z` of the model's BambuStudio machine profile times 60.
+
   # Errors
 
-  [`Error::ModelMismatch`](../error/index.md#error) when `distance` is non-finite or exceeds the axis's travel.
+  [`Error::ModelMismatch`](../error/index.md#error) when `distance` is non-finite or exceeds the axis's travel, or
+  when an explicit `feedrate` exceeds
+  [`max_feedrate(axis)`](../quirks/index.md#modelquirks). Nothing is sent.
+
+  [`Error::InvalidArgument`](../error/index.md#error) when `feedrate` is `Some(0)`.
 
 - <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -3146,29 +3273,38 @@ Re-exported as `bambino::client::FileKind`.
 enum AirductMode {
     Cooling,
     Heating,
-    Laser,
+    Exhaust,
+    FullCooling,
 }
 ```
 
-Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE].
 
-`Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
-`Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
-`Laser` (2): configuration for laser engraving module operation.
+Values and names follow BambuStudio's `AIR_DUCT` enum (`DeviceCore/DevFan.h`), and the
+variant docs quote its descriptions (`Widgets/FanControl.cpp`). The printer lists the modes it
+offers in `device.airduct.modeList`.
 
 #### Variants
 
 - **`Cooling`**
 
-  Closes internal recirculation dampers, routes hot air out through exhaust.
+  "Suitable for printing PLA/PETG/TPU materials and filters the chamber air."
 
 - **`Heating`**
 
-  Seals enclosure, closes exhaust flaps for heat retention.
+  "Suitable for printing ABS/ASA/PC/PA materials and circulates filters the chamber air."
 
-- **`Laser`**
+- **`Exhaust`**
 
-  Laser engraving module configuration.
+  Exhaust mode, which BambuStudio describes only by name.
+  
+  BambuStudio leaves it out of its mode list even when the printer reports it
+  (`DevFan.cpp`, `/*STUDIO-12796*/`), for a reason it does not give. Sendable here, but a
+  consumer offering modes to a user should consider hiding it as BambuStudio does.
+
+- **`FullCooling`**
+
+  "Strong cooling mode is suitable for printing PLA/TPU materials. In this mode, the printouts will be fully cooled."
 
 #### Trait Implementations
 
@@ -3906,10 +4042,11 @@ state should inspect the raw `gcode_state` string directly.
 
 - **`Slicing`**
 
-  Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
+  A job is in flight and the printer is processing its G-code (wire: `"SLICING"`).
   
-  Distinct from [`Preparing`](../types/control/index.md#printstatus): nothing is moving yet. It is still a
-  busy state — a job is in flight — so treat it like the other active states when
+  Some firmware reports it briefly between `PREPARE` and `RUNNING` while parsing the
+  G-code (bambuddy, `print_scheduler.py` `_ACTIVE_PRINT_STATES`), so motion may already
+  have started. It is a busy state: treat it like the other active states when
   deciding whether the printer can accept new work.
 
 - **`Running`**
@@ -4500,6 +4637,55 @@ available via [`into_raw`](types/index.md#telemetryevent).
 ##### `impl Debug for TelemetryEvent`
 
 - <span id="telemetryevent-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+
+---
+
+## Traits
+
+### `UploadSource`
+
+```rust
+trait UploadSource { ... }
+```
+
+
+A file's bytes, read by offset, for an upload.
+
+The read is positional because the file tunnel's init reply can ask to resume from an offset,
+and the whole file's MD5 goes on the last chunk, so the bytes before that offset are read
+too. It is async so an SD-card read doesn't block an embassy executor.
+
+Implemented for `&[u8]` and for `&mut S` of any source, so an upload takes a source by value:
+a slice directly, or a file as `&mut file`.
+
+#### Required Methods
+
+- `fn len(&self) -> u64`
+
+  Total size in bytes, known before the upload starts.
+
+- `fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, Error>`
+
+  Reads up to `buf.len()` bytes starting at `offset` into `buf`, and returns how many.
+
+  Returning 0 for an `offset` before [`len`](../upload/index.md#uploadsource) is a short source, which fails the
+  upload.
+
+  # Errors
+
+  Whatever the source's own read fails with.
+
+#### Provided Methods 
+
+- `fn is_empty(&self) -> bool`
+
+  Whether the source holds no bytes.
+
+#### Implementors
+
+- `&[u8]`
+- `&mut S`
 
 
 ---

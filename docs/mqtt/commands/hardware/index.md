@@ -48,7 +48,7 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
 |------|------|-------------|
 | [`AirPrintDetectPayload`](#airprintdetectpayload) | struct | Turns non-visual air-printing detection on or off. |
 | [`AirPurificationPayload`](#airpurificationpayload) | struct | Sets where chamber air is purified at the end of a print. |
-| [`AirductPayload`](#airductpayload) | struct | Redirects internal climate airflows using active damper deflection plates. |
+| [`AirductPayload`](#airductpayload) | struct | Selects the airduct mode. |
 | [`AutoRecoveryPayload`](#autorecoverypayload) | struct | Turns step-loss auto-recovery on or off. |
 | [`BuzzerPayload`](#buzzerpayload) | struct | Modifies active alarm or attention chime parameters on the printer cabinet buzzer module. |
 | [`DoorOpenCheckPayload`](#dooropencheckpayload) | struct | Sets what the printer does when its door opens mid-print. |
@@ -62,10 +62,10 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
 | [`SmartNozzleBlobDetectPayload`](#smartnozzleblobdetectpayload) | struct | Sets the smart nozzle blob detection mode (off, on, or auto). |
 | [`StoreSentFilesPayload`](#storesentfilespayload) | struct | Sets whether files sent from Bambu Studio, Bambu Handy and MakerWorld are kept on external storage. |
 | [`XcamControlPayload`](#xcamcontrolpayload) | struct | Turns one camera detector on or off, optionally with its halt sensitivity. |
-| [`AirductMode`](#airductmode) | enum | Airduct damper operating mode [REF-MQTT-LIFECYCLE]. |
+| [`AirductMode`](#airductmode) | enum | Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE]. |
 | [`AirPrintDetectRequest`](#airprintdetectrequest) | type | Enables or disables non-visual air-printing detection. |
 | [`AirPurificationRequest`](#airpurificationrequest) | type | Sets the end-of-print air purification mode. |
-| [`AirductRequest`](#airductrequest) | type | Switches the enclosure airduct damper between cooling, heating, and laser modes. |
+| [`AirductRequest`](#airductrequest) | type | Switches the airduct between its modes ([`AirductMode`](#airductmode)). |
 | [`AutoRecoveryRequest`](#autorecoveryrequest) | type | Enables or disables step-loss auto-recovery. |
 | [`BuzzerRequest`](#buzzerrequest) | type | Controls the printer's buzzer alarm mode (silent, alarm, or chirp). |
 | [`DoorOpenCheckRequest`](#dooropencheckrequest) | type | Sets the door-open check mode (BambuStudio `MachineObject::command_set_door_open_check`). |
@@ -174,7 +174,7 @@ struct AirductPayload {
 }
 ```
 
-Redirects internal climate airflows using active damper deflection plates.
+Selects the airduct mode.
 
 #### Fields
 
@@ -184,7 +184,7 @@ Redirects internal climate airflows using active damper deflection plates.
 
 - **`mode_id`**: `i32`
 
-  Damper mode: 0=cooling (exhaust), 1=heating (sealed), 2=laser [REF-MQTT-LIFECYCLE].
+  Airduct mode: 0 cooling, 1 heating, 2 exhaust, 3 full cooling ([`AirductMode`](#airductmode)) [REF-MQTT-LIFECYCLE].
 
 - **`submode`**: `i32`
 
@@ -816,29 +816,38 @@ Turns one camera detector on or off, optionally with its halt sensitivity.
 enum AirductMode {
     Cooling,
     Heating,
-    Laser,
+    Exhaust,
+    FullCooling,
 }
 ```
 
-Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE].
 
-`Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
-`Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
-`Laser` (2): configuration for laser engraving module operation.
+Values and names follow BambuStudio's `AIR_DUCT` enum (`DeviceCore/DevFan.h`), and the
+variant docs quote its descriptions (`Widgets/FanControl.cpp`). The printer lists the modes it
+offers in `device.airduct.modeList`.
 
 #### Variants
 
 - **`Cooling`**
 
-  Closes internal recirculation dampers, routes hot air out through exhaust.
+  "Suitable for printing PLA/PETG/TPU materials and filters the chamber air."
 
 - **`Heating`**
 
-  Seals enclosure, closes exhaust flaps for heat retention.
+  "Suitable for printing ABS/ASA/PC/PA materials and circulates filters the chamber air."
 
-- **`Laser`**
+- **`Exhaust`**
 
-  Laser engraving module configuration.
+  Exhaust mode, which BambuStudio describes only by name.
+  
+  BambuStudio leaves it out of its mode list even when the printer reports it
+  (`DevFan.cpp`, `/*STUDIO-12796*/`), for a reason it does not give. Sendable here, but a
+  consumer offering modes to a user should consider hiding it as BambuStudio does.
+
+- **`FullCooling`**
+
+  "Strong cooling mode is suitable for printing PLA/TPU materials. In this mode, the printouts will be fully cooled."
 
 #### Trait Implementations
 
@@ -880,7 +889,7 @@ Sets the end-of-print air purification mode.
 type AirductRequest = super::Print<AirductPayload>;
 ```
 
-Switches the enclosure airduct damper between cooling, heating, and laser modes.
+Switches the airduct between its modes ([`AirductMode`](#airductmode)).
 
 ### `AutoRecoveryRequest`
 

@@ -120,6 +120,12 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   built on it on this; an `Assumed(true)` printer may still fail the handshake, which is the
   signal to use FTPS instead.
 
+- <span id="capabilities-light-support"></span>`fn light_support(&self, node: LedNode) -> Support` — [`LedNode`](../../types/control/index.md#lednode), [`Support`](../../quirks/index.md#support)
+
+  Whether the printer has the light `node` — see [`ModelQuirks::light_support`](../../quirks/index.md#modelquirks).
+
+  `Assumed(true)` until a full status report has listed the printer's lights.
+
 - <span id="capabilities-prompt-sound-support"></span>`fn prompt_sound_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 
   Prompt sound support — see [`ModelQuirks::prompt_sound_support`](../../quirks/index.md#modelquirks).

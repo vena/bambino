@@ -135,7 +135,7 @@ Climate parts collection nested within `device` parameters.
 
 - **`mode_cur`**: `Option<i32>`
 
-  Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
+  Currently active airduct mode (0 cooling, 1 heating, 2 exhaust, 3 full cooling; see `AirductMode`).
 
 - **`mode_list`**: `Option<Vec<AirductModeListEntry>>`
 
@@ -404,7 +404,7 @@ the intermediate `print.ams` object.
 
 - **`calibrate_remain_flag`**: `Option<bool>`
 
-  Whether AMS-side remaining-filament detection is enabled. Confirmed
+  Whether AMS-side remaining-filament detection is enabled (BambuStudio's "Update remaining capacity", which `ams_user_setting` sets). Confirmed
   independently by `bambu-printer-manager` (`bambucommands.py`, `bambutools.py`)
   and `OpenBambuAPI/local-printer-api.md` (community protocol spec).
 
@@ -524,6 +524,10 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 - **`remain`**: `Option<i32>`
 
   Remaining filament volume percentage (or -1 if uncalculated).
+  
+  Only estimated for a spool whose Bambu RFID tag was read (non-zero `tag_uid`); an
+  untagged spool reports `-1`, and the external spool reports `0`. See
+  `reference/05_materials_ams.md` ("Remaining Filament").
 
 - **`tray_sub_brands`**: `Option<String>`
 
@@ -645,6 +649,10 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
   Remaining filament in percent, or `None` for the firmware's `-1` "not calculated"
   sentinel or any other out-of-range value.
+
+  The AMS estimates it only for a spool whose Bambu RFID tag it read, and only while its
+  `calibrate_remain_flag` setting is on (BambuStudio hides the value otherwise). The
+  external spool's `0` is not an estimate either: BambuStudio never shows one there.
 
 - <span id="amstray-state"></span>`fn state(&self) -> u8`
 
@@ -3769,10 +3777,11 @@ state should inspect the raw `gcode_state` string directly.
 
 - **`Slicing`**
 
-  Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
+  A job is in flight and the printer is processing its G-code (wire: `"SLICING"`).
   
-  Distinct from [`Preparing`](control/index.md#printstatus): nothing is moving yet. It is still a
-  busy state — a job is in flight — so treat it like the other active states when
+  Some firmware reports it briefly between `PREPARE` and `RUNNING` while parsing the
+  G-code (bambuddy, `print_scheduler.py` `_ACTIVE_PRINT_STATES`), so motion may already
+  have started. It is a busy state: treat it like the other active states when
   deciding whether the printer can accept new work.
 
 - **`Running`**

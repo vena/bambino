@@ -62,7 +62,7 @@ Climate parts collection nested within `device` parameters.
 
 - **`mode_cur`**: `Option<i32>`
 
-  Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
+  Currently active airduct mode (0 cooling, 1 heating, 2 exhaust, 3 full cooling; see `AirductMode`).
 
 - **`mode_list`**: `Option<Vec<AirductModeListEntry>>`
 

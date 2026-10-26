@@ -73,6 +73,8 @@ struct QuirkContext<'a> {
     pub xcam_cfg: Option<u32>,
     pub support_flow_calibration: Option<bool>,
     pub cali_version: Option<i32>,
+    pub reported_lights: u8,
+    pub lights_list_complete: bool,
 }
 ```
 
@@ -139,6 +141,17 @@ site.
   `-1` (or below) means the printer's stored PA profiles aren't initialized; BambuStudio
   reads any version above it as "profiles available" (`DevCalib::IsVersionInited`).
 
+- **`reported_lights`**: `u8`
+
+  The `lights_report` nodes the printer has reported, one bit per [`LedNode::ALL`](../types/control/index.md#lednode) index.
+  
+  A union over every frame seen. Set it with [`with_lights`](context/index.md#quirkcontext).
+
+- **`lights_list_complete`**: `bool`
+
+  Whether a full status report has carried `lights_report`, so `reported_lights` is the
+  printer's whole list rather than whichever nodes an incremental frame happened to name.
+
 #### Implementations
 
 - <span id="quirkcontext-empty"></span>`fn empty() -> Self`
@@ -171,6 +184,13 @@ site.
 - <span id="quirkcontext-with-support-flow-calibration"></span>`fn with_support_flow_calibration(self, supported: Option<bool>) -> Self`
 
   Sets `print.support_flow_calibration`.
+
+- <span id="quirkcontext-with-lights"></span>`fn with_lights(self, nodes: &[LedNode], complete: bool) -> Self` — [`LedNode`](../types/control/index.md#lednode)
+
+  Sets the reported `lights_report` nodes, and whether they came from a complete list.
+
+  Pass `complete` only for a full status report; see
+  [`ModelQuirks::light_support`](#modelquirks).
 
 - <span id="quirkcontext-with-cali-version"></span>`fn with_cali_version(self, cali_version: Option<i32>) -> Self`
 
@@ -324,6 +344,23 @@ must adapt to.
 
   Read the state itself with
   `PrinterTelemetry::door_state`.
+
+- <span id="modelquirks-jog-feedrate"></span>`fn jog_feedrate(&self, axis: Axis) -> u32` — [`Axis`](#axis)
+
+  Returns BambuStudio's device-panel jog speed for `axis`, in mm/min [REF-MOTO-GCODE].
+
+  X and Y are 3000, Z is 900, on every model. Source: BambuStudio `StatusPanel.cpp`, the
+  `Ctrl_Axis` calls, which `DevAxis::Ctrl_Axis` (`DeviceCore/DevAxisCtrl.cpp`) sends as
+  `G1 <axis><v> F<speed>`.
+
+- <span id="modelquirks-max-feedrate"></span>`fn max_feedrate(&self, axis: Axis) -> u32` — [`Axis`](#axis)
+
+  Returns the fastest move on `axis` this model accepts, in mm/min [REF-MOTO-GCODE].
+
+  The first element (normal mode; the second is silent mode) of `machine_max_speed_x`, `_y`
+  or `_z` in BambuStudio's `resources/profiles/BBL/machine/*.json`, in mm/s, times 60.
+  `PrinterClient::move_relative` refuses a faster explicit feedrate. The fallback row for an
+  unrecognized model uses the lowest value of every listed model.
 
 - <span id="modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../camera/index.md#cameraprotocol)
 
@@ -625,6 +662,25 @@ must adapt to.
   is to show that option in the Send dialog (`SelectMachine.cpp`). No model rule exists,
   so nothing reported means `Assumed(false)`, always the case on P1 and A1, which send no
   `fun2`.
+
+- <span id="modelquirks-light-support"></span>`fn light_support(&self, node: LedNode, ctx: &QuirkContext<'_>) -> Support` — [`LedNode`](../types/control/index.md#lednode), [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has the light `node`, with its provenance.
+
+  Answered from telemetry, not a per-model table. BambuStudio has no per-model light data
+  (`DevLamp::CtrlSetChamberLight`, `DeviceCore/DevLampCtrl.cpp`, always sends both
+  `chamber_light` and `chamber_light2` and never `work_light`), and ha-bambulab's model
+  table (`Features.CHAMBER_LIGHT_2`, `pybambu/models.py`) conflicts with its own X2D
+  capture, whose `lights_report` lists only `chamber_light` and `work_light`
+  (`pybambu/mock_data/MOCK-X2D.json`).
+
+  [`Reported(true)`](#support) once any frame's `lights_report` has named the node;
+  [`Reported(false)`](#support) once a full status report has carried a list
+  without it, since an incremental frame may name only the node that changed and never
+  settles absence. Otherwise [`Assumed(true)`](#support): nothing settles it, so
+  the command is not refused.
+
+  `heatbed_light` is not modelled: [`LedNode`](../types/control/index.md#lednode) has no variant for it.
 
 - <span id="modelquirks-k-profile-selection-support"></span>`fn k_profile_selection_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
 

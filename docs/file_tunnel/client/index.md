@@ -58,9 +58,9 @@ The same operations as the client, without the timer argument. Borrowed from the
 
   See [`FileTunnelClient::delete_file`](#filetunnelclient).
 
-- <span id="filetunnel-upload"></span>`async fn upload(&mut self, storage: &str, name: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+- <span id="filetunnel-upload"></span>`async fn upload(&mut self, storage: &str, name: &str, source: impl UploadSource) -> Result<(), Error>` — [`UploadSource`](../../upload/index.md#uploadsource), [`Error`](../../error/index.md#error)
 
-  See [`FileTunnelClient::upload`](#filetunnelclient).
+  See [`upload`](../../upload/index.md).
 
 - <span id="filetunnel-is-poisoned"></span>`fn is_poisoned(&self) -> bool`
 
@@ -181,9 +181,9 @@ header is refused above [`DEFAULT_MAX_FRAME_PAYLOAD`](../index.md#default-max-fr
   `PrinterFileSystem::DeleteFilesContinue` does. Don't delete before an upload of the same
   name: an upload overwrites, and an extra request first can race the upload's reply.
 
-- <span id="filetunnelclient-upload"></span>`async fn upload<T: TimerProvider>(&mut self, timer: &T, storage: &str, name: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+- <span id="filetunnelclient-upload"></span>`async fn upload<T: TimerProvider>(&mut self, timer: &T, storage: &str, name: &str, source: impl UploadSource) -> Result<(), Error>` — [`UploadSource`](../../upload/index.md#uploadsource), [`Error`](../../error/index.md#error)
 
-  Uploads `data` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
+  Uploads `source` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
 
   `storage` is a label from [`media_ability`](#filetunnelclient), such as `emmc`; there is
   no default. To print the file afterwards from internal storage, start the job with

@@ -157,9 +157,9 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   this lists the parent directory and succeeds only if the target is no longer there
   (GitHub issue #392).
 
-- <span id="ftpsclient-upload-file"></span>`async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+- <span id="ftpsclient-upload-from"></span>`async fn upload_from(&mut self, remote_path: &str, source: impl UploadSource) -> Result<(), Error>` — [`UploadSource`](../../upload/index.md#uploadsource), [`Error`](../../error/index.md#error)
 
-  Uploads a binary payload directly to MicroSD card storage.
+  Uploads a source's bytes to MicroSD card storage, reading it a chunk at a time.
 
   **Flush and Close Race Mitigation:**
   1. Send a TLS `close_notify` on the passive data channel once the payload is written,
@@ -173,9 +173,23 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
      model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
      [`Error::DiskWriteFailure`](../../error/index.md#error); a final reply other than `226`/`426` is [`Error::FtpReply`](../../error/index.md#error).
 
-  A payload larger than [`MAX_TRANSFER_BYTES`](../index.md#max-transfer-bytes) is refused
+  A source larger than [`MAX_TRANSFER_BYTES`](../index.md#max-transfer-bytes) is refused
   with [`Error::InvalidArgument`](../../error/index.md#error) before anything is sent: `download_file` would refuse to
   read it back.
+
+  **A source error ends this session.** One that fails, returns no bytes before its
+  [`len`](../../upload/index.md#uploadsource), or returns more than asked for fails the upload mid-transfer,
+  with the data channel half written and the final reply still owed. The client is poisoned,
+  and `PrinterClient::ftps()` reconnects.
+
+  The source is read into one heap buffer of `FTPS_UPLOAD_CHUNK_SIZE` bytes (64 KiB).
+
+- <span id="ftpsclient-upload-file"></span>`async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+
+  Uploads a binary payload directly to MicroSD card storage.
+
+  A thin wrapper over [`upload_from`](#ftpsclient) with the slice as the source; see
+  it for the flush, close and `SIZE` behaviour and the transfer limit.
 
 - <span id="ftpsclient-download-file"></span>`async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error>` — [`Error`](../../error/index.md#error)
 

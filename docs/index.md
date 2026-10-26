@@ -104,6 +104,7 @@ async fn example() -> Result<(), bambino::Error> {
   - [`mqtt`](mqtt/index.md)
   - [`quirks`](quirks/index.md)
   - [`types`](#types)
+  - [`upload`](upload/index.md)
 - [Types](#types)
 - [Functions](#functions)
 
@@ -125,6 +126,7 @@ async fn example() -> Result<(), bambino::Error> {
 | [`mqtt`](mqtt/index.md) | mod | # MQTT Client & Command Serialization |
 | [`quirks`](quirks/index.md) | mod | # Model-Specific Quirks |
 | [`types`](#types) | mod | # Types & Telemetry Schemas |
+| [`upload`](upload/index.md) | mod | The caller-supplied byte source an upload reads its file from, a chunk at a time. |
 
 ## Modules
 
@@ -142,6 +144,7 @@ async fn example() -> Result<(), bambino::Error> {
 - [`mqtt`](mqtt/index.md) — # MQTT Client & Command Serialization
 - [`quirks`](quirks/index.md) — # Model-Specific Quirks
 - [`types`](types/index.md#types) — # Types & Telemetry Schemas
+- [`upload`](upload/index.md) — The caller-supplied byte source an upload reads its file from, a chunk at a time.
 
 
 ---

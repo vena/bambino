@@ -783,10 +783,11 @@ state should inspect the raw `gcode_state` string directly.
 
 - **`Slicing`**
 
-  Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
+  A job is in flight and the printer is processing its G-code (wire: `"SLICING"`).
   
-  Distinct from [`Preparing`](#printstatus): nothing is moving yet. It is still a
-  busy state — a job is in flight — so treat it like the other active states when
+  Some firmware reports it briefly between `PREPARE` and `RUNNING` while parsing the
+  G-code (bambuddy, `print_scheduler.py` `_ACTIVE_PRINT_STATES`), so motion may already
+  have started. It is a busy state: treat it like the other active states when
   deciding whether the printer can accept new work.
 
 - **`Running`**

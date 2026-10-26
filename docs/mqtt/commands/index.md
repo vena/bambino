@@ -238,6 +238,62 @@ empty material with a 0–0 °C nozzle window to the tray, and the printer acks 
 
 - <span id="filamentspec-partialeq-eq"></span>`fn eq(&self, other: &FilamentSpec<'a>) -> bool` — [`FilamentSpec`](ams/index.md#filamentspec)
 
+### `TrayFilamentDetails<'a>`
+
+```rust
+struct TrayFilamentDetails<'a> {
+    pub color: Option<&'a str>,
+    pub sub_brands: Option<&'a str>,
+    pub setting_id: Option<&'a str>,
+}
+```
+
+The optional parts of an `ams_filament_setting`, each applied only when `Some`.
+
+Passed to `PrinterClient::set_tray_filament` beside the required [`FilamentSpec`](ams/index.md#filamentspec). Each field
+maps to the [`AmsFilamentSettingRequest`](ams/index.md#amsfilamentsettingrequest) builder of the same meaning:
+
+* `color` is [`with_color`](ams/index.md#amsfilamentsettingrequest), so it is normalized and an
+  invalid value is an error.
+* `sub_brands` is [`with_sub_brands`](ams/index.md#amsfilamentsettingrequest).
+* `setting_id` is [`with_setting_id`](ams/index.md#amsfilamentsettingrequest).
+
+#### Fields
+
+- **`color`**: `Option<&'a str>`
+
+  Tray colour as `RRGGBB` or `RRGGBBAA` hex, optionally `#`-prefixed.
+
+- **`sub_brands`**: `Option<&'a str>`
+
+  Sub-brand label; the default is `"{material} Basic"`.
+
+- **`setting_id`**: `Option<&'a str>`
+
+  Long-form preset identifier, e.g. `"GFSL05_07"` or a `"PF"`-prefixed id.
+
+#### Trait Implementations
+
+##### `impl Clone for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-clone"></span>`fn clone(&self) -> TrayFilamentDetails<'a>` — [`TrayFilamentDetails`](ams/index.md#trayfilamentdetails)
+
+##### `impl Copy for TrayFilamentDetails<'a>`
+
+##### `impl Debug for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-default"></span>`fn default() -> TrayFilamentDetails<'a>` — [`TrayFilamentDetails`](ams/index.md#trayfilamentdetails)
+
+##### `impl Eq for TrayFilamentDetails<'a>`
+
+##### `impl PartialEq for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-partialeq-eq"></span>`fn eq(&self, other: &TrayFilamentDetails<'a>) -> bool` — [`TrayFilamentDetails`](ams/index.md#trayfilamentdetails)
+
 ### `FlashTiming`
 
 ```rust
@@ -441,6 +497,13 @@ defaults for calibration flags.
   Builds a job config with these defaults: bed leveling and flow calibration on,
   **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
   disabled, and the model's own nozzle-offset-calibration default.
+
+  **AMS disabled means the external spool.** A job sliced for AMS slots and started with
+  this default prints from the external spool. No sender leaves the mapping out:
+  BambuStudio derives one from the file's filaments and the loaded trays before every
+  send, and bambuddy computes one when a job has none. Pass the mapping through
+  [`with_ams`](print_job/index.md#printjobconfig) or [`with_ams_mapping2`](print_job/index.md#printjobconfig). See
+  `reference/05_materials_ams.md`, "Choosing a Mapping When the User Is Not Asked".
 
 - <span id="printjobconfig-from-internal-storage"></span>`fn from_internal_storage(self) -> Self`
 
@@ -1355,29 +1418,38 @@ A print-lifecycle command that carries nothing but its name and `sequence_id` [R
 enum AirductMode {
     Cooling,
     Heating,
-    Laser,
+    Exhaust,
+    FullCooling,
 }
 ```
 
-Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE].
 
-`Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
-`Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
-`Laser` (2): configuration for laser engraving module operation.
+Values and names follow BambuStudio's `AIR_DUCT` enum (`DeviceCore/DevFan.h`), and the
+variant docs quote its descriptions (`Widgets/FanControl.cpp`). The printer lists the modes it
+offers in `device.airduct.modeList`.
 
 #### Variants
 
 - **`Cooling`**
 
-  Closes internal recirculation dampers, routes hot air out through exhaust.
+  "Suitable for printing PLA/PETG/TPU materials and filters the chamber air."
 
 - **`Heating`**
 
-  Seals enclosure, closes exhaust flaps for heat retention.
+  "Suitable for printing ABS/ASA/PC/PA materials and circulates filters the chamber air."
 
-- **`Laser`**
+- **`Exhaust`**
 
-  Laser engraving module configuration.
+  Exhaust mode, which BambuStudio describes only by name.
+  
+  BambuStudio leaves it out of its mode list even when the printer reports it
+  (`DevFan.cpp`, `/*STUDIO-12796*/`), for a reason it does not give. Sendable here, but a
+  consumer offering modes to a user should consider hiding it as BambuStudio does.
+
+- **`FullCooling`**
+
+  "Strong cooling mode is suitable for printing PLA/TPU materials. In this mode, the printouts will be fully cooled."
 
 #### Trait Implementations
 
@@ -1718,7 +1790,7 @@ Sets the end-of-print air purification mode.
 type AirductRequest = super::Print<AirductPayload>;
 ```
 
-Switches the enclosure airduct damper between cooling, heating, and laser modes.
+Switches the airduct between its modes ([`AirductMode`](hardware/index.md#airductmode)).
 
 ### `AutoRecoveryRequest`
 

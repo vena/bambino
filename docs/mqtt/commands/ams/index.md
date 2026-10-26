@@ -17,6 +17,7 @@ AMS-related MQTT command payloads (filament change, drying, RFID scan, settings)
   - [`ChangeTemps`](#changetemps)
   - [`DryingParams`](#dryingparams)
   - [`FilamentSpec`](#filamentspec)
+  - [`TrayFilamentDetails`](#trayfilamentdetails)
   - [`AmsControlOp`](#amscontrolop)
   - [`AmsChangeFilamentRequest`](#amschangefilamentrequest)
   - [`AmsControlRequest`](#amscontrolrequest)
@@ -36,6 +37,7 @@ AMS-related MQTT command payloads (filament change, drying, RFID scan, settings)
 | [`ChangeTemps`](#changetemps) | struct | The nozzle temperatures an `ams_change_filament` carries, °C; `-1` lets the firmware decide. |
 | [`DryingParams`](#dryingparams) | struct | Everything a drying-cycle start carries besides the unit and the mode. |
 | [`FilamentSpec`](#filamentspec) | struct | The description an `ams_filament_setting` can't do without. |
+| [`TrayFilamentDetails`](#trayfilamentdetails) | struct | The optional parts of an `ams_filament_setting`, each applied only when `Some`. |
 | [`AmsControlOp`](#amscontrolop) | enum | An `ams_control` operation on the AMS feed mechanism. |
 | [`AmsChangeFilamentRequest`](#amschangefilamentrequest) | type | Loads or unloads filament from an AMS slot or external spool to the toolhead. |
 | [`AmsControlRequest`](#amscontrolrequest) | type | Sends a resume, pause, or reset command to the AMS feed mechanism. |
@@ -581,6 +583,62 @@ empty material with a 0–0 °C nozzle window to the tray, and the printer acks 
 ##### `impl PartialEq for FilamentSpec<'a>`
 
 - <span id="filamentspec-partialeq-eq"></span>`fn eq(&self, other: &FilamentSpec<'a>) -> bool` — [`FilamentSpec`](#filamentspec)
+
+### `TrayFilamentDetails<'a>`
+
+```rust
+struct TrayFilamentDetails<'a> {
+    pub color: Option<&'a str>,
+    pub sub_brands: Option<&'a str>,
+    pub setting_id: Option<&'a str>,
+}
+```
+
+The optional parts of an `ams_filament_setting`, each applied only when `Some`.
+
+Passed to `PrinterClient::set_tray_filament` beside the required [`FilamentSpec`](#filamentspec). Each field
+maps to the [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest) builder of the same meaning:
+
+* `color` is [`with_color`](#amsfilamentsettingrequest), so it is normalized and an
+  invalid value is an error.
+* `sub_brands` is [`with_sub_brands`](#amsfilamentsettingrequest).
+* `setting_id` is [`with_setting_id`](#amsfilamentsettingrequest).
+
+#### Fields
+
+- **`color`**: `Option<&'a str>`
+
+  Tray colour as `RRGGBB` or `RRGGBBAA` hex, optionally `#`-prefixed.
+
+- **`sub_brands`**: `Option<&'a str>`
+
+  Sub-brand label; the default is `"{material} Basic"`.
+
+- **`setting_id`**: `Option<&'a str>`
+
+  Long-form preset identifier, e.g. `"GFSL05_07"` or a `"PF"`-prefixed id.
+
+#### Trait Implementations
+
+##### `impl Clone for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-clone"></span>`fn clone(&self) -> TrayFilamentDetails<'a>` — [`TrayFilamentDetails`](#trayfilamentdetails)
+
+##### `impl Copy for TrayFilamentDetails<'a>`
+
+##### `impl Debug for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-default"></span>`fn default() -> TrayFilamentDetails<'a>` — [`TrayFilamentDetails`](#trayfilamentdetails)
+
+##### `impl Eq for TrayFilamentDetails<'a>`
+
+##### `impl PartialEq for TrayFilamentDetails<'a>`
+
+- <span id="trayfilamentdetails-partialeq-eq"></span>`fn eq(&self, other: &TrayFilamentDetails<'a>) -> bool` — [`TrayFilamentDetails`](#trayfilamentdetails)
 
 ### `AmsControlOp`
 
