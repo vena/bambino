@@ -12,6 +12,7 @@ use crate::diagnostics::{
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::MqttMessage;
+use crate::quirks::context::light_bit;
 use crate::types::control::FanTarget;
 use crate::types::telemetry::merge::{keep_new, merge_keyed, merge_opt};
 use crate::types::telemetry::{
@@ -124,6 +125,13 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_gcode_file: Option<String>,
     pub(crate) last_plate_idx: Option<u32>,
     pub(crate) last_job_start: Option<super::job::JobStart>,
+    // Every `lights_report` node seen in any frame, as a bit per `LedNode::ALL` index (see
+    // `light_bit`). A light never disappears, so this is a union and survives reconnects.
+    pub(crate) reported_lights: u8,
+    // Whether a full status report (`FULL_REPORT_MIN_KEYS`) has carried `lights_report`. An
+    // incremental frame may list only the node that changed, so only a full one makes the set
+    // above complete.
+    pub(crate) lights_list_complete: bool,
 }
 
 impl<
@@ -359,6 +367,22 @@ where
                     self.core.cache.last_settings_home_flag = Some(flag);
                     self.core.cache.last_settings_home_flag_generation =
                         Some(self.core.connection_generation);
+                }
+                if let Some(lights) = report
+                    .print
+                    .as_ref()
+                    .and_then(|print| print.lights_report.as_ref())
+                {
+                    for node in lights
+                        .iter()
+                        .filter_map(crate::types::telemetry::LightReport::led_node)
+                    {
+                        self.core.cache.reported_lights |= light_bit(node);
+                    }
+                    if print_key_count(&msg.payload).is_some_and(|keys| keys > FULL_REPORT_MIN_KEYS)
+                    {
+                        self.core.cache.lights_list_complete = true;
+                    }
                 }
                 self.update_telemetry_cache(&report);
                 TelemetryEvent::Report(Box::new(report), msg)

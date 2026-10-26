@@ -1807,3 +1807,92 @@ async fn test_lifecycle_commands_are_not_state_gated() {
 
     broker_task.await.expect("Broker task panicked");
 }
+
+/// A `print` object past the full-report key threshold, listing the given light nodes.
+fn full_report_with_lights(nodes: &[&str]) -> Vec<u8> {
+    let lights: Vec<String> = nodes
+        .iter()
+        .map(|node| format!(r#"{{"node":"{node}","mode":"on"}}"#))
+        .collect();
+    let filler: Vec<String> = (0..40).map(|i| format!(r#""filler_{i}":{i}"#)).collect();
+    format!(
+        r#"{{"print":{{{},"lights_report":[{}]}}}}"#,
+        filler.join(","),
+        lights.join(",")
+    )
+    .into_bytes()
+}
+
+#[tokio::test]
+async fn test_set_led_refuses_a_node_missing_from_a_full_lights_report() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(
+                    &mut server_stream,
+                    &full_report_with_lights(&["chamber_light", "work_light"]),
+                )
+                .await;
+            // Only the allowed node's command may be published; the refused one sent nothing.
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["system"]["led_node"], "work_light");
+        })
+        .await;
+
+    // Before any report: allowed in principle.
+    assert!(
+        client
+            .capabilities()
+            .light_support(bambino::client::LedNode::Chamber2)
+            .is_supported()
+    );
+    client.poll_telemetry().await.expect("full report");
+
+    let refused = client
+        .set_led(bambino::client::LedNode::Chamber2, true)
+        .await;
+    assert!(matches!(
+        refused,
+        Err(bambino::error::Error::ModelMismatch(_))
+    ));
+    client
+        .set_led(bambino::client::LedNode::Work, true)
+        .await
+        .expect("a listed node is allowed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_set_led_allowed_before_any_report_and_after_an_incremental_one() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::X1C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["system"]["led_node"], "chamber_light2");
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"lights_report":[{"node":"chamber_light","mode":"on"}]}}"#,
+                )
+                .await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["system"]["led_node"], "chamber_light2");
+        })
+        .await;
+
+    client
+        .set_led(bambino::client::LedNode::Chamber2, true)
+        .await
+        .expect("allowed before any report");
+    client.poll_telemetry().await.expect("incremental report");
+    client
+        .set_led(bambino::client::LedNode::Chamber2, true)
+        .await
+        .expect("an incremental frame never settles absence");
+
+    broker_task.await.expect("Broker task panicked");
+}

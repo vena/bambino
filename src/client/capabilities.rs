@@ -24,7 +24,7 @@
 //! question rather than storing it.
 
 use crate::quirks::{ModelQuirks, QuirkContext, Support};
-use crate::types::control::XcamModule;
+use crate::types::control::{LedNode, XcamModule};
 
 /// Capability answers for one printer, with its cached telemetry already supplied.
 ///
@@ -126,6 +126,14 @@ impl<'a> Capabilities<'a> {
     #[must_use]
     pub fn file_tunnel_support(&self) -> Support {
         self.quirks.file_tunnel_support(&self.context)
+    }
+
+    /// Whether the printer has the light `node` — see [`ModelQuirks::light_support`].
+    ///
+    /// `Assumed(true)` until a full status report has listed the printer's lights.
+    #[must_use]
+    pub fn light_support(&self, node: LedNode) -> Support {
+        self.quirks.light_support(node, &self.context)
     }
 
     /// Prompt sound support — see [`ModelQuirks::prompt_sound_support`].

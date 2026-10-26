@@ -24,7 +24,7 @@ use alloc::string::String;
 use crate::camera::CameraProtocol;
 use crate::error::Error;
 use crate::models::PrinterModel;
-use crate::types::control::{CalibrationOption, XcamModule};
+use crate::types::control::{CalibrationOption, LedNode, XcamModule};
 use crate::types::telemetry::bits;
 
 /// Reads the printer's own remote-dry answer out of a [`QuirkContext`]'s `fun2` string.
@@ -993,6 +993,33 @@ impl ModelQuirks {
         .resolve(ctx, Support::Assumed(false))
     }
 
+    /// Returns whether the printer has the light `node`, with its provenance.
+    ///
+    /// Answered from telemetry, not a per-model table. BambuStudio has no per-model light data
+    /// (`DevLamp::CtrlSetChamberLight`, `DeviceCore/DevLampCtrl.cpp`, always sends both
+    /// `chamber_light` and `chamber_light2` and never `work_light`), and ha-bambulab's model
+    /// table (`Features.CHAMBER_LIGHT_2`, `pybambu/models.py`) conflicts with its own X2D
+    /// capture, whose `lights_report` lists only `chamber_light` and `work_light`
+    /// (`pybambu/mock_data/MOCK-X2D.json`).
+    ///
+    /// [`Reported(true)`](Support::Reported) once any frame's `lights_report` has named the node;
+    /// [`Reported(false)`](Support::Reported) once a full status report has carried a list
+    /// without it, since an incremental frame may name only the node that changed and never
+    /// settles absence. Otherwise [`Assumed(true)`](Support::Assumed): nothing settles it, so
+    /// the command is not refused.
+    ///
+    /// `heatbed_light` is not modelled: [`LedNode`] has no variant for it.
+    #[must_use]
+    pub fn light_support(&self, node: LedNode, ctx: &QuirkContext) -> Support {
+        if ctx.reported_lights & context::light_bit(node) != 0 {
+            Support::Reported(true)
+        } else if ctx.lights_list_complete {
+            Support::Reported(false)
+        } else {
+            Support::Assumed(true)
+        }
+    }
+
     /// Returns whether a loaded filament's PA (K-value) can be set by choosing a stored PA profile, with its provenance.
     ///
     /// Reported by `print.cali_version`: BambuStudio's AMS slot editor shows its PA profile
@@ -1632,6 +1659,32 @@ mod tests {
                 "cali_version {version}"
             );
         }
+    }
+
+    #[test]
+    fn test_light_support() {
+        let quirks = PrinterModel::X1C.quirks();
+        let node = LedNode::Chamber2;
+        // Nothing seen: not refused, but not settled.
+        assert_eq!(
+            quirks.light_support(node, &QuirkContext::empty()),
+            Support::Assumed(true)
+        );
+        // Seen in any frame: settled present, complete or not.
+        for complete in [false, true] {
+            let ctx = QuirkContext::empty().with_lights(&[LedNode::Chamber, node], complete);
+            assert_eq!(quirks.light_support(node, &ctx), Support::Reported(true));
+        }
+        // Absent from a complete list: settled absent; the listed node is still present.
+        let ctx = QuirkContext::empty().with_lights(&[LedNode::Chamber, LedNode::Work], true);
+        assert_eq!(quirks.light_support(node, &ctx), Support::Reported(false));
+        assert_eq!(
+            quirks.light_support(LedNode::Work, &ctx),
+            Support::Reported(true)
+        );
+        // An incremental list naming other nodes never denies.
+        let ctx = QuirkContext::empty().with_lights(&[LedNode::Chamber], false);
+        assert_eq!(quirks.light_support(node, &ctx), Support::Assumed(true));
     }
 
     #[test]

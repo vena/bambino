@@ -80,7 +80,17 @@ where
     }
 
     /// Turns an LED fixture on or off [REF-MQTT-LIFECYCLE].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when the printer's own `lights_report` shows it lacks `node`
+    /// (see [`Capabilities::light_support`](crate::client::Capabilities::light_support)).
+    /// Before a full status report has listed the printer's lights, every node is allowed.
     pub async fn set_led(&mut self, node: LedNode, turn_on: bool) -> Result<CommandHandle, Error> {
+        require(
+            self.capabilities().light_support(node).is_supported(),
+            || format!("{node} light not available on this printer"),
+        )?;
         self.dispatch(|seq| crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq))
             .await
     }

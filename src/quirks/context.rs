@@ -27,6 +27,17 @@
 //!
 //! A field is added when a quirk reads it, not ahead of need.
 
+use crate::types::control::LedNode;
+
+/// The `reported_lights` bit for `node`: its index in [`LedNode::ALL`].
+pub(crate) fn light_bit(node: LedNode) -> u8 {
+    let index = LedNode::ALL
+        .iter()
+        .position(|&candidate| candidate == node)
+        .unwrap_or(0);
+    1 << index
+}
+
 /// Wire-derived inputs a quirk may consult, all optional.
 ///
 /// See the [module docs](self) for why these are passed in rather than composed at the call
@@ -81,6 +92,15 @@ pub struct QuirkContext<'a> {
     /// `-1` (or below) means the printer's stored PA profiles aren't initialized; BambuStudio
     /// reads any version above it as "profiles available" (`DevCalib::IsVersionInited`).
     pub cali_version: Option<i32>,
+
+    /// The `lights_report` nodes the printer has reported, one bit per [`LedNode::ALL`] index.
+    ///
+    /// A union over every frame seen. Set it with [`with_lights`](Self::with_lights).
+    pub reported_lights: u8,
+
+    /// Whether a full status report has carried `lights_report`, so `reported_lights` is the
+    /// printer's whole list rather than whichever nodes an incremental frame happened to name.
+    pub lights_list_complete: bool,
 }
 
 impl<'a> QuirkContext<'a> {
@@ -132,6 +152,25 @@ impl<'a> QuirkContext<'a> {
     #[must_use]
     pub fn with_support_flow_calibration(mut self, supported: Option<bool>) -> Self {
         self.support_flow_calibration = supported;
+        self
+    }
+
+    /// Sets the reported `lights_report` nodes, and whether they came from a complete list.
+    ///
+    /// Pass `complete` only for a full status report; see
+    /// [`ModelQuirks::light_support`](super::ModelQuirks::light_support).
+    #[must_use]
+    pub fn with_lights(mut self, nodes: &[LedNode], complete: bool) -> Self {
+        self.reported_lights = nodes.iter().fold(0, |mask, &node| mask | light_bit(node));
+        self.lights_list_complete = complete;
+        self
+    }
+
+    /// Sets the reported-light mask directly, as the client cache stores it.
+    #[must_use]
+    pub(crate) fn with_reported_lights(mut self, mask: u8, complete: bool) -> Self {
+        self.reported_lights = mask;
+        self.lights_list_complete = complete;
         self
     }
 
