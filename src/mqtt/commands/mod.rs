@@ -737,9 +737,13 @@ mod tests {
         let json_heat = serde_json::to_string(&req_heat).unwrap();
         assert!(json_heat.contains(r#""modeId":1"#));
 
-        let req_laser = AirductRequest::new(AirductMode::Laser, 10009);
-        let json_laser = serde_json::to_string(&req_laser).unwrap();
-        assert!(json_laser.contains(r#""modeId":2"#));
+        let req_exhaust = AirductRequest::new(AirductMode::Exhaust, 10009);
+        let json_exhaust = serde_json::to_string(&req_exhaust).unwrap();
+        assert!(json_exhaust.contains(r#""modeId":2"#));
+
+        let req_full = AirductRequest::new(AirductMode::FullCooling, 10010);
+        let json_full = serde_json::to_string(&req_full).unwrap();
+        assert!(json_full.contains(r#""modeId":3"#));
     }
 
     #[test]

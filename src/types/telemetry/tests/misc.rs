@@ -649,7 +649,7 @@ fn test_airduct_mode_telemetry() {
 }
 
 #[test]
-fn test_airduct_mode_telemetry_with_laser() {
+fn test_airduct_mode_telemetry_with_exhaust() {
     let json_data = r#"{
             "device": {
                 "airduct": {

@@ -672,7 +672,7 @@ Controls the target routing of the internal air circulation flaps.
   }
 }
 ```
-*   `modeId`: `0` = cooling mode (recirculation dampers close, hot air routes through exhaust), `1` = heating mode (exhaust flaps close, enclosure seals for heat retention), `2` = laser mode (airflow configured for laser engraving module operation).
+*   `modeId`: `0` = Cooling, `1` = Heating, `2` = Exhaust, `3` = Full Cooling, per BambuStudio's `AIR_DUCT` enum (`DeviceCore/DevFan.h`). BambuStudio describes Cooling as "suitable for printing PLA/PETG/TPU materials and filters the chamber air", Heating as "suitable for printing ABS/ASA/PC/PA materials and circulates filters the chamber air", and Full Cooling as "Strong cooling mode is suitable for printing PLA/TPU materials. In this mode, the printouts will be fully cooled." (`Widgets/FanControl.cpp`). It names Exhaust without a description and leaves it out of its mode list (`DevFan.cpp`, `/*STUDIO-12796*/`). ha-bambulab's `2: "laser"` (`AIRDUCT_MODES`, `pybambu/const.py`) has no other source: no BambuStudio printer definition, including the laser-capable H2D's, names an airduct mode for laser work.
 
 #### Sound & Alerting Commands
 

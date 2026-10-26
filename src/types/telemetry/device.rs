@@ -617,7 +617,7 @@ pub struct AirductCollection {
     #[serde(default)]
     pub parts: Option<Vec<AirductPart>>,
 
-    /// Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
+    /// Currently active airduct mode (0 cooling, 1 heating, 2 exhaust, 3 full cooling; see `AirductMode`).
     #[serde(rename = "modeCur")]
     pub mode_cur: Option<i32>,
 

@@ -89,28 +89,34 @@ impl LedCtrlRequest {
     }
 }
 
-/// Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+/// Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE].
 ///
-/// `Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
-/// `Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
-/// `Laser` (2): configuration for laser engraving module operation.
+/// Values and names follow BambuStudio's `AIR_DUCT` enum (`DeviceCore/DevFan.h`), and the
+/// variant docs quote its descriptions (`Widgets/FanControl.cpp`). The printer lists the modes it
+/// offers in `device.airduct.modeList`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum AirductMode {
-    /// Closes internal recirculation dampers, routes hot air out through exhaust.
+    /// "Suitable for printing PLA/PETG/TPU materials and filters the chamber air."
     Cooling = 0,
-    /// Seals enclosure, closes exhaust flaps for heat retention.
+    /// "Suitable for printing ABS/ASA/PC/PA materials and circulates filters the chamber air."
     Heating = 1,
-    /// Laser engraving module configuration.
-    Laser = 2,
+    /// Exhaust mode, which BambuStudio describes only by name.
+    ///
+    /// BambuStudio leaves it out of its mode list even when the printer reports it
+    /// (`DevFan.cpp`, `/*STUDIO-12796*/`), for a reason it does not give. Sendable here, but a
+    /// consumer offering modes to a user should consider hiding it as BambuStudio does.
+    Exhaust = 2,
+    /// "Strong cooling mode is suitable for printing PLA/TPU materials. In this mode, the printouts will be fully cooled."
+    FullCooling = 3,
 }
 
-/// Redirects internal climate airflows using active damper deflection plates.
+/// Selects the airduct mode.
 #[derive(Debug, Clone, Serialize)]
 pub struct AirductPayload {
     /// Wire command name, always `"set_airduct"`.
     pub command: &'static str,
-    /// Damper mode: 0=cooling (exhaust), 1=heating (sealed), 2=laser [REF-MQTT-LIFECYCLE].
+    /// Airduct mode: 0 cooling, 1 heating, 2 exhaust, 3 full cooling ([`AirductMode`]) [REF-MQTT-LIFECYCLE].
     #[serde(rename = "modeId")]
     pub mode_id: i32,
     /// Damper submode; always `-1` (unused) — [`AirductRequest::new`] never sets it otherwise.
@@ -119,7 +125,7 @@ pub struct AirductPayload {
     pub sequence_id: ClampedTaskId,
 }
 
-/// Switches the enclosure airduct damper between cooling, heating, and laser modes.
+/// Switches the airduct between its modes ([`AirductMode`]).
 pub type AirductRequest = super::Print<AirductPayload>;
 
 impl AirductRequest {
