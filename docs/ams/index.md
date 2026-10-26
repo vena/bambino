@@ -16,11 +16,13 @@ cleanup. Supports standard AMS units, AMS-HT dry chambers, and virtual external 
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`auto_map`](auto_map/index.md) | mod | # Deriving an AMS mapping from a plate's filaments and the loaded trays |
 | [`mapping`](mapping/index.md) | mod | # AMS Slicer Mapping & Filament Change Builders |
 | [`parser`](parser/index.md) | mod | # AMS Telemetry & Bitmask Parser |
 
 ## Modules
 
+- [`auto_map`](auto_map/index.md) — # Deriving an AMS mapping from a plate's filaments and the loaded trays
 - [`mapping`](mapping/index.md) — # AMS Slicer Mapping & Filament Change Builders
 - [`parser`](parser/index.md) — # AMS Telemetry & Bitmask Parser
 
@@ -28,6 +30,103 @@ cleanup. Supports standard AMS units, AMS-HT dry chambers, and virtual external 
 ---
 
 ## Types
+
+### `AmsMappingResult`
+
+```rust
+struct AmsMappingResult {
+    pub mapping2: Vec<super::mapping::AmsMapping2Entry>,
+    pub matches: Vec<FilamentMatch>,
+}
+```
+
+The mapping [`derive_ams_mapping`](auto_map/index.md#derive-ams-mapping) found and what each filament matched.
+
+#### Fields
+
+- **`mapping2`**: `Vec<super::mapping::AmsMapping2Entry>`
+
+  The `ams_mapping2` array: one entry per project filament index up to the highest the
+  plate uses, [`AmsMapping2Entry::UNMAPPED`](mapping/index.md#amsmapping2entry) for an index the plate doesn't use and for a
+  filament nothing matched. Pass it to
+  [`PrintJobConfig::with_ams_mapping2`](../mqtt/index.md).
+
+- **`matches`**: `Vec<FilamentMatch>`
+
+  One record per filament given, in the order given.
+
+#### Implementations
+
+- <span id="amsmappingresult-unmatched"></span>`fn unmatched(&self) -> impl Iterator<Item = &FilamentMatch>` — [`FilamentMatch`](auto_map/index.md#filamentmatch)
+
+  The filaments nothing loaded matched.
+
+  A job started with one of these in `mapping2` fails with an AMS mapping error. Report it,
+  ask the user for a mapping, or stop: the crate does not choose.
+
+- <span id="amsmappingresult-is-complete"></span>`fn is_complete(&self) -> bool`
+
+  Whether every filament matched a tray.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsMappingResult`
+
+- <span id="amsmappingresult-clone"></span>`fn clone(&self) -> AmsMappingResult` — [`AmsMappingResult`](auto_map/index.md#amsmappingresult)
+
+##### `impl Debug for AmsMappingResult`
+
+- <span id="amsmappingresult-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl PartialEq for AmsMappingResult`
+
+- <span id="amsmappingresult-partialeq-eq"></span>`fn eq(&self, other: &AmsMappingResult) -> bool` — [`AmsMappingResult`](auto_map/index.md#amsmappingresult)
+
+### `FilamentMatch`
+
+```rust
+struct FilamentMatch {
+    pub filament_id: u32,
+    pub source: Option<super::mapping::MaterialSource>,
+    pub distance: Option<f32>,
+}
+```
+
+Where one filament landed.
+
+#### Fields
+
+- **`filament_id`**: `u32`
+
+  The project filament index, 1-based, as [`PlateFilament::id`](../ftps/project/slice_info/index.md#platefilament).
+
+- **`source`**: `Option<super::mapping::MaterialSource>`
+
+  The tray it matched, or `None` when nothing loaded matched.
+
+- **`distance`**: `Option<f32>`
+
+  BambuStudio's distance for the pair, `None` when unmatched.
+  
+  Under 1000 is a preset match and the colour distance; 10000 to 11000 a class match plus
+  colour; 20000 and above a same-material tray of another class. Read it to decide whether
+  a match is close enough to print.
+
+#### Trait Implementations
+
+##### `impl Clone for FilamentMatch`
+
+- <span id="filamentmatch-clone"></span>`fn clone(&self) -> FilamentMatch` — [`FilamentMatch`](auto_map/index.md#filamentmatch)
+
+##### `impl Copy for FilamentMatch`
+
+##### `impl Debug for FilamentMatch`
+
+- <span id="filamentmatch-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl PartialEq for FilamentMatch`
+
+- <span id="filamentmatch-partialeq-eq"></span>`fn eq(&self, other: &FilamentMatch) -> bool` — [`FilamentMatch`](auto_map/index.md#filamentmatch)
 
 ### `AmsMapping2Entry`
 
@@ -371,6 +470,40 @@ Enumeration of possible physical feed locations for loaded spools.
 ---
 
 ## Functions
+
+### `color_distance`
+
+```rust
+fn color_distance(a: [u8; 4], b: [u8; 4]) -> f32
+```
+
+BambuStudio's `GUI::calc_color_distance`: CIELAB ΔE76 combined with the alpha difference, clamped to `0..=1000`.
+
+Each colour is `[r, g, b, a]`. The distance is
+`sqrt(ΔE76(Lab1, Lab2)^2 + ((a1 - a2) * 100)^2)` with alpha in `0.0..=1.0`, and `Lab` comes
+from `RGB2Lab` (`RGB2XYZ` with the D65 matrix of `ColorSpaceConvert.cpp`, then `XYZ2Lab`
+against its `95.047 / 100 / 108.883` white).
+
+### `derive_ams_mapping`
+
+```rust
+fn derive_ams_mapping(filaments: &crate::ftps::project::PlateFilaments, ams: Option<&crate::types::telemetry::AmsStatusReport>, external_spools: &[crate::types::telemetry::VirtualTray], dual_nozzle: bool) -> AmsMappingResult
+```
+
+**Types:** [`PlateFilaments`](../ftps/project/index.md#platefilaments), [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport), [`VirtualTray`](../types/telemetry/ams/index.md#virtualtray), [`AmsMappingResult`](auto_map/index.md#amsmappingresult)
+
+Derives an `ams_mapping2` for `filaments` from the AMS telemetry in `ams` and the external spools in `external_spools`.
+
+`ams` is [`PrinterClient::ams`](../client/index.md#printerclient) and `external_spools` is
+[`vir_slot`](../client/index.md#printerclient) (empty on a single-nozzle printer, which
+never maps to its external spool). `dual_nozzle` is whether the printer has more than one
+nozzle, `quirks().physical_nozzle_count() > 1`. `None` for `ams`, or no loaded tray, leaves
+every filament unmatched; it is not an error.
+
+Prefer [`PrinterClient::derive_ams_mapping`](../client/index.md#printerclient),
+which supplies all three. See the module doc for the match and where it differs from
+BambuStudio. A filament whose `id` is 0 or above 32 (BambuStudio's project limit) is left
+unmatched and out of the array.
 
 ### `normalize_ams_unit_id`
 

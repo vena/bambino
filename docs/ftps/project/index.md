@@ -18,7 +18,12 @@ Every entry these slicers write sets general-purpose flag bit 3 (sizes in a data
 after the data, not in the local header), so the walk can't skip an entry by its header. It
 finds a stored PNG's end after its `IEND` chunk, and a deflated entry's end by the data
 descriptor that follows it (its compressed size equals the distance walked, and a ZIP header
-follows). It never inflates. See `reference/02_ftps.md` [REF-FTPS-3MF-FRONT].
+follows). The front walk never inflates. See `reference/02_ftps.md` [REF-FTPS-3MF-FRONT].
+
+The one thing here that does inflate is [`read_plate_filaments`](#read-plate-filaments), which reads a plate's
+filament list from `Metadata/slice_info.config`: that member sits near the end of the file,
+deflated, so it is found through the ZIP's central directory (see the `slice_info` module) from
+a file the caller holds, not from the front prefix.
 
 ## Quick Reference
 
@@ -33,6 +38,116 @@ follows). It never inflates. See `reference/02_ftps.md` [REF-FTPS-3MF-FRONT].
 | [`plate_small_image_member`](#plate-small-image-member) | fn | Name of plate `plate`'s 128×128 thumbnail: `Metadata/plate_<plate>_small.png`. |
 
 ## Types
+
+### `PlateFilament`
+
+```rust
+struct PlateFilament {
+    pub id: u32,
+    pub filament_type: String,
+    pub color: String,
+    pub tray_info_idx: String,
+}
+```
+
+One filament a plate uses, as `slice_info.config` lists it.
+
+#### Fields
+
+- **`id`**: `u32`
+
+  The project filament index, **1-based**, as the file writes it.
+  
+  This is the `filament_id` `build_ams_mapping2` takes, and
+  the position (minus one) of this filament's entry in an `ams_mapping2` array. BambuStudio
+  holds it 0-based internally and writes `id + 1`.
+
+- **`filament_type`**: `String`
+
+  The material, such as `"PLA"` or `"PETG"`.
+
+- **`color`**: `String`
+
+  The colour as the file writes it, `"#RRGGBB"` (or `"#RRGGBBAA"`).
+
+- **`tray_info_idx`**: `String`
+
+  The filament preset's id, such as `"GFA00"`; empty for a custom preset.
+  
+  BambuStudio's `filament_id`, which it matches against a tray's `tray_info_idx`. The file
+  has no `setting_id`, so BambuStudio's finer preset match never fires for a file's filament.
+
+#### Trait Implementations
+
+##### `impl Clone for PlateFilament`
+
+- <span id="platefilament-clone"></span>`fn clone(&self) -> PlateFilament` — [`PlateFilament`](#platefilament)
+
+##### `impl Debug for PlateFilament`
+
+- <span id="platefilament-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PlateFilament`
+
+##### `impl PartialEq for PlateFilament`
+
+- <span id="platefilament-partialeq-eq"></span>`fn eq(&self, other: &PlateFilament) -> bool` — [`PlateFilament`](#platefilament)
+
+### `PlateFilaments`
+
+```rust
+struct PlateFilaments {
+    pub plate: u32,
+    pub filaments: Vec<PlateFilament>,
+    pub filament_maps: Option<Vec<u8>>,
+}
+```
+
+The filaments one plate uses, and the extruder each project filament was assigned to.
+
+#### Fields
+
+- **`plate`**: `u32`
+
+  The plate, 1-based, as telemetry's `plate_idx` reports it.
+
+- **`filaments`**: `Vec<PlateFilament>`
+
+  The filaments the plate prints with, in file order. A project filament the plate doesn't
+  use isn't listed.
+
+- **`filament_maps`**: `Option<Vec<u8>>`
+
+  The extruder of every **project** filament, indexed by `id - 1`: `1` is the left (deputy)
+  extruder and `2` the right (main) one. `None` when the file records none.
+  
+  Only a dual-nozzle project sets it to anything but a single extruder.
+
+#### Implementations
+
+- <span id="platefilaments-extruder-of"></span>`fn extruder_of(&self, id: u32) -> Option<u8>`
+
+  The extruder value of filament `id` (1-based), or `None` when the file records none for it.
+
+- <span id="platefilaments-is-deputy"></span>`fn is_deputy(&self, id: u32) -> bool`
+
+  Whether filament `id` (1-based) is assigned to the left (deputy) extruder.
+
+#### Trait Implementations
+
+##### `impl Clone for PlateFilaments`
+
+- <span id="platefilaments-clone"></span>`fn clone(&self) -> PlateFilaments` — [`PlateFilaments`](#platefilaments)
+
+##### `impl Debug for PlateFilaments`
+
+- <span id="platefilaments-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PlateFilaments`
+
+##### `impl PartialEq for PlateFilaments`
+
+- <span id="platefilaments-partialeq-eq"></span>`fn eq(&self, other: &PlateFilaments) -> bool` — [`PlateFilaments`](#platefilaments)
 
 ### `JobPrefix<'a>`
 
@@ -65,6 +180,52 @@ The start of a job's `.3mf` and the plates it holds G-code for, from [`FtpsClien
 ---
 
 ## Functions
+
+### `parse_slice_info`
+
+```rust
+fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, crate::error::Error>
+```
+
+**Types:** [`PlateFilaments`](#platefilaments), [`Error`](../../error/index.md#error)
+
+Parses plate `plate`'s filaments out of an already inflated `slice_info.config`.
+
+Reads the `<plate>` blocks BambuStudio's exporter writes: `<metadata key="index" value="N"/>`
+names the plate, `<metadata key="filament_maps" value="1 2 ..."/>` gives the extruder of each
+project filament, and each `<filament id=".." tray_info_idx=".." type=".." color=".."/>` is a
+filament the plate uses. `<mixed_filament>` elements are not filaments here. The XML entities
+`&amp; &lt; &gt; &quot; &apos;` are unescaped in attribute values; any other `&` is kept.
+
+# Errors
+
+- [`Error::InvalidArgument`](../../error/index.md#error) when no plate has index `plate`.
+- [`Error::ProtocolViolation`](../../error/index.md#error) for markup it can't scan, a `<filament>` with no valid positive
+  `id`, or a `filament_maps` with a value that isn't a number.
+
+### `read_plate_filaments`
+
+```rust
+async fn read_plate_filaments(source: impl UploadSource, plate: u32) -> Result<PlateFilaments, crate::error::Error>
+```
+
+**Types:** [`UploadSource`](../../upload/index.md#uploadsource), [`PlateFilaments`](#platefilaments), [`Error`](../../error/index.md#error)
+
+Reads plate `plate`'s filaments from the `.3mf` in `source`, found through the ZIP's central directory.
+
+`plate` is 1-based. Reads the file's last few KB, the central directory in 4 KiB pieces, and
+then the one member, inflating it with a cap of 2 MiB.
+
+# Errors
+
+- [`Error::InvalidArgument`](../../error/index.md#error) when `slice_info.config` has no plate `plate`, or `source` fails
+  its own length.
+- [`Error::ProtocolViolation`](../../error/index.md#error) when the bytes aren't a ZIP this reader follows: no end of
+  central directory, a Zip64 or multi-disk archive, an encrypted or oversized member, a
+  method other than stored or deflate, a failed inflate or CRC-32, or no
+  `Metadata/slice_info.config` at all, or XML it can't read.
+
+Whatever `source`'s own read fails with.
 
 ### `front_members`
 

@@ -1277,6 +1277,25 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Lite reports physical `16` and is stored as `6`), so a caller-supplied physical `16` is
   normalized the same way before comparing.
 
+- <span id="superprinterclient-derive-ams-mapping"></span>`fn derive_ams_mapping(&self, filaments: &crate::ftps::project::PlateFilaments) -> crate::ams::AmsMappingResult` — [`PlateFilaments`](../ftps/project/index.md#platefilaments), [`AmsMappingResult`](../ams/auto_map/index.md#amsmappingresult)
+
+  Derives an `ams_mapping2` for `filaments` from the cached AMS telemetry, as BambuStudio does before every send; does no I/O.
+
+  `filaments` is the plate's filament list, from
+  [`read_plate_filaments`](../ftps/project/index.md) on a file the caller
+  holds, or built by the caller. The result's
+  `mapping2` goes to
+  [`PrintJobConfig::with_ams_mapping2`](../mqtt/index.md).
+  `ams()` and `vir_slot()` (dual-nozzle models only) are what it matches against, so poll
+  telemetry first: with none cached, every filament is unmatched, which is not an error.
+
+  **Check `unmatched` before starting the job.**
+  A filament nothing loaded matched is an unmapped entry, and
+  [`start_print`](#printerclient) with one the plate uses fails with an AMS mapping error
+  on the printer. Whether to send anyway, ask the user or stop is the caller's decision.
+  `derive_ams_mapping` has the match rules and where they
+  differ from BambuStudio.
+
 - <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: u8, slot_id: u8) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].

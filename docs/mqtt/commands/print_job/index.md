@@ -187,7 +187,11 @@ defaults for calibration flags.
   this default prints from the external spool. No sender leaves the mapping out:
   BambuStudio derives one from the file's filaments and the loaded trays before every
   send, and bambuddy computes one when a job has none. Pass the mapping through
-  [`with_ams`](#printjobconfig) or [`with_ams_mapping2`](#printjobconfig). See
+  [`with_ams`](#printjobconfig) or [`with_ams_mapping2`](#printjobconfig). A caller
+  that doesn't ask the user can derive one: read the plate's filaments with
+  [`read_plate_filaments`](../../../ftps/project/index.md) from a file it holds,
+  then [`PrinterClient::derive_ams_mapping`](../../../client/index.md#printerclient),
+  and check the result for unmatched filaments before sending. See
   `reference/05_materials_ams.md`, "Choosing a Mapping When the User Is Not Asked".
 
 - <span id="printjobconfig-from-internal-storage"></span>`fn from_internal_storage(self) -> Self`
