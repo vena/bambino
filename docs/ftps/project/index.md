@@ -213,8 +213,9 @@ async fn read_plate_filaments(source: impl UploadSource, plate: u32) -> Result<P
 
 Reads plate `plate`'s filaments from the `.3mf` in `source`, found through the ZIP's central directory.
 
-`plate` is 1-based. Reads the file's last few KB, the central directory in 4 KiB pieces, and
-then the one member, inflating it with a cap of 2 MiB.
+`plate` is 1-based. Reads the file's last 4 KiB (64 KiB only for an archive with a long
+comment), the central directory in 4 KiB pieces, and then the one member, inflating it with
+a cap of 2 MiB.
 
 # Errors
 

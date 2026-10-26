@@ -1290,9 +1290,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   telemetry first: with none cached, every filament is unmatched, which is not an error.
 
   **Check `unmatched` before starting the job.**
-  A filament nothing loaded matched is an unmapped entry, and
-  [`start_print`](#printerclient) with one the plate uses fails with an AMS mapping error
-  on the printer. Whether to send anyway, ask the user or stop is the caller's decision.
+  A filament nothing loaded matched is an unmapped entry, and sending one does not fail
+  safe: on a single-nozzle printer with nothing matched, [`start_print`](#printerclient)
+  sends `use_ams: false` and the job prints from the external spool. Whether to send anyway,
+  ask the user or stop is the caller's decision.
   `derive_ams_mapping` has the match rules and where they
   differ from BambuStudio.
 

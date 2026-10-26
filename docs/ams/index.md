@@ -61,8 +61,9 @@ The mapping [`derive_ams_mapping`](auto_map/index.md#derive-ams-mapping) found a
 
   The filaments nothing loaded matched.
 
-  A job started with one of these in `mapping2` fails with an AMS mapping error. Report it,
-  ask the user for a mapping, or stop: the crate does not choose.
+  Sending `mapping2` with one of these does not fail safe: see the module doc's "Using the
+  result" (with none matched on a single-nozzle printer, the job prints from the external
+  spool). Report it, ask the user for a mapping, or stop: the crate does not choose.
 
 - <span id="amsmappingresult-is-complete"></span>`fn is_complete(&self) -> bool`
 
