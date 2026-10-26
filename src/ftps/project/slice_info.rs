@@ -112,8 +112,9 @@ impl PlateFilaments {
 
 /// Reads plate `plate`'s filaments from the `.3mf` in `source`, found through the ZIP's central directory.
 ///
-/// `plate` is 1-based. Reads the file's last few KB, the central directory in 4 KiB pieces, and
-/// then the one member, inflating it with a cap of 2 MiB.
+/// `plate` is 1-based. Reads the file's last 4 KiB (64 KiB only for an archive with a long
+/// comment), the central directory in 4 KiB pieces, and then the one member, inflating it with
+/// a cap of 2 MiB.
 ///
 /// # Errors
 ///
@@ -404,21 +405,32 @@ async fn read_member<S: UploadSource>(source: &mut S, name: &str) -> Result<Vec<
     let mut window = Window::new();
 
     // End of central directory: the last record whose comment runs exactly to the end of file.
-    let tail_len = usize::try_from(len).map_or(ZIP_EOCD_LEN + ZIP_MAX_COMMENT, |l| {
+    // A .3mf carries no archive comment, so the last window holds it; the longest comment's
+    // reach (64 KiB) is read only when that misses.
+    let max_tail = usize::try_from(len).map_or(ZIP_EOCD_LEN + ZIP_MAX_COMMENT, |l| {
         l.min(ZIP_EOCD_LEN + ZIP_MAX_COMMENT)
     });
-    if tail_len < ZIP_EOCD_LEN {
+    if max_tail < ZIP_EOCD_LEN {
         return Err(violation("the file is too short to be a ZIP archive"));
     }
-    let tail_start = len - tail_len as u64;
-    let tail = window.slice(source, tail_start, tail_len).await?.to_vec();
-    let eocd = (0..=tail_len - ZIP_EOCD_LEN)
-        .rev()
-        .find(|&at| {
+    let mut found = None;
+    for tail_len in [READ_WINDOW.min(max_tail), max_tail] {
+        let tail_start = len - tail_len as u64;
+        let tail = window.slice(source, tail_start, tail_len).await?.to_vec();
+        let eocd = (0..=tail_len - ZIP_EOCD_LEN).rev().find(|&at| {
             tail[at..at + 4] == ZIP_EOCD_SIG
                 && at + ZIP_EOCD_LEN + usize::from(le_u16(&tail, at + 20)) == tail_len
-        })
-        .ok_or_else(|| violation("no ZIP end of central directory: not a .3mf archive"))?;
+        });
+        if let Some(eocd) = eocd {
+            found = Some((tail, tail_start, eocd));
+            break;
+        }
+        if tail_len == max_tail {
+            break;
+        }
+    }
+    let (tail, tail_start, eocd) =
+        found.ok_or_else(|| violation("no ZIP end of central directory: not a .3mf archive"))?;
     let record = &tail[eocd..eocd + ZIP_EOCD_LEN];
     let entries = le_u16(record, 10);
     let cd_size = le_u32(record, 12);

@@ -69,10 +69,15 @@
 //!
 //! # Using the result
 //!
-//! A filament with no match is [`AmsMapping2Entry::UNMAPPED`] in the array. Sending a job that
-//! uses such a filament fails with an AMS mapping error on the printer; whether to send
-//! anyway, ask the user, or stop is the caller's decision, which is why
-//! [`AmsMappingResult::unmatched`] exists.
+//! A filament with no match is [`AmsMapping2Entry::UNMAPPED`] in the array, and sending it does
+//! not fail safe. **On a single-nozzle printer a mapping with nothing matched goes out with
+//! `use_ams: false`** ([`is_external_spool_safety_valid`](super::mapping::is_external_spool_safety_valid)),
+//! so the job prints from the external spool. With some filaments matched, or on a dual-nozzle
+//! printer, `use_ams` stays `true`; bambuddy reports the firmware rejecting an unresolved
+//! mapping with an AMS mapping error (`PrintScheduler._ensure_ams_mapping`,
+//! `print_scheduler.py`), but a partly unresolved one has not been checked. Check
+//! [`AmsMappingResult::unmatched`] before sending: whether to send anyway, ask the user, or stop
+//! is the caller's decision.
 
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
@@ -146,8 +151,9 @@ pub struct AmsMappingResult {
 impl AmsMappingResult {
     /// The filaments nothing loaded matched.
     ///
-    /// A job started with one of these in `mapping2` fails with an AMS mapping error. Report it,
-    /// ask the user for a mapping, or stop: the crate does not choose.
+    /// Sending `mapping2` with one of these does not fail safe: see the module doc's "Using the
+    /// result" (with none matched on a single-nozzle printer, the job prints from the external
+    /// spool). Report it, ask the user for a mapping, or stop: the crate does not choose.
     pub fn unmatched(&self) -> impl Iterator<Item = &FilamentMatch> {
         self.matches.iter().filter(|m| m.source.is_none())
     }

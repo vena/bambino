@@ -86,7 +86,7 @@ md5 = { version = "0.8.1", default-features = false }
 # (`src/ftps/project/slice_info.rs`). `with-alloc` and no `std`, so it builds on every target.
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
 
-# `sqrt`, `powf` and `cbrt` for the CIELAB colour distance in `src/ams/auto_map.rs`: `core` has
+# `sqrt`, `pow` and `cbrt` for the CIELAB colour distance in `src/ams/auto_map.rs`: `core` has
 # none of them, and the no_std targets need them.
 libm = "0.2.16"
 

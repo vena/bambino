@@ -233,6 +233,15 @@ async fn test_read_plate_filaments_with_an_archive_comment_and_short_reads() {
 }
 
 #[tokio::test]
+async fn test_read_plate_filaments_with_a_comment_past_the_first_window() {
+    // The end record sits more than the first 4 KiB tail read from the end of the file.
+    let comment = vec![b'x'; READ_WINDOW * 3];
+    let file = three_mf(ZIP_METHOD_DEFLATE, &comment);
+    let plate = read_plate_filaments(&file[..], 2).await.expect("read");
+    assert_eq!(plate, parse_slice_info(XML, 2).unwrap());
+}
+
+#[tokio::test]
 async fn test_read_plate_filaments_missing_plate_and_missing_member() {
     let file = three_mf(ZIP_METHOD_DEFLATE, b"");
     let result = read_plate_filaments(&file[..], 9).await;
