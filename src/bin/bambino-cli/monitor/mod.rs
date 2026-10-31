@@ -154,7 +154,7 @@ impl Drop for ShutdownOnDrop {
 /// Both MQTT loops race telemetry against this in `select!`, which cancels the poll each tick,
 /// so the zombie check here is what catches a silently dropped link
 /// (`.claude/rules/wire-read-deadline.md`) and must stay in the loop.
-async fn keepalive_interval() -> tokio::time::Interval {
+pub(crate) async fn keepalive_interval() -> tokio::time::Interval {
     let mut keepalive = interval(Duration::from_secs(u64::from(KEEPALIVE_TICK_SECS)));
     keepalive.tick().await;
     keepalive

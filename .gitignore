@@ -29,6 +29,8 @@ env/
 probe_report*.json
 # ack-probe reports carry the printer serial in a `serial` field — same handling as above.
 ack_probe_report*.json
+# print-type-probe reports hold redacted raw frames; same handling as above.
+print_type_probe*.json
 
 # Local MQTT field-mapping scratch notes, not a reference doc.
 /MQTT_FIELDS.md

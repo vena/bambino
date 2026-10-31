@@ -18,6 +18,7 @@ mod discover;
 mod error;
 mod inspect_cert;
 mod monitor;
+mod print_type_probe;
 mod probe;
 mod prompt;
 mod redact;
@@ -59,7 +60,8 @@ Files actions:    list  upload  download  head  front  job  mkdir  rmdir  delete
                   clock-check  catalog (get | thumb | rm)
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
-Ack-probe:        -o/--output  -t/--tests  --window"
+Ack-probe:        -o/--output  -t/--tests  --window
+Print-type-probe: -o/--output"
 )]
 struct Cli {
     /// Enable verbose connection and packet debugging output
@@ -148,10 +150,28 @@ enum Commands {
         window: u64,
     },
 
+    // Evidence harness for issue #654. Doc comments on this enum are the CLI's `--help` text, so
+    // contributor references stay in `//` comments like this one.
+    /// Record what the printer reports while you run jobs from its own screen
+    ///
+    /// Walks you through load, unload, bed leveling, vibration compensation and a file print,
+    /// one at a time. For each, you start the job on the printer's screen and this records
+    /// `print_type`, `subtask_name`, `gcode_state`, `gcode_file` and `mc_print_stage`. The
+    /// printer must be idle when you start. The only message sent to the printer is a status
+    /// request (`pushall`), so nothing is moved or heated by this tool. The report is
+    /// rewritten after every job, so Ctrl+C keeps what was recorded.
+    PrintTypeProbe {
+        #[command(flatten)]
+        target: Target,
+        /// Output file path
+        #[arg(short = 'o', long, default_value = "print_type_probe.json")]
+        output: String,
+    },
+
     /// Dispatch a movement or hardware control command
     #[command(
         flatten_help = true,
-        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch [--show-serials]]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> --material <NAME> | --temp <C> --duration-hours <H>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry-stop <ID>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams help [COMMAND]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+        override_usage = "bambino-cli control<IP> <SERIAL> [ACCESS_CODE] home\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch [--show-serials]]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> --material <NAME> | --temp <C> --duration-hours <H>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry-stop <ID>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams help [COMMAND]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Control {
         #[command(flatten)]
@@ -275,6 +295,9 @@ async fn main() {
             tests,
             window,
         } => ack_probe::run(&target, &output, tests, window).await,
+        Commands::PrintTypeProbe { target, output } => {
+            print_type_probe::run(&target, &output).await
+        }
         Commands::Control { target, action } => control::run(&target, action).await,
         Commands::Files {
             target,
