@@ -319,6 +319,27 @@ must adapt to.
 
 #### Implementations
 
+- <span id="modelquirks-accepts-sliced-for"></span>`fn accepts_sliced_for(&self, printer_model_id: &str) -> bool`
+
+  Whether a sliced file whose `printer_model_id` is `printer_model_id` may be printed on this model.
+
+  `printer_model_id` is the printer type id a slicer writes into a `.gcode.3mf`'s
+  `Metadata/slice_info.config` (BambuStudio's `PRINTER_MODEL_ID_ATTR`, `bbs_3mf.cpp`), such as
+  `"C12"` for a P1S or `"N2S"` for an A1. A model accepts its own ids plus its
+  `compatible_machine` list from BambuStudio's `resources/printers/<type>.json`, read at
+  `00.00.00.00`: X1 Carbon `BL-P001`, X1 `BL-P002`, P1P `C11`, P1S `C12` and X1E `C13` accept
+  each other; H2C `O1C` and `O1C2` accept each other; H2D `O1D` and H2D Pro `O1E` accept each
+  other. Every other model's list is empty, so it accepts only its own id. The fallback row
+  for an unrecognized model accepts nothing.
+
+  Compared ignoring ASCII case, as [`resolve_model`](../models/index.md#resolve-model) compares a
+  `dev_model`. This is BambuStudio's blocking rule: `SelectMachineDialog::is_blocking_printing`
+  (`SelectMachine.cpp`) refuses to send (`PrintStatusUnsupportedPrinter`) when the file's
+  model differs from the printer's and is not in the printer's compatible list
+  (`MachineObject::get_compatible_machine`, `DevPrinterConfigUtil::get_compatible_machine`).
+  An empty id fails that comparison too. An A1 file's start G-code drove a P1S's carriage
+  into its frame (#657).
+
 - <span id="modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
 
   Returns true if this model requires a plaintext FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].

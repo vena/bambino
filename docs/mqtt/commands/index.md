@@ -410,6 +410,7 @@ struct PrintJobConfig {
     pub nozzle_rack: Option<NozzleRack>,
     pub pa_profile_shared_by_type: Option<bool>,
     pub file_location: JobFileLocation,
+    pub sliced_for: SlicedFor,
 }
 ```
 
@@ -493,6 +494,17 @@ defaults for calibration flags.
   Where the printer finds the file; [`JobFileLocation::Card`](print_job/index.md#jobfilelocation) unless
   [`from_internal_storage`](print_job/index.md#printjobconfig) was called.
 
+- **`sliced_for`**: `SlicedFor`
+
+  The printer model the file was sliced for, which
+  [`start_print`](../../client/index.md#printerclient) checks against the printer's own.
+  
+  [`SlicedFor::NotSupplied`](print_job/index.md#slicedfor) unless [`sliced_for`](print_job/index.md#printjobconfig) or
+  [`model_unchecked`](print_job/index.md#printjobconfig) was called, and then `start_print` refuses.
+  **Every config must say**: the id is only known to a caller that read the file, so one
+  printing a `.3mf` already on the printer reads a local copy with
+  [`read_sliced_for`](../../ftps/project/index.md) or overrides.
+
 #### Implementations
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
@@ -511,6 +523,27 @@ defaults for calibration flags.
   then [`PrinterClient::derive_ams_mapping`](../../client/index.md#printerclient),
   and check the result for unmatched filaments before sending. See
   `reference/05_materials_ams.md`, "Choosing a Mapping When the User Is Not Asked".
+
+- <span id="printjobconfig-sliced-for"></span>`fn sliced_for(self, printer_model_id: Option<String>) -> Self`
+
+  Supplies the printer type id the file was sliced for, so [`start_print`](../../client/index.md#printerclient) can refuse a file for another model.
+
+  `Some(id)` is the file's `printer_model_id`, from
+  [`read_sliced_for`](../../ftps/project/index.md) or
+  `PrinterFile::sliced_for`. `None` says the file
+  was read and records no id, which is refused like a mismatch. See [`SlicedFor`](print_job/index.md#slicedfor).
+
+- <span id="printjobconfig-model-unchecked"></span>`fn model_unchecked(self) -> Self`
+
+  Sends the job even when the file was sliced for another model, or records none.
+
+  Also what to call when the file's id can't be had: a `.3mf` already on the printer.
+
+  **Don't add this casually.** A file's start G-code is written for the model it was sliced
+  for. An A1 file started on a P1S turned the soft endstops off and drove X to -48.2, 66 mm
+  past anything the P1S's own start G-code commands, into the frame, and the belts skipped
+  (#657). Use it only when the printer's own model really accepts the file, such as a
+  model BambuStudio doesn't list as compatible but you know is.
 
 - <span id="printjobconfig-from-internal-storage"></span>`fn from_internal_storage(self) -> Self`
 
@@ -1659,6 +1692,78 @@ Where the printer finds a job's `.3mf`, which decides the start command's `url` 
 ##### `impl PartialEq for JobFileLocation`
 
 - <span id="jobfilelocation-partialeq-eq"></span>`fn eq(&self, other: &JobFileLocation) -> bool` — [`JobFileLocation`](print_job/index.md#jobfilelocation)
+
+### `SlicedFor`
+
+```rust
+enum SlicedFor {
+    NotSupplied,
+    Model(Option<String>),
+    Unchecked,
+}
+```
+
+Which printer model a job's `.3mf` was sliced for, as [`PrinterClient::start_print`](../../client/index.md#printerclient) checks it.
+
+A slicer writes the printer type id into the file (`printer_model_id` in
+`Metadata/slice_info.config`), and a file sliced for another model carries that model's start
+G-code. An A1 file started on a P1S drove the carriage to X -48.2 with the soft endstops off,
+into the frame, and skipped the belts (#657); the P1S's own start G-code never goes below
+X 18. BambuStudio blocks that send (`SelectMachineDialog::is_blocking_printing`,
+`SelectMachine.cpp`), for a fresh slice and for a file already on the printer, whose plate
+`printer_model_id` it fetches through the file tunnel; bambino refuses where Studio blocks.
+
+Read the id with [`read_sliced_for`](../../ftps/project/index.md), or take
+`PrinterFile::sliced_for` from
+[`PrinterClient::upload_file`](../../client/index.md#printerclient), and pass it to
+[`PrintJobConfig::sliced_for`](print_job/index.md#printjobconfig).
+
+#### Variants
+
+- **`NotSupplied`**
+
+  The caller gave no model for the file, so [`start_print`](../../client/index.md#printerclient)
+  refuses with [`Error::ModelMismatch`](../../error/index.md#error). The default.
+  
+  BambuStudio checks a file already on the printer by fetching its `slice_info.config`
+  through the file tunnel. bambino can't until the tunnel arm lands (#636), and over FTPS
+  only by downloading the whole file (FTPS has no `REST`), so the caller supplies the id or
+  overrides with [`PrintJobConfig::model_unchecked`](print_job/index.md#printjobconfig).
+
+- **`Model`**
+
+  The file's own `printer_model_id`, or `None` for a sliced file that records none.
+  
+  `Some(id)` is refused unless the printer's model accepts it
+  ([`ModelQuirks::accepts_sliced_for`](../../quirks/index.md#modelquirks)),
+  and `None` is refused outright: a file that doesn't say what it was sliced for can't be
+  told from a mismatched one.
+
+- **`Unchecked`**
+
+  The caller overrode the check, so the job is sent with a `log::warn!`.
+  
+  See [`PrintJobConfig::model_unchecked`](print_job/index.md#printjobconfig) before using it.
+
+#### Trait Implementations
+
+##### `impl Clone for SlicedFor`
+
+- <span id="slicedfor-clone"></span>`fn clone(&self) -> SlicedFor` — [`SlicedFor`](print_job/index.md#slicedfor)
+
+##### `impl Debug for SlicedFor`
+
+- <span id="slicedfor-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for SlicedFor`
+
+- <span id="slicedfor-default"></span>`fn default() -> SlicedFor` — [`SlicedFor`](print_job/index.md#slicedfor)
+
+##### `impl Eq for SlicedFor`
+
+##### `impl PartialEq for SlicedFor`
+
+- <span id="slicedfor-partialeq-eq"></span>`fn eq(&self, other: &SlicedFor) -> bool` — [`SlicedFor`](print_job/index.md#slicedfor)
 
 ### `AmsChangeFilamentRequest`
 

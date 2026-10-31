@@ -100,6 +100,7 @@ struct PlateFilaments {
     pub plate: u32,
     pub filaments: Vec<PlateFilament>,
     pub filament_maps: Option<Vec<u8>>,
+    pub printer_model_id: Option<String>,
 }
 ```
 
@@ -122,6 +123,15 @@ The filaments one plate uses, and the extruder each project filament was assigne
   extruder and `2` the right (main) one. `None` when the file records none.
   
   Only a dual-nozzle project sets it to anything but a single extruder.
+
+- **`printer_model_id`**: `Option<String>`
+
+  The printer type id the plate was sliced for, such as `"C12"` for a P1S or `"N2S"` for an
+  A1; `None` when the file records none or an empty one.
+  
+  BambuStudio's `printer_model_id` plate metadata (`PRINTER_MODEL_ID_ATTR`, `bbs_3mf.cpp`).
+  Whether a printer accepts it is
+  [`ModelQuirks::accepts_sliced_for`](../../quirks/index.md#modelquirks).
 
 #### Implementations
 
@@ -203,6 +213,25 @@ filament the plate uses. `<mixed_filament>` elements are not filaments here. The
 - [`Error::ProtocolViolation`](../../error/index.md#error) for markup it can't scan, a `<filament>` with no valid positive
   `id`, or a `filament_maps` with a value that isn't a number.
 
+### `parse_sliced_for`
+
+```rust
+fn parse_sliced_for(text: &str) -> Result<Option<String>, crate::error::Error>
+```
+
+**Types:** [`Error`](../../error/index.md#error)
+
+Parses the printer type id the sliced file's plates were sliced for, out of an already inflated `slice_info.config`.
+
+Reads every `<plate>`'s `<metadata key="printer_model_id" value="C12"/>`. `None` when the
+plates carry no id or an empty one.
+
+# Errors
+
+- [`Error::InvalidArgument`](../../error/index.md#error) when the file lists no sliced plate: an unsliced project.
+- [`Error::ProtocolViolation`](../../error/index.md#error) when two plates name different ids (or one has none), or for
+  markup [`parse_slice_info`](#parse-slice-info) can't scan.
+
 ### `read_plate_filaments`
 
 ```rust
@@ -225,6 +254,29 @@ a cap of 2 MiB.
   central directory, a Zip64 or multi-disk archive, an encrypted or oversized member, a
   method other than stored or deflate, a failed inflate or CRC-32, or no
   `Metadata/slice_info.config` at all, or XML it can't read.
+
+Whatever `source`'s own read fails with.
+
+### `read_sliced_for`
+
+```rust
+async fn read_sliced_for(source: impl UploadSource) -> Result<Option<String>, crate::error::Error>
+```
+
+**Types:** [`UploadSource`](../../upload/index.md#uploadsource), [`Error`](../../error/index.md#error)
+
+Reads the printer type id the `.3mf` in `source` was sliced for, found as [`read_plate_filaments`](#read-plate-filaments) finds the file.
+
+Returns the first plate's `printer_model_id` (BambuStudio writes the same one on every plate
+of a file), or `None` when the file records none. Check it against a printer with
+[`ModelQuirks::accepts_sliced_for`](../../quirks/index.md#modelquirks), and
+pass it to [`PrintJobConfig::sliced_for`](../../mqtt/index.md).
+
+# Errors
+
+- [`Error::InvalidArgument`](../../error/index.md#error) when `slice_info.config` lists no plate: an unsliced project.
+- [`Error::ProtocolViolation`](../../error/index.md#error) when two plates name different ids, or for the unreadable
+  archives [`read_plate_filaments`](#read-plate-filaments) refuses.
 
 Whatever `source`'s own read fails with.
 

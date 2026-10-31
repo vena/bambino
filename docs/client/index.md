@@ -943,6 +943,7 @@ struct PrinterFile {
     pub modified: FileTime,
     pub kind: crate::file_tunnel::FileKind,
     pub storage: StorageKind,
+    pub sliced_for: Option<String>,
     // [REDACTED: Private Fields]
 }
 ```
@@ -975,6 +976,15 @@ public, so a file is always reached the way it was found.
 - **`storage`**: `StorageKind`
 
   Where the file is stored.
+
+- **`sliced_for`**: `Option<String>`
+
+  The printer type id the file was sliced for, as [`PrinterClient::upload_file`](#printerclient) read it from
+  the file it sent; `None` from a listing, which doesn't read the file, and for an upload
+  whose file records none.
+  
+  Pass it to [`PrintJobConfig::sliced_for`](../mqtt/index.md) so
+  [`PrinterClient::start_print`](#printerclient) checks it.
 
 #### Implementations
 
@@ -1883,7 +1893,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Deletes a listed file. Deleting one that is already gone succeeds.
 
-- <span id="superprinterclient-upload-file"></span>`async fn upload_file(&mut self, storage: StorageKind, name: &str, source: impl UploadSource) -> Result<PrinterFile, Error>` — [`StorageKind`](#storagekind), [`UploadSource`](../upload/index.md#uploadsource), [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-upload-file"></span>`async fn upload_file(&mut self, storage: StorageKind, name: &str, source: impl UploadSource, model_check: ModelCheck) -> Result<PrinterFile, Error>` — [`StorageKind`](#storagekind), [`UploadSource`](../upload/index.md#uploadsource), [`ModelCheck`](#modelcheck), [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
   Uploads a `.3mf` to the printer's storage and returns the file, ready for [`start_print`](#printerclient).
 
@@ -1917,6 +1927,17 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`Error::InvalidArgument`](../error/index.md#error) for a bad `name` or a source over
   [`MAX_TRANSFER_BYTES`](../ftps/index.md#max-transfer-bytes), [`Error::NotConfigured`](../error/index.md#error) for
   internal storage or without FTPS, and whatever [`FtpsClient::upload_from`](../ftps/client/index.md#ftpsclient) returns.
+
+  [`Error::ModelMismatch`](../error/index.md#error) under [`ModelCheck::Enforce`](files/index.md#modelcheck) when the file's `printer_model_id`
+  isn't one this printer accepts
+  ([`ModelQuirks::accepts_sliced_for`](../quirks/index.md#modelquirks)), or
+  it records none. Nothing is sent. An A1 file started on a P1S drove the carriage into the
+  frame (#657). Other errors from reading the file's `slice_info.config`
+  ([`read_sliced_for`](../ftps/project/index.md#read-sliced-for)) also refuse the upload: a file that can't be read can't be checked.
+  [`Skip`](https://docs.rs/core/latest/core/iter/adapters/skip/struct.Skip.html) sends the file anyway.
+
+  The file's id comes back as [`PrinterFile::sliced_for`](files/index.md#printerfile); pass it to
+  [`PrintJobConfig::sliced_for`](../mqtt/index.md).
 
 - <span id="superprinterclient-read-thumbnail"></span>`async fn read_thumbnail(&mut self, file: &PrinterFile, sink: impl FnMut(&[u8]) -> Result<(), Error>) -> Result<Option<u64>, Error>` — [`PrinterFile`](#printerfile), [`Error`](../error/index.md#error)
 
@@ -2414,6 +2435,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`Error::ModelMismatch`](../error/index.md#error) when flow calibration is `CalibrationMode::Auto` and
   `Capabilities::pa_calibration_auto_support`
   does not allow it. BambuStudio offers Auto only where it does.
+
+  [`Error::ModelMismatch`](../error/index.md#error) when the config's [`sliced_for`](../mqtt/commands/print_job/index.md#printjobconfig) names
+  a printer model this printer doesn't accept
+  ([`ModelQuirks::accepts_sliced_for`](../quirks/index.md#modelquirks)), or
+  says the file records none. Nothing is published. An A1 file started on a P1S drove the
+  carriage into the frame (#657). [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig) overrides it, with a
+  `log::warn!`.
+
+  **A config that never said what the file was sliced for is refused too**, like
+  BambuStudio's `is_blocking_printing`. Supply the id: take it from
+  `PrinterFile::sliced_for` after
+  [`upload_file`](#printerclient), or from
+  [`read_sliced_for`](../ftps/project/index.md) on a local copy; or call
+  [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig). BambuStudio reads an on-printer file's
+  `slice_info.config` through the file tunnel; bambino can't until that arm lands (#636),
+  and over FTPS only by a full download (FTPS has no `REST`).
 
 - <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -4502,6 +4539,57 @@ LAN mode often run months behind real time (see [`CurrentDateTime`](../ftps/pars
 ##### `impl PartialEq for FileTime`
 
 - <span id="filetime-partialeq-eq"></span>`fn eq(&self, other: &FileTime) -> bool` — [`FileTime`](#filetime)
+
+### `ModelCheck`
+
+```rust
+enum ModelCheck {
+    Enforce,
+    Skip,
+}
+```
+
+Whether [`PrinterClient::upload_file`](#printerclient) checks the model a `.3mf` was sliced for against the printer's.
+
+A file's start G-code is written for the model it was sliced for, and a file for another model
+can drive the carriage into the frame (#657); see [`SlicedFor`](../mqtt/index.md).
+
+#### Variants
+
+- **`Enforce`**
+
+  Refuse a file sliced for a model the printer doesn't accept, or that records none, before
+  anything is sent. The default choice.
+
+- **`Skip`**
+
+  Send the file whatever it was sliced for. Don't add this casually; see
+  [`PrintJobConfig::model_unchecked`](../mqtt/index.md).
+  
+  A file the reader can't parse (not a ZIP, or an unsliced project) is sent too, with no
+  [`PrinterFile::sliced_for`](files/index.md#printerfile).
+
+#### Trait Implementations
+
+##### `impl Clone for ModelCheck`
+
+- <span id="modelcheck-clone"></span>`fn clone(&self) -> ModelCheck` — [`ModelCheck`](#modelcheck)
+
+##### `impl Copy for ModelCheck`
+
+##### `impl Debug for ModelCheck`
+
+- <span id="modelcheck-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for ModelCheck`
+
+- <span id="modelcheck-default"></span>`fn default() -> ModelCheck` — [`ModelCheck`](#modelcheck)
+
+##### `impl Eq for ModelCheck`
+
+##### `impl PartialEq for ModelCheck`
+
+- <span id="modelcheck-partialeq-eq"></span>`fn eq(&self, other: &ModelCheck) -> bool` — [`ModelCheck`](#modelcheck)
 
 ### `StorageKind`
 
