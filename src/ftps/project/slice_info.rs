@@ -93,6 +93,13 @@ pub struct PlateFilaments {
     ///
     /// Only a dual-nozzle project sets it to anything but a single extruder.
     pub filament_maps: Option<Vec<u8>>,
+    /// The printer type id the plate was sliced for, such as `"C12"` for a P1S or `"N2S"` for an
+    /// A1; `None` when the file records none or an empty one.
+    ///
+    /// BambuStudio's `printer_model_id` plate metadata (`PRINTER_MODEL_ID_ATTR`, `bbs_3mf.cpp`).
+    /// Whether a printer accepts it is
+    /// [`ModelQuirks::accepts_sliced_for`](crate::quirks::ModelQuirks::accepts_sliced_for).
+    pub printer_model_id: Option<String>,
 }
 
 impl PlateFilaments {
@@ -136,6 +143,27 @@ pub async fn read_plate_filaments(
     parse_slice_info(text, plate)
 }
 
+/// Reads the printer type id the `.3mf` in `source` was sliced for, found as [`read_plate_filaments`] finds the file.
+///
+/// Returns the first plate's `printer_model_id` (BambuStudio writes the same one on every plate
+/// of a file), or `None` when the file records none. Check it against a printer with
+/// [`ModelQuirks::accepts_sliced_for`](crate::quirks::ModelQuirks::accepts_sliced_for), and
+/// pass it to [`PrintJobConfig::sliced_for`](crate::mqtt::PrintJobConfig::sliced_for).
+///
+/// # Errors
+///
+/// - [`Error::InvalidArgument`] when `slice_info.config` lists no plate: an unsliced project.
+/// - [`Error::ProtocolViolation`] when two plates name different ids, or for the unreadable
+///   archives [`read_plate_filaments`] refuses.
+///
+/// Whatever `source`'s own read fails with.
+pub async fn read_sliced_for(mut source: impl UploadSource) -> Result<Option<String>, Error> {
+    let bytes = read_member(&mut source, SLICE_INFO_MEMBER).await?;
+    let text = core::str::from_utf8(&bytes)
+        .map_err(|_| violation("slice_info.config is not valid UTF-8"))?;
+    parse_sliced_for(text)
+}
+
 /// Parses plate `plate`'s filaments out of an already inflated `slice_info.config`.
 ///
 /// Reads the `<plate>` blocks BambuStudio's exporter writes: `<metadata key="index" value="N"/>`
@@ -150,13 +178,68 @@ pub async fn read_plate_filaments(
 /// - [`Error::ProtocolViolation`] for markup it can't scan, a `<filament>` with no valid positive
 ///   `id`, or a `filament_maps` with a value that isn't a number.
 pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error> {
-    let mut in_plate = false;
+    let mut found = None;
     let mut plates_seen = Vec::new();
-    let mut current = PlateFilaments {
-        plate: 0,
-        filaments: Vec::new(),
-        filament_maps: None,
+    scan_plates(text, |current| {
+        if current.plate == plate {
+            found = Some(current);
+            return true;
+        }
+        plates_seen.push(current.plate);
+        false
+    })?;
+    if let Some(found) = found {
+        return Ok(found);
+    }
+    Err(no_such_plate(plate, &plates_seen))
+}
+
+/// Parses the printer type id the sliced file's plates were sliced for, out of an already inflated `slice_info.config`.
+///
+/// Reads every `<plate>`'s `<metadata key="printer_model_id" value="C12"/>`. `None` when the
+/// plates carry no id or an empty one.
+///
+/// # Errors
+///
+/// - [`Error::InvalidArgument`] when the file lists no sliced plate: an unsliced project.
+/// - [`Error::ProtocolViolation`] when two plates name different ids (or one has none), or for
+///   markup [`parse_slice_info`] can't scan.
+pub fn parse_sliced_for(text: &str) -> Result<Option<String>, Error> {
+    let mut first: Option<PlateFilaments> = None;
+    let mut disagreement = false;
+    scan_plates(text, |current| {
+        match &first {
+            None => first = Some(current),
+            Some(first) => disagreement |= first.printer_model_id != current.printer_model_id,
+        }
+        false
+    })?;
+    let first = first.ok_or_else(|| no_such_plate(1, &[]))?;
+    if disagreement {
+        return Err(violation(
+            "slice_info.config's plates name different printer_model_id values",
+        ));
+    }
+    Ok(first.printer_model_id)
+}
+
+/// The error for a `slice_info.config` with no plate `plate`, given the plates it does list.
+fn no_such_plate(plate: u32, plates_seen: &[u32]) -> Error {
+    let message = if plates_seen.is_empty() {
+        format!(
+            "slice_info.config lists no sliced plate, so the .3mf is an unsliced project: export \
+             it sliced (Bambu Studio's \"Export plate sliced file\") to read plate {plate}"
+        )
+    } else {
+        format!("slice_info.config has no plate {plate}; its sliced plates are {plates_seen:?}")
     };
+    Error::InvalidArgument(message.into())
+}
+
+/// Hands each `<plate>` of `text` to `visit` as it closes, in file order, until `visit` returns `true`.
+fn scan_plates(text: &str, mut visit: impl FnMut(PlateFilaments) -> bool) -> Result<(), Error> {
+    let mut in_plate = false;
+    let mut current = empty_plate();
     let mut rest = text;
     while let Some(open) = rest.find('<') {
         rest = &rest[open..];
@@ -176,11 +259,10 @@ pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error>
         }
         if let Some(name) = tag.strip_prefix('/') {
             if name.trim() == "plate" && in_plate {
-                if current.plate == plate {
-                    return Ok(current);
-                }
-                plates_seen.push(current.plate);
                 in_plate = false;
+                if visit(core::mem::replace(&mut current, empty_plate())) {
+                    return Ok(());
+                }
             }
             continue;
         }
@@ -192,11 +274,7 @@ pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error>
         match name {
             "plate" => {
                 in_plate = true;
-                current = PlateFilaments {
-                    plate: 0,
-                    filaments: Vec::new(),
-                    filament_maps: None,
-                };
+                current = empty_plate();
             }
             "metadata" if in_plate => {
                 let attrs = Attributes::new(attrs)?;
@@ -209,6 +287,12 @@ pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error>
                     }
                     Some("filament_maps") => {
                         current.filament_maps = parse_filament_maps(&attrs.get("value"))?;
+                    }
+                    Some("printer_model_id") => {
+                        current.printer_model_id = attrs
+                            .get("value")
+                            .map(|v| String::from(v.trim()))
+                            .filter(|v| !v.is_empty());
                     }
                     _ => {}
                 }
@@ -230,15 +314,17 @@ pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error>
             _ => {}
         }
     }
-    let message = if plates_seen.is_empty() {
-        format!(
-            "slice_info.config lists no sliced plate, so the .3mf is an unsliced project: export \
-             it sliced (Bambu Studio's \"Export plate sliced file\") to read plate {plate}"
-        )
-    } else {
-        format!("slice_info.config has no plate {plate}; its sliced plates are {plates_seen:?}")
-    };
-    Err(Error::InvalidArgument(message.into()))
+    Ok(())
+}
+
+/// A plate with nothing read into it yet.
+fn empty_plate() -> PlateFilaments {
+    PlateFilaments {
+        plate: 0,
+        filaments: Vec::new(),
+        filament_maps: None,
+        printer_model_id: None,
+    }
 }
 
 /// Index of the `>` that ends the tag starting at `s[0] == '<'`, skipping any inside a quoted value.

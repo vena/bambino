@@ -16,7 +16,7 @@ use crate::error::Error;
 use crate::file_tunnel::FileKind;
 use crate::ftps::client::PrinterClockProbe;
 use crate::ftps::parser::{FTP_MAX_LISTING_ENTRIES, advance_timestamp};
-use crate::ftps::project::front_members;
+use crate::ftps::project::{front_members, read_sliced_for};
 use crate::ftps::protocol::FTP_FILE_NOT_FOUND;
 use crate::ftps::{CurrentDateTime, FtpFile, FtpTimestamp, FtpsClient};
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
@@ -24,6 +24,7 @@ use crate::upload::UploadSource;
 
 use super::PrinterClient;
 use super::job::plate_member_names;
+use super::print::refuse_unaccepted_model;
 
 /// Directories FTPS keeps timelapses in [REF-FTPS-OPS].
 const TIMELAPSE_DIRS: &[&str] = &["/timelapse"];
@@ -63,6 +64,25 @@ pub enum StorageKind {
     /// No listing returns it yet; it arrives with the file tunnel's support in
     /// [`PrinterClient::list_files`] (#636).
     Internal,
+}
+
+/// Whether [`PrinterClient::upload_file`] checks the model a `.3mf` was sliced for against the printer's.
+///
+/// A file's start G-code is written for the model it was sliced for, and a file for another model
+/// can drive the carriage into the frame (#657); see [`SlicedFor`](crate::mqtt::SlicedFor).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ModelCheck {
+    /// Refuse a file sliced for a model the printer doesn't accept, or that records none, before
+    /// anything is sent. The default choice.
+    #[default]
+    Enforce,
+    /// Send the file whatever it was sliced for. Don't add this casually; see
+    /// [`PrintJobConfig::model_unchecked`](crate::mqtt::PrintJobConfig::model_unchecked).
+    ///
+    /// A file the reader can't parse (not a ZIP, or an unsliced project) is sent too, with no
+    /// [`PrinterFile::sliced_for`].
+    Skip,
 }
 
 /// When a [`PrinterFile`] was last modified, in the form the service that listed it gives.
@@ -127,6 +147,13 @@ pub struct PrinterFile {
     pub kind: FileKind,
     /// Where the file is stored.
     pub storage: StorageKind,
+    /// The printer type id the file was sliced for, as [`PrinterClient::upload_file`] read it from
+    /// the file it sent; `None` from a listing, which doesn't read the file, and for an upload
+    /// whose file records none.
+    ///
+    /// Pass it to [`PrintJobConfig::sliced_for`](crate::mqtt::PrintJobConfig::sliced_for) so
+    /// [`PrinterClient::start_print`] checks it.
+    pub sliced_for: Option<String>,
     address: FileAddress,
 }
 
@@ -175,6 +202,7 @@ impl PrinterFile {
             modified,
             kind,
             storage: StorageKind::External,
+            sliced_for: None,
             address: FileAddress::Ftps { path },
         }
     }
@@ -192,6 +220,7 @@ impl PrinterFile {
             modified,
             kind,
             storage: StorageKind::External,
+            sliced_for: None,
             address: FileAddress::Ftps { path },
         }
     }
@@ -547,11 +576,23 @@ where
     /// [`Error::InvalidArgument`] for a bad `name` or a source over
     /// [`MAX_TRANSFER_BYTES`](crate::ftps::MAX_TRANSFER_BYTES), [`Error::NotConfigured`] for
     /// internal storage or without FTPS, and whatever [`FtpsClient::upload_from`] returns.
+    ///
+    /// [`Error::ModelMismatch`] under [`ModelCheck::Enforce`] when the file's `printer_model_id`
+    /// isn't one this printer accepts
+    /// ([`ModelQuirks::accepts_sliced_for`](crate::quirks::ModelQuirks::accepts_sliced_for)), or
+    /// it records none. Nothing is sent. An A1 file started on a P1S drove the carriage into the
+    /// frame (#657). Other errors from reading the file's `slice_info.config`
+    /// ([`read_sliced_for`]) also refuse the upload: a file that can't be read can't be checked.
+    /// [`ModelCheck::Skip`] sends the file anyway.
+    ///
+    /// The file's id comes back as [`PrinterFile::sliced_for`]; pass it to
+    /// [`PrintJobConfig::sliced_for`](crate::mqtt::PrintJobConfig::sliced_for).
     pub async fn upload_file(
         &mut self,
         storage: StorageKind,
         name: &str,
-        source: impl UploadSource,
+        mut source: impl UploadSource,
+        model_check: ModelCheck,
     ) -> Result<PrinterFile, Error> {
         if name.is_empty() || name.contains('/') || !is_model_file(name) {
             return Err(Error::InvalidArgument(
@@ -566,6 +607,24 @@ where
                 ));
             }
         }
+        let sliced_for = match model_check {
+            ModelCheck::Enforce => {
+                let id = read_sliced_for(&mut source).await?;
+                refuse_unaccepted_model(
+                    self.core.identity.model,
+                    id.as_deref(),
+                    "ModelCheck::Skip",
+                )?;
+                id
+            }
+            ModelCheck::Skip => match read_sliced_for(&mut source).await {
+                Ok(id) => id,
+                Err(e) => {
+                    log::debug!("upload_file: {name} sent unchecked and its model is unread: {e}");
+                    None
+                }
+            },
+        };
         let size = source.len();
         let path = format!("/{name}");
         let ftps = self.ftps().await?;
@@ -587,6 +646,7 @@ where
             modified,
             kind: FileKind::Model,
             storage: StorageKind::External,
+            sliced_for,
             address: FileAddress::Ftps { path },
         })
     }

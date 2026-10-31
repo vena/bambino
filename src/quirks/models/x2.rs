@@ -88,6 +88,7 @@ pub(crate) const X2D: ModelQuirks = ModelQuirks {
     store_sent_files: true,
     ai_monitoring: true,
     auto_flow_calibration: true,
+    sliced_for: &["N6"],
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume {

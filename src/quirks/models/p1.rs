@@ -6,6 +6,7 @@ use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
 use crate::quirks::{
     BedMax, BuildVolume, DryRule, FEEDRATE_20_MM_S, FEEDRATE_500_MM_S, ModelQuirks, SafetyLimits,
+    X1_P1_SLICED_FOR,
 };
 
 /// Build volume Z depth (mm) shared by P1P and P1S, per `MODEL_MATRIX.csv`'s Build Volume row.
@@ -30,6 +31,7 @@ pub const P1_BED_TEMP_MAX: u16 = 100;
 /// push message for P", `DeviceManager.cpp`), so the bit is not trusted here.
 pub(crate) const P1S: ModelQuirks = ModelQuirks {
     pa_calibration_bits_trusted: false,
+    sliced_for: X1_P1_SLICED_FOR,
     ..P1S_BASE
 };
 

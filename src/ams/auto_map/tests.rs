@@ -52,6 +52,7 @@ fn plate(filaments: Vec<PlateFilament>, maps: Option<Vec<u8>>) -> PlateFilaments
         plate: 1,
         filaments,
         filament_maps: maps,
+        printer_model_id: None,
     }
 }
 

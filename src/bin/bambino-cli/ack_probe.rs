@@ -337,7 +337,10 @@ impl AckTest {
                     "bambino ack probe",
                     seq,
                     "textured",
-                );
+                )
+                // The file doesn't exist on purpose, to observe the ack envelope, so there is no
+                // model to check; a config like this would be refused by `start_print`.
+                .model_unchecked();
                 serde_json::to_value(ProjectFileRequest::from_config(&config, seq, model))
             }
             Self::SetAirduct => {

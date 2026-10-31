@@ -75,8 +75,10 @@ const fn h2(
     volume: BuildVolume,
     nozzles: NozzleLayout,
     min_dry_firmware: &'static str,
+    sliced_for: &'static [&'static str],
 ) -> ModelQuirks {
     ModelQuirks {
+        sliced_for,
         door: DoorSensor::Stat,
         chamber_temperature_sensor: true,
         nozzles,
@@ -124,22 +126,26 @@ pub(crate) const H2S: ModelQuirks = h2(
     },
     NozzleLayout::Single,
     H2S_H2C_MIN_REMOTE_DRY_FIRMWARE,
+    &["O1S"],
 );
 /// H2D: dual-nozzle (IDEX) CoreXY.
 pub(crate) const H2D: ModelQuirks = h2(
     H2_DUAL_VOLUME,
     NozzleLayout::Dual,
     H2D_MIN_REMOTE_DRY_FIRMWARE,
+    &["O1D", "O1E"],
 );
 /// H2D Pro: same kinematics as H2D.
 pub(crate) const H2D_PRO: ModelQuirks = h2(
     H2_DUAL_VOLUME,
     NozzleLayout::Dual,
     H2D_PRO_MIN_REMOTE_DRY_FIRMWARE,
+    &["O1E", "O1D"],
 );
 /// H2C: Vortek tool-changer platform (6 rack nozzles + 1 fixed nozzle).
 pub(crate) const H2C: ModelQuirks = h2(
     H2_DUAL_VOLUME,
     NozzleLayout::Rack { nozzles: 7 },
     H2S_H2C_MIN_REMOTE_DRY_FIRMWARE,
+    &["O1C", "O1C2"],
 );

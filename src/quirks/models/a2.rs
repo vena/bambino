@@ -30,6 +30,7 @@ pub(crate) const A2L: ModelQuirks = ModelQuirks {
     prompt_sound: true,
     auxiliary_left_fan: false,
     auto_flow_calibration: true,
+    sliced_for: &["N9"],
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume {

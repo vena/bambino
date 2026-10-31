@@ -8,7 +8,7 @@ use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
 use crate::quirks::{
     BedMax, BuildVolume, DoorSensor, DryRule, FEEDRATE_20_MM_S, FEEDRATE_500_MM_S, ModelQuirks,
-    SafetyLimits,
+    SafetyLimits, X1_P1_SLICED_FOR,
 };
 
 /// Build volume Z depth (mm) shared by X1, X1C and X1E, per `MODEL_MATRIX.csv`'s Build Volume row.
@@ -76,6 +76,7 @@ pub(crate) const X1C: ModelQuirks = ModelQuirks {
     store_sent_files: true,
     ai_monitoring: true,
     first_layer_inspect: true,
+    sliced_for: X1_P1_SLICED_FOR,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(X1_Z_MAX),
@@ -117,6 +118,7 @@ pub(crate) const X1E: ModelQuirks = ModelQuirks {
     chamber_temperature_sensor: true,
     ai_monitoring: true,
     first_layer_inspect: true,
+    sliced_for: X1_P1_SLICED_FOR,
     ..ModelQuirks::new(
         SafetyLimits {
             volume: BuildVolume::cube(X1_Z_MAX),

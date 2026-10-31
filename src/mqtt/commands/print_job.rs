@@ -197,6 +197,44 @@ pub enum JobFileLocation {
     InternalStorage,
 }
 
+/// Which printer model a job's `.3mf` was sliced for, as [`PrinterClient::start_print`](crate::client::PrinterClient::start_print) checks it.
+///
+/// A slicer writes the printer type id into the file (`printer_model_id` in
+/// `Metadata/slice_info.config`), and a file sliced for another model carries that model's start
+/// G-code. An A1 file started on a P1S drove the carriage to X -48.2 with the soft endstops off,
+/// into the frame, and skipped the belts (#657); the P1S's own start G-code never goes below
+/// X 18. BambuStudio blocks that send (`SelectMachineDialog::is_blocking_printing`,
+/// `SelectMachine.cpp`), for a fresh slice and for a file already on the printer, whose plate
+/// `printer_model_id` it fetches through the file tunnel; bambino refuses where Studio blocks.
+///
+/// Read the id with [`read_sliced_for`](crate::ftps::project::read_sliced_for), or take
+/// [`PrinterFile::sliced_for`](crate::client::PrinterFile::sliced_for) from
+/// [`PrinterClient::upload_file`](crate::client::PrinterClient::upload_file), and pass it to
+/// [`PrintJobConfig::sliced_for`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SlicedFor {
+    /// The caller gave no model for the file, so [`start_print`](crate::client::PrinterClient::start_print)
+    /// refuses with [`Error::ModelMismatch`]. The default.
+    ///
+    /// BambuStudio checks a file already on the printer by fetching its `slice_info.config`
+    /// through the file tunnel. bambino can't until the tunnel arm lands (#636), and over FTPS
+    /// only by downloading the whole file (FTPS has no `REST`), so the caller supplies the id or
+    /// overrides with [`PrintJobConfig::model_unchecked`].
+    #[default]
+    NotSupplied,
+    /// The file's own `printer_model_id`, or `None` for a sliced file that records none.
+    ///
+    /// `Some(id)` is refused unless the printer's model accepts it
+    /// ([`ModelQuirks::accepts_sliced_for`](crate::quirks::ModelQuirks::accepts_sliced_for)),
+    /// and `None` is refused outright: a file that doesn't say what it was sliced for can't be
+    /// told from a mismatched one.
+    Model(Option<String>),
+    /// The caller overrode the check, so the job is sent with a `log::warn!`.
+    ///
+    /// See [`PrintJobConfig::model_unchecked`] before using it.
+    Unchecked,
+}
+
 /// The `url` prefix of a job on internal storage, after its file name is appended.
 const INTERNAL_STORAGE_URL_PREFIX: &str = "brtc://emmc/";
 /// The `url` prefix of a job on the card.
@@ -253,6 +291,15 @@ pub struct PrintJobConfig {
     /// Where the printer finds the file; [`JobFileLocation::Card`] unless
     /// [`from_internal_storage`](Self::from_internal_storage) was called.
     pub file_location: JobFileLocation,
+    /// The printer model the file was sliced for, which
+    /// [`start_print`](crate::client::PrinterClient::start_print) checks against the printer's own.
+    ///
+    /// [`SlicedFor::NotSupplied`] unless [`sliced_for`](Self::sliced_for) or
+    /// [`model_unchecked`](Self::model_unchecked) was called, and then `start_print` refuses.
+    /// **Every config must say**: the id is only known to a caller that read the file, so one
+    /// printing a `.3mf` already on the printer reads a local copy with
+    /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) or overrides.
+    pub sliced_for: SlicedFor,
 }
 
 impl PrintJobConfig {
@@ -293,7 +340,35 @@ impl PrintJobConfig {
             nozzle_rack: None,
             pa_profile_shared_by_type: None,
             file_location: JobFileLocation::Card,
+            sliced_for: SlicedFor::NotSupplied,
         }
+    }
+
+    /// Supplies the printer type id the file was sliced for, so [`start_print`](crate::client::PrinterClient::start_print) can refuse a file for another model.
+    ///
+    /// `Some(id)` is the file's `printer_model_id`, from
+    /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) or
+    /// [`PrinterFile::sliced_for`](crate::client::PrinterFile::sliced_for). `None` says the file
+    /// was read and records no id, which is refused like a mismatch. See [`SlicedFor`].
+    #[must_use]
+    pub fn sliced_for(mut self, printer_model_id: Option<String>) -> Self {
+        self.sliced_for = SlicedFor::Model(printer_model_id);
+        self
+    }
+
+    /// Sends the job even when the file was sliced for another model, or records none.
+    ///
+    /// Also what to call when the file's id can't be had: a `.3mf` already on the printer.
+    ///
+    /// **Don't add this casually.** A file's start G-code is written for the model it was sliced
+    /// for. An A1 file started on a P1S turned the soft endstops off and drove X to -48.2, 66 mm
+    /// past anything the P1S's own start G-code commands, into the frame, and the belts skipped
+    /// (#657). Use it only when the printer's own model really accepts the file, such as a
+    /// model BambuStudio doesn't list as compatible but you know is.
+    #[must_use]
+    pub fn model_unchecked(mut self) -> Self {
+        self.sliced_for = SlicedFor::Unchecked;
+        self
     }
 
     /// Prints `job_filename` from internal storage, where [`FileTunnelClient::upload`](crate::file_tunnel::FileTunnelClient::upload) to `emmc` put it, instead of from the card.

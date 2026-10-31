@@ -155,7 +155,8 @@ async fn test_start_print_wire_payload() {
         "Test Print",
         1718626458000,
         "textured",
-    );
+    )
+    .model_unchecked();
     client
         .start_print(&config)
         .await
@@ -194,6 +195,68 @@ async fn test_start_print_refuses_pa_profile_sharing_without_support() {
         Err(Error::ModelMismatch(_))
     ));
     broker_task.await.expect("P1S broker task panicked");
+}
+
+fn model_job() -> PrintJobConfig {
+    PrintJobConfig::new(
+        "job.3mf",
+        "Metadata/plate_1.gcode",
+        "Test Print",
+        12345,
+        "textured",
+    )
+}
+
+/// A file with no recorded model, one sliced for another model, or a config that never says, is refused with nothing published (#657).
+#[tokio::test]
+async fn test_start_print_refuses_a_file_for_another_model_without_publishing() {
+    let (mut client, broker_task) = connect_idle_client(PrinterModel::P1S).await;
+    // An A1 file on a P1S, the incident.
+    let a1_file = model_job().sliced_for(Some("N2S".to_string()));
+    let refused = client.start_print(&a1_file).await;
+    assert!(
+        matches!(&refused, Err(Error::ModelMismatch(m)) if m.contains("N2S") && m.contains("P1S")),
+        "{refused:?}"
+    );
+    // A sliced file known to carry no id.
+    let no_id = model_job().sliced_for(None);
+    assert!(matches!(
+        client.start_print(&no_id).await,
+        Err(Error::ModelMismatch(_))
+    ));
+    // A config that never said what the file was sliced for.
+    let refused = client.start_print(&model_job()).await;
+    assert!(
+        matches!(&refused, Err(Error::ModelMismatch(m)) if m.contains("model_unchecked")),
+        "{refused:?}"
+    );
+    broker_task.await.expect("P1S broker task panicked");
+}
+
+/// Compatible and overridden models publish the `project_file`.
+#[tokio::test]
+async fn test_start_print_sends_for_compatible_unsupplied_and_unchecked_models() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            for _ in 0..3 {
+                let json = read_publish_payload(&mut server_stream).await;
+                assert_eq!(json["print"]["command"], "project_file");
+            }
+        })
+        .await;
+    for config in [
+        // X1 Carbon file on a P1S: BambuStudio lists them as compatible.
+        model_job().sliced_for(Some("BL-P001".to_string())),
+        model_job().sliced_for(Some("C12".to_string())),
+        // Explicit override, even for the incident's file.
+        model_job()
+            .sliced_for(Some("N2S".to_string()))
+            .model_unchecked(),
+    ] {
+        client.start_print(&config).await.expect("start_print");
+    }
+    broker_task.await.expect("Broker task panicked");
 }
 
 /// The PA capability answers follow the printer's report, and a supported switch reaches the wire.
@@ -246,7 +309,8 @@ async fn test_pa_capabilities_follow_report_and_gate_the_job_field() {
         "textured",
     )
     .flow_calibration(CalibrationMode::Auto)
-    .pa_profile_sharing(false);
+    .pa_profile_sharing(false)
+    .model_unchecked();
     client
         .start_print(&config)
         .await
@@ -279,7 +343,8 @@ async fn test_start_print_idex_nozzle_offset_default() {
         12345,
         "textured",
     )
-    .with_ams(vec![0, -1]);
+    .with_ams(vec![0, -1])
+    .model_unchecked();
     client
         .start_print(&config)
         .await
@@ -311,7 +376,8 @@ async fn test_start_print_single_nozzle_overrides_nozzle_offset_off() {
         12345,
         "textured",
     )
-    .nozzle_offset_calibration(true);
+    .nozzle_offset_calibration(true)
+    .model_unchecked();
     client
         .start_print(&config)
         .await

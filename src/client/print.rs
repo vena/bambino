@@ -6,10 +6,40 @@ use alloc::vec::Vec;
 use super::{CommandHandle, PrinterClient};
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::models::PrinterModel;
 use crate::mqtt::commands::CalibrationMode;
 use crate::mqtt::commands::{IdleIgnoreScope, StandardCommand};
-use crate::mqtt::{PrintJobConfig, StandardControlRequest};
+use crate::mqtt::{PrintJobConfig, SlicedFor, StandardControlRequest};
 use crate::types::control::{CalibrationOption, PrintSpeed, PrintStatus};
+
+/// Refuses a sliced file whose `printer_model_id` `model` doesn't accept, or that has none, naming `override_hint` as the way past it.
+///
+/// Shared by [`PrinterClient::start_print`] and [`PrinterClient::upload_file`]; see
+/// [`SlicedFor`] for the incident (#657).
+pub(super) fn refuse_unaccepted_model(
+    model: PrinterModel,
+    printer_model_id: Option<&str>,
+    override_hint: &str,
+) -> Result<(), Error> {
+    match printer_model_id {
+        Some(id) if model.quirks().accepts_sliced_for(id) => Ok(()),
+        Some(id) => Err(Error::ModelMismatch(
+            format!(
+                "the file was sliced for printer model id {id:?}, which this printer ({model}) \
+                 does not accept: its start G-code can drive the carriage into the frame (#657). \
+                 Slice it for this printer, or override with {override_hint}"
+            )
+            .into(),
+        )),
+        None => Err(Error::ModelMismatch(
+            format!(
+                "the file records no printer_model_id, so it can't be checked against this \
+                 printer ({model}). Slice it for this printer, or override with {override_hint}"
+            )
+            .into(),
+        )),
+    }
+}
 
 impl<
     MqttRawIO,
@@ -337,6 +367,22 @@ where
     /// [`Error::ModelMismatch`] when flow calibration is `CalibrationMode::Auto` and
     /// [`Capabilities::pa_calibration_auto_support`](crate::client::Capabilities::pa_calibration_auto_support)
     /// does not allow it. BambuStudio offers Auto only where it does.
+    ///
+    /// [`Error::ModelMismatch`] when the config's [`sliced_for`](PrintJobConfig::sliced_for) names
+    /// a printer model this printer doesn't accept
+    /// ([`ModelQuirks::accepts_sliced_for`](crate::quirks::ModelQuirks::accepts_sliced_for)), or
+    /// says the file records none. Nothing is published. An A1 file started on a P1S drove the
+    /// carriage into the frame (#657). [`PrintJobConfig::model_unchecked`] overrides it, with a
+    /// `log::warn!`.
+    ///
+    /// **A config that never said what the file was sliced for is refused too**, like
+    /// BambuStudio's `is_blocking_printing`. Supply the id: take it from
+    /// [`PrinterFile::sliced_for`](crate::client::PrinterFile::sliced_for) after
+    /// [`upload_file`](Self::upload_file), or from
+    /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) on a local copy; or call
+    /// [`PrintJobConfig::model_unchecked`]. BambuStudio reads an on-printer file's
+    /// `slice_info.config` through the file tunnel; bambino can't until that arm lands (#636),
+    /// and over FTPS only by a full download (FTPS has no `REST`).
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error> {
         if config.run_flow_calibration == CalibrationMode::Auto {
             let support = self.capabilities().pa_calibration_auto_support();
@@ -359,6 +405,29 @@ where
             }
         }
         let model = self.core.identity.model;
+        match &config.sliced_for {
+            SlicedFor::NotSupplied => {
+                return Err(Error::ModelMismatch(
+                    format!(
+                        "{} was not checked against this printer ({model}): the config doesn't \
+                         say what model the file was sliced for. Supply it with \
+                         PrintJobConfig::sliced_for, from PrinterFile::sliced_for after \
+                         upload_file or read_sliced_for on a local copy, or call \
+                         PrintJobConfig::model_unchecked()",
+                        config.job_filename
+                    )
+                    .into(),
+                ));
+            }
+            SlicedFor::Model(id) => {
+                refuse_unaccepted_model(model, id.as_deref(), "PrintJobConfig::model_unchecked()")?
+            }
+            SlicedFor::Unchecked => log::warn!(
+                "start_print: sending {} without checking the model it was sliced for \
+                 (printer {model}); a file for another model can drive the carriage into the frame",
+                config.job_filename
+            ),
+        }
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))
             .await
     }

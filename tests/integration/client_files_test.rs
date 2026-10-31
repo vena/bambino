@@ -6,8 +6,8 @@
 use std::sync::atomic::Ordering;
 
 use bambino::client::{
-    DummyFactory, DummyRawIo, DummyTimer, DummyTls, FileKind, FileTime, PrinterClient, PrinterFile,
-    StorageKind,
+    DummyFactory, DummyRawIo, DummyTimer, DummyTls, FileKind, FileTime, ModelCheck, PrinterClient,
+    PrinterFile, StorageKind,
 };
 use bambino::error::Error;
 use bambino::ftps::FtpTimestamp;
@@ -694,7 +694,12 @@ async fn test_upload_file_returns_the_card_root_file_with_its_mdtm_time() {
         .await;
     let file = fx
         .client
-        .upload_file(StorageKind::External, "job.3mf", &b"0123456789"[..])
+        .upload_file(
+            StorageKind::External,
+            "job.3mf",
+            &b"0123456789"[..],
+            ModelCheck::Skip,
+        )
         .await
         .expect("upload");
     assert_eq!(file.name, "job.3mf");
@@ -731,7 +736,12 @@ async fn test_upload_file_without_mdtm_has_an_unknown_time() {
         .await;
     let file = fx
         .client
-        .upload_file(StorageKind::External, "job.3mf", &b"abc"[..])
+        .upload_file(
+            StorageKind::External,
+            "job.3mf",
+            &b"abc"[..],
+            ModelCheck::Skip,
+        )
         .await
         .expect("upload");
     assert_eq!(file.modified, FileTime::Unknown);
@@ -744,13 +754,18 @@ async fn test_upload_file_refuses_internal_storage_and_bad_names_without_sending
     let mut fx = Fixture::new();
     let result = fx
         .client
-        .upload_file(StorageKind::Internal, "job.3mf", &b"abc"[..])
+        .upload_file(
+            StorageKind::Internal,
+            "job.3mf",
+            &b"abc"[..],
+            ModelCheck::Skip,
+        )
         .await;
     assert!(matches!(result, Err(Error::NotConfigured(_))), "{result:?}");
     for name in ["", "a/b.3mf", "/job.3mf", "job.gcode", "3mf"] {
         let result = fx
             .client
-            .upload_file(StorageKind::External, name, &b"abc"[..])
+            .upload_file(StorageKind::External, name, &b"abc"[..], ModelCheck::Skip)
             .await;
         assert!(
             matches!(result, Err(Error::InvalidArgument(_))),
@@ -758,4 +773,135 @@ async fn test_upload_file_refuses_internal_storage_and_bad_names_without_sending
         );
     }
     assert!(!fx.client.is_ftps_connected());
+}
+
+/// A stored-member ZIP holding `Metadata/slice_info.config`, enough for `read_sliced_for`.
+fn sliced_3mf(printer_model_id: Option<&str>) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
+            }
+        }
+        !crc
+    }
+    let id = printer_model_id
+        .map(|id| format!("<metadata key=\"printer_model_id\" value=\"{id}\"/>"))
+        .unwrap_or_default();
+    let xml = format!("<config><plate><metadata key=\"index\" value=\"1\"/>{id}</plate></config>");
+    let name = b"Metadata/slice_info.config";
+    let crc = crc32(xml.as_bytes());
+    let size = xml.len() as u32;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"PK\x03\x04");
+    out.extend_from_slice(&20u16.to_le_bytes());
+    out.extend_from_slice(&[0; 2]); // flags
+    out.extend_from_slice(&0u16.to_le_bytes()); // stored
+    out.extend_from_slice(&[0; 4]); // time, date
+    out.extend_from_slice(&crc.to_le_bytes());
+    out.extend_from_slice(&size.to_le_bytes());
+    out.extend_from_slice(&size.to_le_bytes());
+    out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(name);
+    out.extend_from_slice(xml.as_bytes());
+    let cd_offset = out.len() as u32;
+    let mut central = Vec::new();
+    central.extend_from_slice(b"PK\x01\x02");
+    central.extend_from_slice(&20u16.to_le_bytes());
+    central.extend_from_slice(&20u16.to_le_bytes());
+    central.extend_from_slice(&[0; 2]);
+    central.extend_from_slice(&0u16.to_le_bytes());
+    central.extend_from_slice(&[0; 4]);
+    central.extend_from_slice(&crc.to_le_bytes());
+    central.extend_from_slice(&size.to_le_bytes());
+    central.extend_from_slice(&size.to_le_bytes());
+    central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+    central.extend_from_slice(&[0; 2 + 2 + 2 + 2 + 4]);
+    central.extend_from_slice(&0u32.to_le_bytes());
+    central.extend_from_slice(name);
+    out.extend_from_slice(&central);
+    out.extend_from_slice(b"PK\x05\x06");
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    out.extend_from_slice(&cd_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+#[tokio::test]
+async fn test_upload_file_refuses_a_file_for_another_model_before_any_transfer() {
+    // The script has no steps, and no session is queued: any FTPS use fails the test.
+    let mut fx = Fixture::new();
+    for id in [Some("N2S"), None] {
+        let file = sliced_3mf(id);
+        let result = fx
+            .client
+            .upload_file(
+                StorageKind::External,
+                "job.3mf",
+                &file[..],
+                ModelCheck::Enforce,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Error::ModelMismatch(_))),
+            "{id:?}: {result:?}"
+        );
+    }
+    assert!(!fx.client.is_ftps_connected());
+}
+
+#[tokio::test]
+async fn test_upload_file_enforce_accepts_a_compatible_model_and_reports_its_id() {
+    let mut fx = Fixture::new();
+    let file = sliced_3mf(Some("BL-P001"));
+    let server = fx
+        .session(vec![
+            Step::Stor("/job.3mf".into(), file.len()),
+            Step::expect("SIZE /job.3mf", &format!("213 {}", file.len())),
+            Step::expect("MDTM /job.3mf", "502 Not implemented."),
+        ])
+        .await;
+    let uploaded = fx
+        .client
+        .upload_file(
+            StorageKind::External,
+            "job.3mf",
+            &file[..],
+            ModelCheck::Enforce,
+        )
+        .await
+        .expect("upload");
+    assert_eq!(uploaded.sliced_for.as_deref(), Some("BL-P001"));
+    server.await.expect("FTPS mock panicked");
+}
+
+#[tokio::test]
+async fn test_upload_file_skip_uploads_a_file_for_another_model() {
+    let mut fx = Fixture::new();
+    let file = sliced_3mf(Some("N2S"));
+    let server = fx
+        .session(vec![
+            Step::Stor("/job.3mf".into(), file.len()),
+            Step::expect("SIZE /job.3mf", &format!("213 {}", file.len())),
+            Step::expect("MDTM /job.3mf", "502 Not implemented."),
+        ])
+        .await;
+    let uploaded = fx
+        .client
+        .upload_file(
+            StorageKind::External,
+            "job.3mf",
+            &file[..],
+            ModelCheck::Skip,
+        )
+        .await
+        .expect("upload");
+    assert_eq!(uploaded.sliced_for.as_deref(), Some("N2S"));
+    server.await.expect("FTPS mock panicked");
 }

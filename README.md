@@ -179,15 +179,25 @@ match printer.await_ack(&handle).await? {
 ### Print jobs
 
 ```rust
+use bambino::client::{ModelCheck, StorageKind};
 use bambino::mqtt::PrintJobConfig;
 
+// upload_file refuses a file sliced for another printer model before sending anything, and
+// returns the id the file was sliced for.
+let file = printer
+    .upload_file(StorageKind::External, "job.3mf", &file_bytes[..], ModelCheck::Enforce)
+    .await?;
+
 let config = PrintJobConfig::new(
-    "job.3mf",                      // file on SD card
+    &file.name,                     // file on SD card
     "Metadata/plate_1.gcode",       // plate gcode path inside the 3mf
     "My Print",                     // task name
     12345,                          // subtask ID
     "textured_plate",               // bed type
 )
+// start_print refuses a config that doesn't say what model the file was sliced for.
+// For a file already on the printer, use `read_sliced_for` on a local copy or `.model_unchecked()`.
+.sliced_for(file.sliced_for.clone())
 // One entry per filament the plate uses, in slicer order. Each value is a flat channel ID
 // (`ams_id * 4 + slot_id`, so 0..=15 for standard AMS, 128..=135 for AMS-HT) or -1 for
 // "not fed from the AMS". Out-of-range values are folded to -1 with a warning.
@@ -195,6 +205,8 @@ let config = PrintJobConfig::new(
 
 printer.start_print(&config).await?;
 ```
+
+**A file sliced for another printer model is refused.** Its start G-code is written for that model: an A1 file started on a P1S turned the soft endstops off and drove X to -48.2, into the frame, and the belts skipped (#657). `upload_file` and `start_print` return `Error::ModelMismatch` when the file's `printer_model_id` is not the printer's own or one BambuStudio lists as compatible (the X1 and P1 line accept each other, and so do H2D and H2D Pro), and when the file records none. This is BambuStudio's blocking rule. `start_print` also refuses a `PrintJobConfig` that never says what the file was sliced for. `ModelCheck::Skip` and `PrintJobConfig::model_unchecked()` override it; don't use them casually. BambuStudio reads a file already on the printer through the file tunnel; bambino can't fetch it that way yet (#636), so for such a file read an id from a local copy with `bambino::ftps::project::read_sliced_for`, or use `model_unchecked()`.
 
 Bed leveling and flow calibration run automatically as part of the print (enabled by default in `PrintJobConfig`), and so do **timelapse recording and first-layer inspection**: turn those off with `.timelapse(false)` / `.layer_inspect(false)`. `.with_ams(..)` and `.with_ams_mapping2(..)` set one mapping source; whichever is called last wins. Vibration compensation is off by default on every model, matching BambuStudio, which always sends `vibration_cali: false`; opt in with `.vibration_compensation(true)`. Use the builder methods to change them—they take either a `bool` or a `CalibrationMode` (`Off`/`On`/`Auto`, matching BambuStudio's tri-state encoding):
 

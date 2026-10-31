@@ -30,5 +30,6 @@ pub use commands::{
     CleanPrintErrorRequest, DryingParams, GCodeRequest, GetAccessCodeRequest, GetVersionRequest,
     HmsActionRequest, IdleIgnoreRequest, JobFileLocation, LedCtrlRequest, NozzleRack,
     PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest, PushAllRequest,
-    SkipObjectsRequest, StandardControlRequest, UiopRequest, resolve_rack_nozzle_mapping,
+    SkipObjectsRequest, SlicedFor, StandardControlRequest, UiopRequest,
+    resolve_rack_nozzle_mapping,
 };

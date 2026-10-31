@@ -351,6 +351,13 @@ pub(crate) struct SafetyLimits {
     pub max_feedrate_z: u32,
 }
 
+/// The printer type ids BambuStudio lists as mutually compatible across the X1 and P1 lines, which each of those five models accepts in `printer_model_id`.
+///
+/// `compatible_machine` under `00.00.00.00` in BambuStudio's `resources/printers/BL-P001.json`
+/// (X1 Carbon), `BL-P002.json` (X1), `C11.json` (P1P), `C12.json` (P1S) and `C13.json` (X1E):
+/// each lists the other four, so each model accepts all five ids.
+pub(crate) const X1_P1_SLICED_FOR: &[&str] = &["BL-P001", "BL-P002", "C11", "C12", "C13"];
+
 /// One printer model's hardware variations and transport exceptions, as data.
 ///
 /// Get one from [`PrinterModel::quirks()`]. Every model is one `const` row in
@@ -392,6 +399,7 @@ pub struct ModelQuirks {
     buzzer: bool,
     pa_calibration_bits_trusted: bool,
     auto_flow_calibration: bool,
+    sliced_for: &'static [&'static str],
 }
 
 impl ModelQuirks {
@@ -399,7 +407,8 @@ impl ModelQuirks {
     ///
     /// Defaults: encrypted FTPS data channel, no TLS 1.2 cap, no door sensor, no chamber
     /// temperature sensor, one nozzle, no heatbed thermal calibration, RTP timestamps, a primary
-    /// left auxiliary fan and nothing else optional.
+    /// left auxiliary fan and nothing else optional. It accepts no sliced file's `printer_model_id`
+    /// ([`accepts_sliced_for`](Self::accepts_sliced_for)); a row sets `sliced_for` to its own.
     pub(crate) const fn new(
         limits: SafetyLimits,
         camera: CameraProtocol,
@@ -436,7 +445,33 @@ impl ModelQuirks {
             buzzer: false,
             pa_calibration_bits_trusted: true,
             auto_flow_calibration: false,
+            sliced_for: &[],
         }
+    }
+
+    /// Whether a sliced file whose `printer_model_id` is `printer_model_id` may be printed on this model.
+    ///
+    /// `printer_model_id` is the printer type id a slicer writes into a `.gcode.3mf`'s
+    /// `Metadata/slice_info.config` (BambuStudio's `PRINTER_MODEL_ID_ATTR`, `bbs_3mf.cpp`), such as
+    /// `"C12"` for a P1S or `"N2S"` for an A1. A model accepts its own ids plus its
+    /// `compatible_machine` list from BambuStudio's `resources/printers/<type>.json`, read at
+    /// `00.00.00.00`: X1 Carbon `BL-P001`, X1 `BL-P002`, P1P `C11`, P1S `C12` and X1E `C13` accept
+    /// each other; H2C `O1C` and `O1C2` accept each other; H2D `O1D` and H2D Pro `O1E` accept each
+    /// other. Every other model's list is empty, so it accepts only its own id. The fallback row
+    /// for an unrecognized model accepts nothing.
+    ///
+    /// Compared ignoring ASCII case, as [`resolve_model`](crate::resolve_model) compares a
+    /// `dev_model`. This is BambuStudio's blocking rule: `SelectMachineDialog::is_blocking_printing`
+    /// (`SelectMachine.cpp`) refuses to send (`PrintStatusUnsupportedPrinter`) when the file's
+    /// model differs from the printer's and is not in the printer's compatible list
+    /// (`MachineObject::get_compatible_machine`, `DevPrinterConfigUtil::get_compatible_machine`).
+    /// An empty id fails that comparison too. An A1 file's start G-code drove a P1S's carriage
+    /// into its frame (#657).
+    #[must_use]
+    pub fn accepts_sliced_for(&self, printer_model_id: &str) -> bool {
+        self.sliced_for
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case(printer_model_id))
     }
 
     /// Returns true if this model requires a plaintext FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
@@ -1313,6 +1348,95 @@ mod tests {
     use super::*;
     use crate::camera::CameraProtocol;
     use crate::models::PrinterModel;
+
+    #[test]
+    fn test_each_model_accepts_its_own_sliced_for_id() {
+        for (model, id) in [
+            (PrinterModel::X1C, "BL-P001"),
+            (PrinterModel::X1, "BL-P002"),
+            (PrinterModel::P1P, "C11"),
+            (PrinterModel::P1S, "C12"),
+            (PrinterModel::X1E, "C13"),
+            (PrinterModel::A1Mini, "N1"),
+            (PrinterModel::A1, "N2S"),
+            (PrinterModel::X2D, "N6"),
+            (PrinterModel::P2S, "N7"),
+            (PrinterModel::A2L, "N9"),
+            (PrinterModel::H2C, "O1C"),
+            (PrinterModel::H2C, "O1C2"),
+            (PrinterModel::H2D, "O1D"),
+            (PrinterModel::H2DPro, "O1E"),
+            (PrinterModel::H2S, "O1S"),
+        ] {
+            assert!(
+                model.quirks().accepts_sliced_for(id),
+                "{model} rejects {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sliced_for_compatible_lists_match_bambustudio() {
+        // The X1/P1 line accepts each other, and a file sliced for the A1 is refused (#657).
+        for model in [
+            PrinterModel::X1C,
+            PrinterModel::X1,
+            PrinterModel::X1E,
+            PrinterModel::P1P,
+            PrinterModel::P1S,
+        ] {
+            for id in ["BL-P001", "BL-P002", "C11", "C12", "C13"] {
+                assert!(
+                    model.quirks().accepts_sliced_for(id),
+                    "{model} rejects {id}"
+                );
+            }
+            for id in ["N1", "N2S", "O1D", "N7"] {
+                assert!(
+                    !model.quirks().accepts_sliced_for(id),
+                    "{model} accepts {id}"
+                );
+            }
+        }
+        assert!(!PrinterModel::P1S.quirks().accepts_sliced_for("N2S"));
+        assert!(PrinterModel::H2D.quirks().accepts_sliced_for("O1E"));
+        assert!(PrinterModel::H2DPro.quirks().accepts_sliced_for("O1D"));
+        assert!(PrinterModel::H2C.quirks().accepts_sliced_for("O1C2"));
+        assert!(!PrinterModel::H2C.quirks().accepts_sliced_for("O1D"));
+        assert!(!PrinterModel::H2S.quirks().accepts_sliced_for("O1D"));
+        assert!(!PrinterModel::A1.quirks().accepts_sliced_for("N1"));
+        assert!(!PrinterModel::A1Mini.quirks().accepts_sliced_for("N2S"));
+        assert!(!PrinterModel::P1S.quirks().accepts_sliced_for(""));
+    }
+
+    #[test]
+    fn test_sliced_for_ignores_ascii_case() {
+        assert!(PrinterModel::P1S.quirks().accepts_sliced_for("c12"));
+        assert!(PrinterModel::A1.quirks().accepts_sliced_for("n2s"));
+    }
+
+    #[test]
+    fn test_unknown_accepts_no_sliced_for_id() {
+        for id in ["BL-P001", "C12", "N2S", "O1D", ""] {
+            assert!(
+                !PrinterModel::Unknown.quirks().accepts_sliced_for(id),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_every_accepted_sliced_for_id_is_a_known_model_token() {
+        for model in crate::models::supported_models() {
+            for id in model.quirks().sliced_for {
+                assert_ne!(
+                    crate::models::resolve_model("", Some(id)),
+                    PrinterModel::Unknown,
+                    "{model}: {id} is no model's dev token"
+                );
+            }
+        }
+    }
 
     /// A reported `fun2` bit 5 outranks every model rule, in both directions. Checked against a
     /// firmware-gated model and against the P1 override, so neither can quietly stop honoring

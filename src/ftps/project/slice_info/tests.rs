@@ -334,3 +334,91 @@ async fn test_read_plate_filaments_refuses_zip64_and_oversized_members() {
         other => panic!("{other:?}"),
     }
 }
+
+fn model_xml(ids: &[&str]) -> String {
+    let mut xml = String::from("<config>\n");
+    for (i, id) in ids.iter().enumerate() {
+        xml.push_str(&format!(
+            "  <plate>\n    <metadata key=\"index\" value=\"{}\"/>\n    \
+             <metadata key=\"printer_model_id\" value=\"{id}\"/>\n  </plate>\n",
+            i + 1
+        ));
+    }
+    xml.push_str("</config>\n");
+    xml
+}
+
+#[test]
+fn test_parse_reads_printer_model_id_and_empty_is_none() {
+    let xml = model_xml(&["N2S", ""]);
+    assert_eq!(
+        parse_slice_info(&xml, 1)
+            .unwrap()
+            .printer_model_id
+            .as_deref(),
+        Some("N2S")
+    );
+    assert_eq!(parse_slice_info(&xml, 2).unwrap().printer_model_id, None);
+    // A plate with no such metadata at all.
+    assert_eq!(parse_slice_info(XML, 1).unwrap().printer_model_id, None);
+}
+
+#[test]
+fn test_parse_sliced_for() {
+    assert_eq!(
+        parse_sliced_for(&model_xml(&["C12", "C12"]))
+            .unwrap()
+            .as_deref(),
+        Some("C12")
+    );
+    assert_eq!(parse_sliced_for(&model_xml(&[""])).unwrap(), None);
+    assert_eq!(parse_sliced_for(XML).unwrap(), None);
+    let disagree = parse_sliced_for(&model_xml(&["C12", "N2S"]));
+    assert!(
+        matches!(disagree, Err(Error::ProtocolViolation(_))),
+        "{disagree:?}"
+    );
+    let mixed = parse_sliced_for(&model_xml(&["C12", ""]));
+    assert!(
+        matches!(mixed, Err(Error::ProtocolViolation(_))),
+        "{mixed:?}"
+    );
+    let unsliced = parse_sliced_for("<config><header/></config>");
+    assert!(
+        matches!(unsliced, Err(Error::InvalidArgument(_))),
+        "{unsliced:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_read_sliced_for_from_a_zip() {
+    let xml = model_xml(&["N2S"]);
+    let file = zip(
+        &[
+            ("Metadata/plate_1.png", 0, b"x"),
+            (
+                "Metadata/slice_info.config",
+                ZIP_METHOD_DEFLATE,
+                xml.as_bytes(),
+            ),
+        ],
+        b"",
+    );
+    assert_eq!(
+        read_sliced_for(&file[..]).await.unwrap().as_deref(),
+        Some("N2S")
+    );
+    let xml = model_xml(&["N2S", "C12"]);
+    let file = zip(
+        &[(
+            "Metadata/slice_info.config",
+            ZIP_METHOD_STORED,
+            xml.as_bytes(),
+        )],
+        b"",
+    );
+    assert!(matches!(
+        read_sliced_for(&file[..]).await,
+        Err(Error::ProtocolViolation(_))
+    ));
+}

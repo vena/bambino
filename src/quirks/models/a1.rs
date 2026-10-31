@@ -33,8 +33,9 @@ pub const A1_MINI_BED_TEMP_MAX: u16 = 80;
 /// series takes AMS 2 Pro and AMS-HT units from a shared pool of 4 (`MODEL_MATRIX.csv`,
 /// `reference/05_materials_ams.md`). The A1 family sends no `fun2`, so the reported-bit stage
 /// never engages, but it is honored like every other model's.
-const fn a1(side: f32, bed_max: u16) -> ModelQuirks {
+const fn a1(side: f32, bed_max: u16, sliced_for: &'static [&'static str]) -> ModelQuirks {
     ModelQuirks {
+        sliced_for,
         plaintext_ftps_data_channel: true,
         prompt_sound: true,
         auxiliary_left_fan: false,
@@ -60,6 +61,6 @@ const fn a1(side: f32, bed_max: u16) -> ModelQuirks {
 }
 
 /// Full-size A1 bed-slinger.
-pub(crate) const A1: ModelQuirks = a1(A1_Z_MAX, A1_BED_TEMP_MAX);
+pub(crate) const A1: ModelQuirks = a1(A1_Z_MAX, A1_BED_TEMP_MAX, &["N2S"]);
 /// A1 Mini bed-slinger (same family, smaller build volume and bed ceiling).
-pub(crate) const A1_MINI: ModelQuirks = a1(A1_MINI_Z_MAX, A1_MINI_BED_TEMP_MAX);
+pub(crate) const A1_MINI: ModelQuirks = a1(A1_MINI_Z_MAX, A1_MINI_BED_TEMP_MAX, &["N1"]);

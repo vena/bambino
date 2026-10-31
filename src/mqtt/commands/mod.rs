@@ -40,7 +40,7 @@ pub use hardware::{
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, JobFileLocation, NozzleRack, PrintJobConfig,
-    ProjectFileRequest, resolve_rack_nozzle_mapping,
+    ProjectFileRequest, SlicedFor, resolve_rack_nozzle_mapping,
 };
 pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
 

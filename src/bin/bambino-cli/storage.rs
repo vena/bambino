@@ -11,19 +11,22 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use bambino::Error;
+use bambino::PrinterModel;
 use bambino::ams::{AmsMappingResult, MaterialSource};
 use bambino::client::{
-    CommandOutcome, FileKind, FileTime, PrintStatus, PrinterClient, PrinterFile, StorageKind,
-    UploadSource,
+    CommandOutcome, FileKind, FileTime, ModelCheck, PrintStatus, PrinterClient, PrinterFile,
+    StorageKind, UploadSource,
 };
 use bambino::ftps::CurrentDateTime;
 use bambino::ftps::project::{
     PlateFilament, front_members, pick_image_member, plate_image_member, read_plate_filaments,
+    read_sliced_for,
 };
 use bambino::io::TokioIo;
 use bambino::io::tokio::TokioTlsConnector;
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer};
 use bambino::mqtt::PrintJobConfig;
+use bambino::resolve_model;
 use clap::{Subcommand, ValueEnum};
 
 use crate::connection::{RESPONSE_TIMEOUT_SECS, Target, unix_now_secs};
@@ -161,8 +164,13 @@ pub enum FilesAction {
     /// confirmation first. It refuses if the printer is busy, and if any filament found no
     /// loaded tray unless --allow-unmatched is given: on a single-nozzle printer a mapping with
     /// nothing matched prints from the external spool.
+    ///
+    /// The table is headed by the printer type id the file was sliced for and the printer's own
+    /// model. With --print it also refuses a file sliced for a model the printer doesn't accept,
+    /// or that records none, unless --allow-other-model is given: an A1 file's start G-code drove
+    /// a P1S's carriage into the frame (#657).
     #[command(
-        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] map <LOCAL_3MF> [--plate <N>] [--print --bed-type <TYPE>] [--allow-unmatched]"
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] map <LOCAL_3MF> [--plate <N>] [--print --bed-type <TYPE>] [--allow-unmatched] [--allow-other-model]"
     )]
     Map {
         /// The sliced .3mf on this machine; its file name is the name on the printer
@@ -182,6 +190,11 @@ pub enum FilesAction {
         /// With --print, start the job even if some filament matched no loaded tray
         #[arg(long, requires = "print")]
         allow_unmatched: bool,
+        /// With --print, start the job even if the file was sliced for another printer model
+        ///
+        /// Its start G-code can drive the carriage into the frame: an A1 file did on a P1S (#657).
+        #[arg(long, requires = "print")]
+        allow_other_model: bool,
     },
 }
 
@@ -394,6 +407,7 @@ pub async fn run(
             print,
             bed_type,
             allow_unmatched,
+            allow_other_model,
         } => {
             let result = run_map(
                 &mut printer,
@@ -402,6 +416,7 @@ pub async fn run(
                 plate,
                 bed_type.filter(|_| print),
                 allow_unmatched,
+                allow_other_model,
             )
             .await;
             let _ = printer.disconnect_ftps().await;
@@ -1043,6 +1058,17 @@ fn read_file_at(file: &fs::File, offset: u64, buf: &mut [u8]) -> std::io::Result
     file.read(buf)
 }
 
+/// A file's `printer_model_id` as an operator reads it: the id and the model it names when this crate knows it.
+fn describe_sliced_for(printer_model_id: Option<&str>) -> String {
+    match printer_model_id {
+        None => String::from("(no printer_model_id in the file)"),
+        Some(id) => match resolve_model("", Some(id)) {
+            PrinterModel::Unknown => format!("{id} (unrecognized model)"),
+            model => format!("{id} ({model})"),
+        },
+    }
+}
+
 /// Where a matched filament will be fed from, as an operator reads it: "AMS 0 slot 2", "AMS-HT 128", "external left".
 fn tray_label(source: MaterialSource) -> String {
     match source {
@@ -1127,14 +1153,19 @@ async fn run_map(
     plate: u32,
     bed_type: Option<String>,
     allow_unmatched: bool,
+    allow_other_model: bool,
 ) -> Result<(), CliError> {
     let path = Path::new(local_3mf);
 
     let plate_filaments = read_plate_filaments(FileSource::open(path)?, plate).await?;
+    let sliced_for = read_sliced_for(FileSource::open(path)?).await?;
+    let printer_model = printer.model();
     println!(
         "Plate {plate} of '{local_3mf}' uses {} filament(s).",
         plate_filaments.filaments.len()
     );
+    println!("Sliced for: {}", describe_sliced_for(sliced_for.as_deref()));
+    println!("Printer model: {printer_model}");
 
     eprintln!("Connecting to {ip} port {}...", bambino::mqtt::MQTTS_PORT);
     printer.connect_mqtt().await?;
@@ -1159,6 +1190,19 @@ async fn run_map(
         return Ok(());
     };
 
+    if !allow_other_model {
+        let accepted = sliced_for
+            .as_deref()
+            .is_some_and(|id| printer_model.quirks().accepts_sliced_for(id));
+        if !accepted {
+            return Err(CliError::InvalidArgs(format!(
+                "'{local_3mf}' was sliced for {}, which this printer ({printer_model}) does not \
+                 accept. Its start G-code can drive the carriage into the frame (#657). Slice it \
+                 for this printer, or pass --allow-other-model to start anyway.",
+                describe_sliced_for(sliced_for.as_deref())
+            )));
+        }
+    }
     if plate_filaments.filaments.is_empty() {
         return Err(CliError::InvalidArgs(format!(
             "plate {plate} lists no filaments in the file; not starting a print"
@@ -1183,8 +1227,10 @@ async fn run_map(
         .ok_or_else(|| CliError::InvalidArgs(format!("'{local_3mf}' has no usable file name")))?;
 
     let prompt = format!(
-        "This uploads '{file_name}' to the printer and STARTS A REAL PRINT.\n  plate: {plate}\n  \
-         bed type: {bed_type}\n  mapping2: {mapping_json}\nType 'yes' to proceed: "
+        "This uploads '{file_name}' to the printer and STARTS A REAL PRINT.\n  sliced for: {}\n  \
+         printer model: {printer_model}\n  plate: {plate}\n  bed type: {bed_type}\n  \
+         mapping2: {mapping_json}\nType 'yes' to proceed: ",
+        describe_sliced_for(sliced_for.as_deref())
     );
     if !crate::prompt::confirm(&prompt)? {
         return Ok(());
@@ -1193,7 +1239,16 @@ async fn run_map(
     println!("Uploading '{file_name}'...");
     let started = Instant::now();
     let file = printer
-        .upload_file(StorageKind::External, file_name, FileSource::open(path)?)
+        .upload_file(
+            StorageKind::External,
+            file_name,
+            FileSource::open(path)?,
+            if allow_other_model {
+                ModelCheck::Skip
+            } else {
+                ModelCheck::Enforce
+            },
+        )
         .await?;
     print_transfer_time("upload_file", started);
     println!("Uploaded {} ({}).", file.name, format_size(file.size));
@@ -1209,6 +1264,11 @@ async fn run_map(
         &bed_type,
     )
     .with_ams_mapping2(result.mapping2);
+    let config = if allow_other_model {
+        config.model_unchecked()
+    } else {
+        config.sliced_for(file.sliced_for.clone())
+    };
     let handle = printer.start_print(&config).await?;
     println!(
         "project_file published (sequence_id {}); waiting for the printer's echo...",
