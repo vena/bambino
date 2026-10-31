@@ -55,16 +55,13 @@ const MID_JOB_PUSHALL_DELAY: Duration = Duration::from_secs(10);
 const END_PUSHALL_WAIT: Duration = Duration::from_secs(RESPONSE_TIMEOUT_SECS);
 
 /// Jobs the operator is walked through, in order: label and screen instruction.
-const JOBS: [(&str, &str); 5] = [
+const JOBS: [(&str, &str); 4] = [
     ("load", "Load filament from the printer's screen"),
     ("unload", "Unload filament from the printer's screen"),
     (
-        "bed_leveling",
-        "Run bed leveling from the printer's screen (calibration menu)",
-    ),
-    (
-        "vibration",
-        "Run vibration compensation from the printer's screen (calibration menu)",
+        "calibration",
+        "Run calibration from the printer's screen (a P1S has one option that runs the whole \
+         suite; on a printer with separate routines, add each as an extra job afterwards)",
     ),
     (
         "file_print",

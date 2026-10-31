@@ -154,7 +154,7 @@ enum Commands {
     // contributor references stay in `//` comments like this one.
     /// Record what the printer reports while you run jobs from its own screen
     ///
-    /// Walks you through load, unload, bed leveling, vibration compensation and a file print,
+    /// Walks you through load, unload, calibration and a file print, then any extra jobs you name,
     /// one at a time. For each, you start the job on the printer's screen and this records
     /// `print_type`, `subtask_name`, `gcode_state`, `gcode_file` and `mc_print_stage`. The
     /// printer must be idle when you start. The only message sent to the printer is a status
