@@ -8,18 +8,25 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bambino::Error;
-use bambino::client::{FileKind, FileTime, PrinterClient, PrinterFile};
+use bambino::ams::{AmsMappingResult, MaterialSource};
+use bambino::client::{
+    CommandOutcome, FileKind, FileTime, PrintStatus, PrinterClient, PrinterFile, StorageKind,
+    UploadSource,
+};
 use bambino::ftps::CurrentDateTime;
-use bambino::ftps::project::{front_members, pick_image_member, plate_image_member};
+use bambino::ftps::project::{
+    PlateFilament, front_members, pick_image_member, plate_image_member, read_plate_filaments,
+};
 use bambino::io::TokioIo;
 use bambino::io::tokio::TokioTlsConnector;
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer};
+use bambino::mqtt::PrintJobConfig;
 use clap::{Subcommand, ValueEnum};
 
-use crate::connection::Target;
+use crate::connection::{RESPONSE_TIMEOUT_SECS, Target, unix_now_secs};
 use crate::error::CliError;
 use crate::trust::build_cli_tls_connector;
 
@@ -141,6 +148,40 @@ pub enum FilesAction {
         probe_clock: bool,
         #[command(subcommand)]
         op: Option<CatalogOp>,
+    },
+    /// Derive an AMS mapping for a local .3mf from the printer's loaded trays, and optionally print it
+    ///
+    /// Reads plate PLATE's filaments from the start and end of LOCAL_3MF (the file is never
+    /// loaded whole), asks the printer for its state, and matches each filament to a loaded tray
+    /// the way BambuStudio does. Prints a table of the matches and the `ams_mapping2` array.
+    /// Without --print the only message sent to the printer is a status request (`pushall`).
+    ///
+    /// With --print the file is uploaded to the printer's card in chunks under its own name and
+    /// the job is started with the derived mapping. This starts a real print, so it asks for
+    /// confirmation first. It refuses if the printer is busy, and if any filament found no
+    /// loaded tray unless --allow-unmatched is given: on a single-nozzle printer a mapping with
+    /// nothing matched prints from the external spool.
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] map <LOCAL_3MF> [--plate <N>] [--print --bed-type <TYPE>] [--allow-unmatched]"
+    )]
+    Map {
+        /// The sliced .3mf on this machine; its file name is the name on the printer
+        local_3mf: String,
+        /// The plate to map and print, counted from 1
+        #[arg(long, default_value_t = 1, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+        plate: u32,
+        /// Upload the file and start the job after deriving the mapping
+        #[arg(long, requires = "bed_type")]
+        print: bool,
+        /// Bed plate type sent with the job, passed through unchecked
+        ///
+        /// Bambu Studio sends the plate the file was sliced for: textured_plate, hot_plate (smooth
+        /// PEI), cool_plate, eng_plate or supertack_plate. bambuddy sends auto.
+        #[arg(long, value_name = "TYPE", requires = "print")]
+        bed_type: Option<String>,
+        /// With --print, start the job even if some filament matched no loaded tray
+        #[arg(long, requires = "print")]
+        allow_unmatched: bool,
     },
 }
 
@@ -344,6 +385,31 @@ pub async fn run(
     let mut printer = printer
         .with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new())
         .with_ftps_allow_unverified_tls_1_2(allow_unverified_tls_1_2);
+
+    // `map` is MQTT-first and opens FTPS only to upload, so it skips the FTPS login below.
+    let action = match action {
+        FilesAction::Map {
+            local_3mf,
+            plate,
+            print,
+            bed_type,
+            allow_unmatched,
+        } => {
+            let result = run_map(
+                &mut printer,
+                &target.ip,
+                &local_3mf,
+                plate,
+                bed_type.filter(|_| print),
+                allow_unmatched,
+            )
+            .await;
+            let _ = printer.disconnect_ftps().await;
+            printer.disconnect_mqtt().await;
+            return result;
+        }
+        other => other,
+    };
 
     println!(
         "Connecting to implicitly secure FTPS server at {} port {}...",
@@ -582,6 +648,7 @@ pub async fn run(
             }
             // Dispatched to `run_catalog` above, before this session was opened.
             FilesAction::Catalog { .. } => unreachable!("catalog runs through run_catalog"),
+            FilesAction::Map { .. } => unreachable!("map runs through run_map"),
         }
         Ok(())
     }
@@ -930,6 +997,234 @@ fn print_file_listing_table(remote_path: &str, files: &[bambino::ftps::FtpFile])
     println!();
 }
 
+/// A local file read by offset as an [`UploadSource`], so an upload sends it in chunks without loading it.
+struct FileSource {
+    file: fs::File,
+    len: u64,
+    /// The file's name, for read errors.
+    name: String,
+}
+
+impl FileSource {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        let file = fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        Ok(Self { file, len, name })
+    }
+}
+
+impl UploadSource for FileSource {
+    fn len(&self) -> u64 {
+        self.len
+    }
+
+    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, Error> {
+        read_file_at(&self.file, offset, buf).map_err(|e| {
+            Error::InvalidState(format!("reading {} at offset {offset}: {e}", self.name).into())
+        })
+    }
+}
+
+/// Reads up to `buf.len()` bytes of `file` starting at `offset`; a read at or past the end returns 0.
+#[cfg(unix)]
+fn read_file_at(file: &fs::File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    std::os::unix::fs::FileExt::read_at(file, buf, offset)
+}
+
+/// Reads up to `buf.len()` bytes of `file` starting at `offset`; a read at or past the end returns 0.
+#[cfg(not(unix))]
+fn read_file_at(file: &fs::File, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = file;
+    file.seek(SeekFrom::Start(offset))?;
+    file.read(buf)
+}
+
+/// Where a matched filament will be fed from, as an operator reads it: "AMS 0 slot 2", "AMS-HT 128", "external left".
+fn tray_label(source: MaterialSource) -> String {
+    match source {
+        MaterialSource::StandardAms { ams_id, slot_id } => format!("AMS {ams_id} slot {slot_id}"),
+        MaterialSource::AmsHt { ams_id } => format!("AMS-HT {ams_id}"),
+        MaterialSource::AmsLite { slot_id } => format!("AMS Lite slot {slot_id}"),
+        MaterialSource::ExternalSpool => String::from("external spool"),
+        MaterialSource::ExternalSpoolLeft => String::from("external left"),
+        MaterialSource::ExternalSpoolRight => String::from("external right"),
+        MaterialSource::Unmapped => String::from("unmapped"),
+    }
+}
+
+/// Prints one row per filament: what the file asks for and the tray it matched, or "NO MATCH".
+fn print_mapping_table(filaments: &[PlateFilament], result: &AmsMappingResult) {
+    let mut table = crate::table::Table::new(vec![
+        "Filament",
+        "Type",
+        "Colour",
+        "tray_info_idx",
+        "Matched tray",
+        "Distance",
+    ]);
+    for (filament, found) in filaments.iter().zip(&result.matches) {
+        let id = filament.id.to_string();
+        let idx = if filament.tray_info_idx.is_empty() {
+            "-"
+        } else {
+            &filament.tray_info_idx
+        };
+        let (tray, distance) = match (found.source, found.distance) {
+            (Some(source), Some(distance)) => (tray_label(source), format!("{distance:.1}")),
+            (Some(source), None) => (tray_label(source), String::from("-")),
+            (None, _) => (String::from("NO MATCH"), String::from("-")),
+        };
+        table.add_row(vec![
+            &id,
+            &filament.filament_type,
+            &filament.color,
+            idx,
+            &tray,
+            &distance,
+        ]);
+    }
+    table.print();
+}
+
+/// Refuses unless the printer is known not to be busy: no state yet, an unrecognized one, or a busy one is a refusal.
+fn refuse_if_busy(status: Option<PrintStatus>) -> Result<(), CliError> {
+    match status {
+        Some(status) if status.is_busy() => Err(CliError::Other(format!(
+            "printer is busy (gcode_state={status:?}); not starting a print"
+        ))),
+        Some(PrintStatus::Unknown) | None => Err(CliError::Other(format!(
+            "no recognized gcode_state received within {RESPONSE_TIMEOUT_SECS}s of a pushall; \
+             cannot confirm the printer is idle, not starting a print"
+        ))),
+        Some(_) => Ok(()),
+    }
+}
+
+/// Polls telemetry until the cache holds AMS data (and a print state, if `need_state`) or `RESPONSE_TIMEOUT_SECS` pass; returns whether AMS data arrived.
+async fn wait_for_ams(printer: &mut FtpsPrinter, need_state: bool) -> Result<bool, CliError> {
+    let deadline = Instant::now() + Duration::from_secs(RESPONSE_TIMEOUT_SECS);
+    while printer.ams().is_none() || (need_state && printer.print_status().is_none()) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match ::tokio::time::timeout(remaining, printer.poll_telemetry()).await {
+            Ok(event) => {
+                event?;
+            }
+            Err(_) => break,
+        }
+    }
+    Ok(printer.ams().is_some())
+}
+
+/// Derives an AMS mapping for `local_3mf` plate `plate` and, with `bed_type`, uploads the file and starts the job.
+async fn run_map(
+    printer: &mut FtpsPrinter,
+    ip: &str,
+    local_3mf: &str,
+    plate: u32,
+    bed_type: Option<String>,
+    allow_unmatched: bool,
+) -> Result<(), CliError> {
+    let path = Path::new(local_3mf);
+
+    let plate_filaments = read_plate_filaments(FileSource::open(path)?, plate).await?;
+    println!(
+        "Plate {plate} of '{local_3mf}' uses {} filament(s).",
+        plate_filaments.filaments.len()
+    );
+
+    eprintln!("Connecting to {ip} port {}...", bambino::mqtt::MQTTS_PORT);
+    printer.connect_mqtt().await?;
+    eprintln!("Connected.");
+    printer.request_pushall().await?;
+    let have_ams = wait_for_ams(printer, bed_type.is_some()).await?;
+    if !have_ams {
+        eprintln!(
+            "No AMS data within {RESPONSE_TIMEOUT_SECS}s of the status request; continuing, so \
+             every filament will be unmatched."
+        );
+    }
+
+    let result = printer.derive_ams_mapping(&plate_filaments);
+    println!();
+    print_mapping_table(&plate_filaments.filaments, &result);
+    let mapping_json = serde_json::to_string(&result.mapping2)
+        .map_err(|e| CliError::Other(format!("failed to serialize mapping2: {e}")))?;
+    println!("\nmapping2: {mapping_json}");
+
+    let Some(bed_type) = bed_type else {
+        return Ok(());
+    };
+
+    if plate_filaments.filaments.is_empty() {
+        return Err(CliError::InvalidArgs(format!(
+            "plate {plate} lists no filaments in the file; not starting a print"
+        )));
+    }
+    if !result.is_complete() && !allow_unmatched {
+        return Err(CliError::InvalidArgs(String::from(
+            "some filaments matched no loaded tray. On a single-nozzle printer a mapping with \
+             nothing matched prints from the external spool, and a partly matched one is untested \
+             on hardware. Load matching filament, or pass --allow-unmatched to start anyway.",
+        )));
+    }
+    refuse_if_busy(printer.print_status())?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| CliError::InvalidArgs(format!("'{local_3mf}' has no usable file name")))?;
+    let stem = path
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| CliError::InvalidArgs(format!("'{local_3mf}' has no usable file name")))?;
+
+    let prompt = format!(
+        "This uploads '{file_name}' to the printer and STARTS A REAL PRINT.\n  plate: {plate}\n  \
+         bed type: {bed_type}\n  mapping2: {mapping_json}\nType 'yes' to proceed: "
+    );
+    if !crate::prompt::confirm(&prompt)? {
+        return Ok(());
+    }
+
+    println!("Uploading '{file_name}'...");
+    let started = Instant::now();
+    let file = printer
+        .upload_file(StorageKind::External, file_name, FileSource::open(path)?)
+        .await?;
+    print_transfer_time("upload_file", started);
+    println!("Uploaded {} ({}).", file.name, format_size(file.size));
+
+    // The firmware clamps task ids to 32 bits signed (reference/03_mqtt_telemetry.md, "Task
+    // Tracking & Sequence Boundaries"); seconds since the epoch is unique per run and in range.
+    let subtask_id = unix_now_secs() % 2_147_483_647;
+    let config = PrintJobConfig::new(
+        &file.name,
+        &format!("Metadata/plate_{plate}.gcode"),
+        stem,
+        subtask_id,
+        &bed_type,
+    )
+    .with_ams_mapping2(result.mapping2);
+    let handle = printer.start_print(&config).await?;
+    println!(
+        "project_file published (sequence_id {}); waiting for the printer's echo...",
+        handle.sequence_id()
+    );
+    let outcome = printer.await_ack(&handle).await?;
+    println!("Outcome: {outcome:?}");
+    println!("An accepted command is a received one; watch the printer to see the job start.");
+    match outcome {
+        CommandOutcome::Refused(_) => Err(CliError::Other(String::from(
+            "the printer refused project_file",
+        ))),
+        _ => Ok(()),
+    }
+}
+
 fn format_size(bytes: u64) -> String {
     if bytes >= BYTES_PER_GIB {
         format!("{:.1} GB", bytes as f64 / BYTES_PER_GIB as f64)
@@ -939,5 +1234,99 @@ fn format_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / BYTES_PER_KIB as f64)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+
+    /// Writes `bytes` to a uniquely named file in the temp dir and returns its path.
+    fn temp_file(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "bambino_cli_map_test_{}_{tag}.3mf",
+            std::process::id()
+        ));
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn test_file_source_reads_at_offsets_with_a_short_final_read() {
+        let path = temp_file("offsets", b"0123456789");
+        let mut source = FileSource::open(&path).unwrap();
+        assert_eq!(UploadSource::len(&source), 10);
+
+        let mut buf = [0u8; 4];
+        assert_eq!(source.read_at(0, &mut buf).await.unwrap(), 4);
+        assert_eq!(&buf, b"0123");
+        assert_eq!(source.read_at(3, &mut buf).await.unwrap(), 4);
+        assert_eq!(&buf, b"3456");
+
+        // Only two bytes remain: a short final read, then nothing.
+        assert_eq!(source.read_at(8, &mut buf).await.unwrap(), 2);
+        assert_eq!(&buf[..2], b"89");
+        assert_eq!(source.read_at(10, &mut buf).await.unwrap(), 0);
+        assert_eq!(source.read_at(500, &mut buf).await.unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn test_file_source_of_an_empty_file_is_empty() {
+        let path = temp_file("empty", b"");
+        let mut source = FileSource::open(&path).unwrap();
+        assert!(UploadSource::is_empty(&source));
+        let mut buf = [0u8; 4];
+        assert_eq!(source.read_at(0, &mut buf).await.unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_file_source_open_fails_for_a_missing_file() {
+        let path = std::env::temp_dir().join("bambino_cli_map_test_does_not_exist.3mf");
+        assert!(FileSource::open(&path).is_err());
+    }
+
+    #[test]
+    fn test_tray_label_names_every_source_readably() {
+        let cases = [
+            (
+                MaterialSource::StandardAms {
+                    ams_id: 0,
+                    slot_id: 2,
+                },
+                "AMS 0 slot 2",
+            ),
+            (MaterialSource::AmsHt { ams_id: 128 }, "AMS-HT 128"),
+            (MaterialSource::AmsLite { slot_id: 3 }, "AMS Lite slot 3"),
+            (MaterialSource::ExternalSpool, "external spool"),
+            (MaterialSource::ExternalSpoolLeft, "external left"),
+            (MaterialSource::ExternalSpoolRight, "external right"),
+            (MaterialSource::Unmapped, "unmapped"),
+        ];
+        for (source, label) in cases {
+            assert_eq!(tray_label(source), label);
+        }
+    }
+
+    #[test]
+    fn test_refuse_if_busy_refuses_busy_unknown_and_missing_states() {
+        for status in [
+            PrintStatus::Preparing,
+            PrintStatus::Slicing,
+            PrintStatus::Running,
+            PrintStatus::Paused,
+            PrintStatus::Unknown,
+        ] {
+            assert!(refuse_if_busy(Some(status)).is_err(), "{status:?}");
+        }
+        assert!(refuse_if_busy(None).is_err());
+        for status in [
+            PrintStatus::Idle,
+            PrintStatus::Finished,
+            PrintStatus::Failed,
+        ] {
+            assert!(refuse_if_busy(Some(status)).is_ok(), "{status:?}");
+        }
     }
 }

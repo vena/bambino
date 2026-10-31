@@ -216,7 +216,10 @@ pub struct PrintJobConfig {
     pub subtask_name: String,
     /// Unique 32-bit tracking identifier before clamping (see `ClampedTaskId`).
     pub raw_subtask_id: u64,
-    /// Bed plate type (e.g. "textured", "smooth").
+    /// Bed plate type, as BambuStudio's `bed_type_to_gcode_string` (`libslic3r/PrintConfig.hpp`) spells it.
+    ///
+    /// `"textured_plate"`, `"hot_plate"` (smooth PEI), `"cool_plate"`, `"eng_plate"` or
+    /// `"supertack_plate"`; bambuddy sends `"auto"`.
     pub bed_type: String,
     /// Whether to run automatic bed leveling before the print.
     pub bed_leveling: CalibrationMode,
@@ -511,7 +514,7 @@ pub struct ProjectFilePayload {
     pub url: String,
     /// Whether timelapse capture is enabled for this job.
     pub timelapse: bool,
-    /// Bed plate type used for the print (e.g. "textured", "smooth").
+    /// Bed plate type used for the print; see [`PrintJobConfig::bed_type`] for the values.
     pub bed_type: String,
     /// Whether to run automatic bed leveling before the print. `true` only for `CalibrationMode::On`
     /// — `Auto` is carried by the companion `auto_bed_leveling` int, not by setting this `true`.

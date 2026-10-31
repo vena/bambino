@@ -186,7 +186,7 @@ let config = PrintJobConfig::new(
     "Metadata/plate_1.gcode",       // plate gcode path inside the 3mf
     "My Print",                     // task name
     12345,                          // subtask ID
-    "textured",                     // bed type
+    "textured_plate",               // bed type
 )
 // One entry per filament the plate uses, in slicer order. Each value is a flat channel ID
 // (`ams_id * 4 + slot_id`, so 0..=15 for standard AMS, 128..=135 for AMS-HT) or -1 for
@@ -201,7 +201,7 @@ Bed leveling and flow calibration run automatically as part of the print (enable
 ```rust
 use bambino::mqtt::CalibrationMode;
 
-let config = PrintJobConfig::new("job.3mf", "Metadata/plate_1.gcode", "My Print", 12345, "textured")
+let config = PrintJobConfig::new("job.3mf", "Metadata/plate_1.gcode", "My Print", 12345, "textured_plate")
     .bed_leveling(CalibrationMode::Auto) // skip if leveled recently, matching BambuStudio's default
     .flow_calibration(false)
     .timelapse(false);
@@ -359,7 +359,7 @@ if printer.capabilities().file_tunnel_support().is_supported() {
 printer.disconnect_file_tunnel().await; // frees the TLS session
 
 // Print the uploaded file from internal storage (url: brtc://emmc/job.gcode.3mf)
-let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
+let config = PrintJobConfig::new("job.gcode.3mf", "Metadata/plate_1.gcode", "job", 1, "textured_plate")
     .from_internal_storage();
 ```
 

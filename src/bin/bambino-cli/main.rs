@@ -57,7 +57,7 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   passed, and bypasses all model safety checks; see its --help.
                   ams (dry | dry-stop)
 Files actions:    list  upload  download  head  front  job  mkdir  rmdir  delete  space
-                  clock-check  catalog (get | thumb | rm)
+                  clock-check  catalog (get | thumb | rm)  map
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
 Ack-probe:        -o/--output  -t/--tests  --window
@@ -183,7 +183,7 @@ enum Commands {
     /// Traverse and transfer files on the printer's MicroSD card
     #[command(
         flatten_help = true,
-        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH> [--stop-after <BYTES>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] head <REMOTE_PATH> <LOCAL_PATH> [BYTES]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> [--probe-clock] [get <NAME> <LOCAL_PATH> | thumb <NAME> <LOCAL_PATH> | rm <NAME>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH> [--stop-after <BYTES>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] head <REMOTE_PATH> <LOCAL_PATH> [BYTES]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] catalog <KIND> [--probe-clock] [get <NAME> <LOCAL_PATH> | thumb <NAME> <LOCAL_PATH> | rm <NAME>]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] map <LOCAL_3MF> [--plate <N>] [--print --bed-type <TYPE>] [--allow-unmatched]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Files {
         #[command(flatten)]
