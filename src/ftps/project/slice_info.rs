@@ -151,6 +151,7 @@ pub async fn read_plate_filaments(
 ///   `id`, or a `filament_maps` with a value that isn't a number.
 pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error> {
     let mut in_plate = false;
+    let mut plates_seen = Vec::new();
     let mut current = PlateFilaments {
         plate: 0,
         filaments: Vec::new(),
@@ -178,6 +179,7 @@ pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error>
                 if current.plate == plate {
                     return Ok(current);
                 }
+                plates_seen.push(current.plate);
                 in_plate = false;
             }
             continue;
@@ -228,9 +230,15 @@ pub fn parse_slice_info(text: &str, plate: u32) -> Result<PlateFilaments, Error>
             _ => {}
         }
     }
-    Err(Error::InvalidArgument(
-        format!("slice_info.config has no plate {plate}").into(),
-    ))
+    let message = if plates_seen.is_empty() {
+        format!(
+            "slice_info.config lists no sliced plate, so the .3mf is an unsliced project: export \
+             it sliced (Bambu Studio's \"Export plate sliced file\") to read plate {plate}"
+        )
+    } else {
+        format!("slice_info.config has no plate {plate}; its sliced plates are {plates_seen:?}")
+    };
+    Err(Error::InvalidArgument(message.into()))
 }
 
 /// Index of the `>` that ends the tag starting at `s[0] == '<'`, skipping any inside a quoted value.

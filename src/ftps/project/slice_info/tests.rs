@@ -64,7 +64,14 @@ fn test_parse_dual_nozzle_plate_and_unescape() {
 fn test_parse_missing_plate_is_an_argument_error() {
     let result = parse_slice_info(XML, 3);
     assert!(
-        matches!(result, Err(Error::InvalidArgument(_))),
+        matches!(&result, Err(Error::InvalidArgument(m)) if m.contains("[1, 2]")),
+        "{result:?}"
+    );
+    // An unsliced project (a header and no plate, as OrcaSlicer 2.4.2 saves one) says so.
+    let unsliced = "<config><header><header_item key=\"X-BBL-Client-Type\" value=\"slicer\"/></header></config>";
+    let result = parse_slice_info(unsliced, 1);
+    assert!(
+        matches!(&result, Err(Error::InvalidArgument(m)) if m.contains("unsliced")),
         "{result:?}"
     );
     // A plate with the right number but no closing tag is not returned.
