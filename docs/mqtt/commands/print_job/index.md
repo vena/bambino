@@ -123,7 +123,10 @@ defaults for calibration flags.
 
 - **`bed_type`**: `String`
 
-  Bed plate type (e.g. "textured", "smooth").
+  Bed plate type, as BambuStudio's `bed_type_to_gcode_string` (`libslic3r/PrintConfig.hpp`) spells it.
+  
+  `"textured_plate"`, `"hot_plate"` (smooth PEI), `"cool_plate"`, `"eng_plate"` or
+  `"supertack_plate"`; bambuddy sends `"auto"`.
 
 - **`bed_leveling`**: `CalibrationMode`
 
@@ -408,7 +411,7 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 
 - **`bed_type`**: `String`
 
-  Bed plate type used for the print (e.g. "textured", "smooth").
+  Bed plate type used for the print; see [`PrintJobConfig::bed_type`](#printjobconfig) for the values.
 
 - **`bed_leveling`**: `bool`
 
