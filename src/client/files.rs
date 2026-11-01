@@ -69,7 +69,7 @@ pub enum StorageKind {
 /// Whether [`PrinterClient::upload_file`] checks the model a `.3mf` was sliced for against the printer's.
 ///
 /// A file's start G-code is written for the model it was sliced for, and a file for another model
-/// can drive the carriage into the frame (#657); see [`SlicedFor`](crate::mqtt::SlicedFor).
+/// can command moves past this printer's travel (#657); see [`SlicedFor`](crate::mqtt::SlicedFor).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModelCheck {

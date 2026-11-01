@@ -21,11 +21,11 @@
 
 mod slice_info;
 
-pub(crate) use slice_info::SLICE_INFO_MAX_BYTES;
 pub use slice_info::{
     PlateFilament, PlateFilaments, parse_slice_info, parse_sliced_for, read_plate_filaments,
     read_sliced_for,
 };
+pub(crate) use slice_info::{SLICE_INFO_MAX_BYTES, SLICE_INFO_MEMBER};
 
 #[cfg(not(feature = "std"))]
 use alloc::format;

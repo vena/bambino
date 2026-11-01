@@ -154,7 +154,7 @@ pub enum FilesAction {
     },
     /// Derive an AMS mapping for a local .3mf from the printer's loaded trays, and optionally print it
     ///
-    /// Reads plate PLATE's filaments from the start and end of LOCAL_3MF (the file is never
+    /// Reads plate PLATE's filaments from the end of LOCAL_3MF (the file is never
     /// loaded whole), asks the printer for its state, and matches each filament to a loaded tray
     /// the way BambuStudio does. Prints a table of the matches and the `ams_mapping2` array.
     /// Without --print the only message sent to the printer is a status request (`pushall`).
@@ -167,8 +167,8 @@ pub enum FilesAction {
     ///
     /// The table is headed by the printer type id the file was sliced for and the printer's own
     /// model. With --print it also refuses a file sliced for a model the printer doesn't accept,
-    /// or that records none, unless --allow-other-model is given: an A1 file's start G-code drove
-    /// a P1S's carriage into the frame (#657).
+    /// or that records none, unless --allow-other-model is given: an A1 file's start G-code
+    /// commands moves past a P1S's travel, with the soft endstops off (#657).
     #[command(
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] map <LOCAL_3MF> [--plate <N>] [--print --bed-type <TYPE>] [--allow-unmatched] [--allow-other-model]"
     )]
@@ -192,7 +192,8 @@ pub enum FilesAction {
         allow_unmatched: bool,
         /// With --print, start the job even if the file was sliced for another printer model
         ///
-        /// Its start G-code can drive the carriage into the frame: an A1 file did on a P1S (#657).
+        /// Its start G-code can command moves past this printer's travel, as an A1 file's does
+        /// on a P1S (#657).
         #[arg(long, requires = "print")]
         allow_other_model: bool,
     },
@@ -1197,8 +1198,8 @@ async fn run_map(
         if !accepted {
             return Err(CliError::InvalidArgs(format!(
                 "'{local_3mf}' was sliced for {}, which this printer ({printer_model}) does not \
-                 accept. Its start G-code can drive the carriage into the frame (#657). Slice it \
-                 for this printer, or pass --allow-other-model to start anyway.",
+                 accept. Its start G-code can command moves past this printer's travel (#657). \
+                 Slice it for this printer, or pass --allow-other-model to start anyway.",
                 describe_sliced_for(sliced_for.as_deref())
             )));
         }

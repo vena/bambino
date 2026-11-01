@@ -465,8 +465,8 @@ impl ModelQuirks {
     /// (`SelectMachine.cpp`) refuses to send (`PrintStatusUnsupportedPrinter`) when the file's
     /// model differs from the printer's and is not in the printer's compatible list
     /// (`MachineObject::get_compatible_machine`, `DevPrinterConfigUtil::get_compatible_machine`).
-    /// An empty id fails that comparison too. An A1 file's start G-code drove a P1S's carriage
-    /// into its frame (#657).
+    /// An empty id fails that comparison too. An A1 file's start G-code commands X -48.2 with the
+    /// soft endstops off, past a P1S's travel (#657).
     #[must_use]
     pub fn accepts_sliced_for(&self, printer_model_id: &str) -> bool {
         self.sliced_for

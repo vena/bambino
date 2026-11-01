@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use super::{CommandHandle, PrinterClient};
 use crate::error::Error;
 use crate::file_tunnel::{FileKind, TunnelFile};
-use crate::ftps::project::{SLICE_INFO_MAX_BYTES, parse_sliced_for};
+use crate::ftps::project::{SLICE_INFO_MAX_BYTES, SLICE_INFO_MEMBER, parse_sliced_for};
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::models::PrinterModel;
 use crate::mqtt::commands::CalibrationMode;
@@ -18,8 +18,6 @@ use crate::types::control::{CalibrationOption, PrintSpeed, PrintStatus};
 
 /// The file tunnel's storage label for internal storage, the `emmc` in `brtc://emmc/<name>`.
 const INTERNAL_STORAGE_LABEL: &str = "emmc";
-/// The `.3mf` member that records each plate's `printer_model_id`.
-const SLICE_INFO_MEMBER: &str = "Metadata/slice_info.config";
 
 /// Picks the listed file a job's `job_filename` names, matching its final path component.
 ///
@@ -60,7 +58,8 @@ pub(super) fn refuse_unaccepted_model(
         Some(id) => Err(Error::ModelMismatch(
             format!(
                 "the file was sliced for printer model id {id:?}, which this printer ({model}) \
-                 does not accept: its start G-code can drive the carriage into the frame (#657). \
+                 does not accept: its start G-code can command moves past this printer's \
+                 travel (#657). \
                  Slice it for this printer, or override with {override_hint}"
             )
             .into(),
@@ -405,16 +404,15 @@ where
     /// [`Error::ModelMismatch`] when the config's [`sliced_for`](PrintJobConfig::sliced_for) names
     /// a printer model this printer doesn't accept
     /// ([`ModelQuirks::accepts_sliced_for`](crate::quirks::ModelQuirks::accepts_sliced_for)), or
-    /// says the file records none. Nothing is published. An A1 file started on a P1S drove the
-    /// carriage into the frame (#657). [`PrintJobConfig::model_unchecked`] overrides it, with a
-    /// `log::warn!`.
+    /// says the file records none. Nothing is published. An A1 file started on a P1S commanded X
+    /// -48.2 with the soft endstops off, and the printer made loud grinding noises (#657).
+    /// [`PrintJobConfig::model_unchecked`] overrides it, with a `log::warn!`.
     ///
-    /// **A config that never said what the file was sliced for is refused too**, like
-    /// BambuStudio's `is_blocking_printing`. Supply the id: take it from
+    /// **Supply the id when you have it**: take it from
     /// [`PrinterFile::sliced_for`](crate::client::PrinterFile::sliced_for) after
     /// [`upload_file`](Self::upload_file), or from
-    /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) on a local copy; or call
-    /// [`PrintJobConfig::model_unchecked`].
+    /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) on a local copy, and pass it to
+    /// [`PrintJobConfig::sliced_for`].
     ///
     /// Without one, `start_print` does what BambuStudio does for a file on the printer: on a
     /// printer that serves the port-6000 file tunnel
@@ -462,7 +460,8 @@ where
             }
             SlicedFor::Unchecked => log::warn!(
                 "start_print: sending {} without checking the model it was sliced for \
-                 (printer {model}); a file for another model can drive the carriage into the frame",
+                 (printer {model}); a file for another model can command moves past this \
+                 printer's travel",
                 config.job_filename
             ),
         }

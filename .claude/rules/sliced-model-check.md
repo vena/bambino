@@ -9,7 +9,7 @@ paths:
   - "src/bin/bambino-cli/storage.rs"
 ---
 
-A sliced `.3mf` for another printer model must not reach a printer: its start G-code is written for that model, and an A1 file started on a P1S drove the carriage to X -48.2 with soft endstops off, into the frame (#657, `reference/03_mqtt_telemetry.md`, "Sliced-for-model guard"). The firmware checks nothing.
+A sliced `.3mf` for another printer model must not reach a printer: its start G-code is written for that model, and an A1 file started on a P1S commanded X -48.2 with soft endstops off and the printer made loud grinding noises; the carriage hitting the frame is inferred (#657, `reference/03_mqtt_telemetry.md`, "Sliced-for-model guard"). The P1S firmware accepted and ran the file.
 
 **One acceptance rule, in the quirks engine.** `ModelQuirks::accepts_sliced_for(printer_model_id)` is the only place that decides; never match on `PrinterModel` or compare ids elsewhere. A row's `sliced_for` holds its own BambuStudio printer type ids plus the `compatible_machine` list from `resources/printers/<id>.json` (`00.00.00.00`). A new model's row gets both, and the `UNKNOWN` row accepts nothing.
 

@@ -33,7 +33,7 @@ use crate::error::Error;
 use crate::upload::{UploadSource, read_next};
 
 /// The member that lists each plate's filaments.
-const SLICE_INFO_MEMBER: &str = "Metadata/slice_info.config";
+pub(crate) const SLICE_INFO_MEMBER: &str = "Metadata/slice_info.config";
 
 /// Largest `slice_info.config` read, compressed or inflated, in bytes.
 ///
@@ -214,7 +214,14 @@ pub fn parse_sliced_for(text: &str) -> Result<Option<String>, Error> {
         }
         false
     })?;
-    let first = first.ok_or_else(|| no_such_plate(1, &[]))?;
+    let first = first.ok_or_else(|| {
+        Error::InvalidArgument(
+            "slice_info.config lists no sliced plate, so the .3mf is an unsliced project and \
+             records no printer_model_id: export it sliced (Bambu Studio's \"Export plate sliced \
+             file\")"
+                .into(),
+        )
+    })?;
     if disagreement {
         return Err(violation(
             "slice_info.config's plates name different printer_model_id values",

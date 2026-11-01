@@ -7,10 +7,11 @@
 //! The operator taps each job on the screen; this tool only listens.
 //!
 //! The only command ever published is `pushall`, a read request. Nothing here moves or heats
-//! the machine. `pushall` is rate-limited on P1/A1 (`reference/03_mqtt_telemetry.md`, "P1/A1
-//! Series Rate Limit"), so each job gets exactly two: one [`MID_JOB_PUSHALL_DELAY`] after
-//! `gcode_state` first leaves idle, so a full report lands mid-job and shows a `print_type`
-//! that deltas omit, and one when the operator ends the job.
+//! the machine. `reference/03_mqtt_telemetry.md` ("P1/A1 Series Rate Limit") records an
+//! unverified caution against frequent `pushall` on P1/A1, so besides one at the start for the
+//! idle baseline, each job gets at most two: one [`MID_JOB_PUSHALL_DELAY`] after `gcode_state`
+//! first leaves idle, so a full report lands mid-job and shows a `print_type` that deltas omit
+//! (none for a job whose state never leaves idle), and one when the operator ends the job.
 //!
 //! No `serial` in the report, for the reason on `ProbeReport` in `probe.rs`: every stored frame
 //! goes through [`redact_secrets`].
