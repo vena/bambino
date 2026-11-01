@@ -2448,9 +2448,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `PrinterFile::sliced_for` after
   [`upload_file`](#printerclient), or from
   [`read_sliced_for`](../ftps/project/index.md) on a local copy; or call
-  [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig). BambuStudio reads an on-printer file's
-  `slice_info.config` through the file tunnel; bambino can't until that arm lands (#636),
-  and over FTPS only by a full download (FTPS has no `REST`).
+  [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig).
+
+  Without one, `start_print` does what BambuStudio does for a file on the printer: on a
+  printer that serves the port-6000 file tunnel
+  (`Capabilities::file_tunnel_support`;
+  needs [`.with_file_tunnel()`](#printerclient)) it lists the models on the file's
+  storage (the card, or `emmc` for
+  [`from_internal_storage`](../mqtt/commands/print_job/index.md#printjobconfig)), finds `job_filename`,
+  and reads its `Metadata/slice_info.config` with `SUB_FILE`. Then it applies the same check.
+  Any failure of that read (no tunnel, not listed or listed twice, no such member,
+  unreadable) is an [`Error::ModelMismatch`](../error/index.md#error) naming the cause, and nothing is published. A
+  printer without the tunnel (P1 and A1 series) is refused as before; FTPS can only read it
+  by a full download (FTPS has no `REST`). The tunnel session is disconnected afterwards,
+  including one the caller had opened with [`file_tunnel()`](#printerclient), as
+  [`read_running_job_images`](#printerclient) does. **This tunnel read is not
+  verified on hardware (#637).**
 
 - <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 

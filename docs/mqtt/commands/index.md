@@ -500,10 +500,11 @@ defaults for calibration flags.
   [`start_print`](../../client/index.md#printerclient) checks against the printer's own.
   
   [`SlicedFor::NotSupplied`](print_job/index.md#slicedfor) unless [`sliced_for`](print_job/index.md#printjobconfig) or
-  [`model_unchecked`](print_job/index.md#printjobconfig) was called, and then `start_print` refuses.
-  **Every config must say**: the id is only known to a caller that read the file, so one
-  printing a `.3mf` already on the printer reads a local copy with
-  [`read_sliced_for`](../../ftps/project/index.md) or overrides.
+  [`model_unchecked`](print_job/index.md#printjobconfig) was called, and then `start_print` reads the
+  file's `slice_info.config` through the port-6000 file tunnel where the printer serves it,
+  and refuses where it doesn't or the read fails. A caller can instead read a local copy
+  with [`read_sliced_for`](../../ftps/project/index.md) or override. The tunnel
+  lookup is not verified on hardware (#637).
 
 #### Implementations
 
@@ -1723,12 +1724,16 @@ Read the id with [`read_sliced_for`](../../ftps/project/index.md), or take
 - **`NotSupplied`**
 
   The caller gave no model for the file, so [`start_print`](../../client/index.md#printerclient)
-  refuses with [`Error::ModelMismatch`](../../error/index.md#error). The default.
+  looks it up on the printer. The default.
   
   BambuStudio checks a file already on the printer by fetching its `slice_info.config`
-  through the file tunnel. bambino can't until the tunnel arm lands (#636), and over FTPS
-  only by downloading the whole file (FTPS has no `REST`), so the caller supplies the id or
-  overrides with [`PrintJobConfig::model_unchecked`](print_job/index.md#printjobconfig).
+  through the file tunnel, and `start_print` does the same on a printer that serves the
+  tunnel (needs `.with_file_tunnel()`): it lists the models on the file's storage, finds
+  `job_filename`, and reads that member. A printer without the tunnel (P1 and A1 series),
+  or any failure of that read, is refused with [`Error::ModelMismatch`](../../error/index.md#error), and the caller then
+  supplies the id or overrides with [`PrintJobConfig::model_unchecked`](print_job/index.md#printjobconfig). FTPS can only read
+  the member by downloading the whole file (FTPS has no `REST`), which `start_print` doesn't
+  do. **The tunnel lookup is not verified on hardware (#637).**
 
 - **`Model`**
 
