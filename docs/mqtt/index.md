@@ -486,12 +486,12 @@ defaults for calibration flags.
   The printer model the file was sliced for, which
   [`start_print`](../client/index.md#printerclient) checks against the printer's own.
   
-  [`SlicedFor::NotSupplied`](commands/print_job/index.md#slicedfor) unless [`sliced_for`](commands/print_job/index.md#printjobconfig) or
-  [`model_unchecked`](commands/print_job/index.md#printjobconfig) was called, and then `start_print` reads the
-  file's `slice_info.config` through the port-6000 file tunnel where the printer serves it,
-  and refuses where it doesn't or the read fails. A caller can instead read a local copy
-  with [`read_sliced_for`](../ftps/project/index.md) or override. The tunnel
-  lookup is not verified on hardware (#637).
+  [`SlicedFor::NotSupplied`](commands/print_job/index.md#slicedfor) until [`sliced_for`](commands/print_job/index.md#printjobconfig) or
+  [`model_unchecked`](commands/print_job/index.md#printjobconfig) is called. While it is `NotSupplied`,
+  `start_print` reads the file's `slice_info.config` through the port-6000 file tunnel where
+  the printer serves it, and refuses where it doesn't or the read fails. A caller can instead
+  read a local copy with [`read_sliced_for`](../ftps/project/index.md) or
+  override. The tunnel lookup is not verified on hardware (#637).
 
 #### Implementations
 
@@ -525,12 +525,14 @@ defaults for calibration flags.
 
   Sends the job even when the file was sliced for another model, or records none.
 
-  Also what to call when the file's id can't be had: a `.3mf` already on the printer.
+  Also what to call when the file's id can't be had: a `.3mf` already on a printer without
+  the file tunnel (P1 and A1 series), when no local copy is at hand for
+  [`read_sliced_for`](../ftps/project/index.md).
 
   **Don't add this casually.** A file's start G-code is written for the model it was sliced
-  for. An A1 file started on a P1S turned the soft endstops off and drove X to -48.2, 66 mm
-  past anything the P1S's own start G-code commands, into the frame, and the belts skipped
-  (#657). Use it only when the printer's own model really accepts the file, such as a
+  for. An A1 file started on a P1S turned the soft endstops off and commanded X -48.2, 66 mm
+  past anything the P1S's own start G-code commands, and the printer made loud grinding
+  noises (#657). Use it only when the printer's own model really accepts the file, such as a
   model BambuStudio doesn't list as compatible but you know is.
 
 - <span id="printjobconfig-from-internal-storage"></span>`fn from_internal_storage(self) -> Self`
@@ -961,9 +963,10 @@ Which printer model a job's `.3mf` was sliced for, as [`PrinterClient::start_pri
 
 A slicer writes the printer type id into the file (`printer_model_id` in
 `Metadata/slice_info.config`), and a file sliced for another model carries that model's start
-G-code. An A1 file started on a P1S drove the carriage to X -48.2 with the soft endstops off,
-into the frame, and skipped the belts (#657); the P1S's own start G-code never goes below
-X 18. BambuStudio blocks that send (`SelectMachineDialog::is_blocking_printing`,
+G-code. An A1 file started on a P1S commanded X -48.2 with the soft endstops off, where the
+P1S's own start G-code never goes below X 18, and the printer made loud grinding noises
+(#657; the carriage hitting the frame is inferred, not observed). BambuStudio blocks that
+send (`SelectMachineDialog::is_blocking_printing`,
 `SelectMachine.cpp`), for a fresh slice and for a file already on the printer, whose plate
 `printer_model_id` it fetches through the file tunnel; bambino refuses where Studio blocks.
 

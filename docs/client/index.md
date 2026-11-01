@@ -2439,16 +2439,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`Error::ModelMismatch`](../error/index.md#error) when the config's [`sliced_for`](../mqtt/commands/print_job/index.md#printjobconfig) names
   a printer model this printer doesn't accept
   ([`ModelQuirks::accepts_sliced_for`](../quirks/index.md#modelquirks)), or
-  says the file records none. Nothing is published. An A1 file started on a P1S drove the
-  carriage into the frame (#657). [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig) overrides it, with a
-  `log::warn!`.
+  says the file records none. Nothing is published. An A1 file started on a P1S commanded X
+  -48.2 with the soft endstops off, and the printer made loud grinding noises (#657).
+  [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig) overrides it, with a `log::warn!`.
 
-  **A config that never said what the file was sliced for is refused too**, like
-  BambuStudio's `is_blocking_printing`. Supply the id: take it from
+  **Supply the id when you have it**: take it from
   `PrinterFile::sliced_for` after
   [`upload_file`](#printerclient), or from
-  [`read_sliced_for`](../ftps/project/index.md) on a local copy; or call
-  [`PrintJobConfig::model_unchecked`](../mqtt/commands/print_job/index.md#printjobconfig).
+  [`read_sliced_for`](../ftps/project/index.md) on a local copy, and pass it to
+  [`PrintJobConfig::sliced_for`](../mqtt/commands/print_job/index.md#printjobconfig).
 
   Without one, `start_print` does what BambuStudio does for a file on the printer: on a
   printer that serves the port-6000 file tunnel
@@ -4565,7 +4564,7 @@ enum ModelCheck {
 Whether [`PrinterClient::upload_file`](#printerclient) checks the model a `.3mf` was sliced for against the printer's.
 
 A file's start G-code is written for the model it was sliced for, and a file for another model
-can drive the carriage into the frame (#657); see [`SlicedFor`](../mqtt/index.md).
+can command moves past this printer's travel (#657); see [`SlicedFor`](../mqtt/index.md).
 
 #### Variants
 
