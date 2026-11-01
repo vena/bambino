@@ -214,12 +214,16 @@ pub enum JobFileLocation {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SlicedFor {
     /// The caller gave no model for the file, so [`start_print`](crate::client::PrinterClient::start_print)
-    /// refuses with [`Error::ModelMismatch`]. The default.
+    /// looks it up on the printer. The default.
     ///
     /// BambuStudio checks a file already on the printer by fetching its `slice_info.config`
-    /// through the file tunnel. bambino can't until the tunnel arm lands (#636), and over FTPS
-    /// only by downloading the whole file (FTPS has no `REST`), so the caller supplies the id or
-    /// overrides with [`PrintJobConfig::model_unchecked`].
+    /// through the file tunnel, and `start_print` does the same on a printer that serves the
+    /// tunnel (needs `.with_file_tunnel()`): it lists the models on the file's storage, finds
+    /// `job_filename`, and reads that member. A printer without the tunnel (P1 and A1 series),
+    /// or any failure of that read, is refused with [`Error::ModelMismatch`], and the caller then
+    /// supplies the id or overrides with [`PrintJobConfig::model_unchecked`]. FTPS can only read
+    /// the member by downloading the whole file (FTPS has no `REST`), which `start_print` doesn't
+    /// do. **The tunnel lookup is not verified on hardware (#637).**
     #[default]
     NotSupplied,
     /// The file's own `printer_model_id`, or `None` for a sliced file that records none.
@@ -295,10 +299,11 @@ pub struct PrintJobConfig {
     /// [`start_print`](crate::client::PrinterClient::start_print) checks against the printer's own.
     ///
     /// [`SlicedFor::NotSupplied`] unless [`sliced_for`](Self::sliced_for) or
-    /// [`model_unchecked`](Self::model_unchecked) was called, and then `start_print` refuses.
-    /// **Every config must say**: the id is only known to a caller that read the file, so one
-    /// printing a `.3mf` already on the printer reads a local copy with
-    /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) or overrides.
+    /// [`model_unchecked`](Self::model_unchecked) was called, and then `start_print` reads the
+    /// file's `slice_info.config` through the port-6000 file tunnel where the printer serves it,
+    /// and refuses where it doesn't or the read fails. A caller can instead read a local copy
+    /// with [`read_sliced_for`](crate::ftps::project::read_sliced_for) or override. The tunnel
+    /// lookup is not verified on hardware (#637).
     pub sliced_for: SlicedFor,
 }
 

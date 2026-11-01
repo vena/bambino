@@ -21,6 +21,7 @@
 
 mod slice_info;
 
+pub(crate) use slice_info::SLICE_INFO_MAX_BYTES;
 pub use slice_info::{
     PlateFilament, PlateFilaments, parse_slice_info, parse_sliced_for, read_plate_filaments,
     read_sliced_for,

@@ -278,3 +278,218 @@ async fn failed_dial_keeps_the_config_for_a_retry() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `start_print` looks up the model of an on-printer file through the tunnel.
+// **Synthetic frames:** no capture shows a printer's `LIST_INFO`/`SUB_FILE` reply for this
+// read, so these test bambino's side only (#637).
+// ---------------------------------------------------------------------------
+
+use bambino::mqtt::PrintJobConfig;
+
+fn slice_info(printer_model_id: &str) -> Vec<u8> {
+    format!(
+        "<config>\n  <plate>\n    <metadata key=\"index\" value=\"1\"/>\n    \
+         <metadata key=\"printer_model_id\" value=\"{printer_model_id}\"/>\n  </plate>\n</config>\n"
+    )
+    .into_bytes()
+}
+
+fn unsupplied_job() -> PrintJobConfig {
+    PrintJobConfig::new(
+        "job.3mf",
+        "Metadata/plate_1.gcode",
+        "Test Print",
+        12345,
+        "textured",
+    )
+}
+
+/// What the mock tunnel answers `SUB_FILE` with.
+#[derive(Clone)]
+enum Member {
+    /// The tunnel isn't asked for a member: the lookup stops at the listing.
+    NotAsked,
+    Missing,
+    Bytes(Vec<u8>),
+}
+
+/// Serves one `LIST_INFO` with `file_lists`, then (if asked) one `SUB_FILE`; returns the requests it saw.
+async fn run_mock_listing_tunnel(
+    mut server: DuplexStream,
+    file_lists: String,
+    member: Member,
+) -> Vec<String> {
+    accept_session(&mut server).await;
+    let mut seen = Vec::new();
+    let (magic, list) = read_frame(&mut server).await;
+    assert_eq!(magic, MAGIC_CTRL);
+    seen.push(String::from_utf8(list).unwrap());
+    let body =
+        format!(r#"{{"cmdtype":1,"result":0,"sequence":1,"reply":{{"file_lists":{file_lists}}}}}"#);
+    write_frame(&mut server, MAGIC_CTRL_REPLY, body.as_bytes()).await;
+    if matches!(member, Member::NotAsked) {
+        return seen;
+    }
+    let (magic, sub) = read_frame(&mut server).await;
+    assert_eq!(magic, MAGIC_CTRL);
+    seen.push(String::from_utf8(sub).unwrap());
+    let data = match member {
+        Member::Bytes(data) => data,
+        _ => Vec::new(),
+    };
+    let mut reply = format!(
+        r#"{{"cmdtype":2,"result":0,"sequence":2,"reply":{{"path":"/m/job.3mf#Metadata/slice_info.config","size":{}}}}}"#,
+        data.len()
+    )
+    .into_bytes();
+    reply.extend_from_slice(b"\n\n");
+    reply.extend_from_slice(&data);
+    write_frame(&mut server, MAGIC_CTRL_REPLY, &reply).await;
+    seen
+}
+
+const ONE_MODEL: &str = r#"[{"name":"job.3mf","path":"/m/job.3mf","time":1,"size":10}]"#;
+
+/// A P2S whose tunnel serves `file_lists` and `member`, with no MQTT broker: a start that got past the check would fail with `Network`, not `ModelMismatch`.
+async fn start_print_refused_by_lookup(file_lists: &str, member: Member) -> (String, Vec<String>) {
+    let (tunnel_stream, tunnel) = spawn_broker({
+        let file_lists = file_lists.to_owned();
+        move |server| run_mock_listing_tunnel(server, file_lists, member)
+    });
+    let (tunnel_factory, _) = MockDataStreamFactory::with_stream(tunnel_stream);
+    let mut printer = PrinterClient::new(
+        DummyTlsConnector,
+        MockDataStreamFactory::empty(),
+        test_identity(PrinterModel::P2S),
+    )
+    .with_file_tunnel(DummyTlsConnector, tunnel_factory);
+    let result = printer.start_print(&unsupplied_job()).await;
+    let Err(Error::ModelMismatch(message)) = result else {
+        panic!("expected ModelMismatch, got {result:?}");
+    };
+    assert!(message.contains("model_unchecked"), "{message}");
+    assert!(
+        !printer.is_file_tunnel_connected(),
+        "the lookup disconnects"
+    );
+    (message.to_string(), tunnel.await.expect("mock tunnel"))
+}
+
+#[tokio::test]
+async fn start_print_without_a_tunnel_is_refused_without_dialing() {
+    // An empty factory turns any dial into `Network`, so `ModelMismatch` proves none happened.
+    let mut printer = PrinterClient::new(
+        DummyTlsConnector,
+        MockDataStreamFactory::empty(),
+        test_identity(PrinterModel::P1S),
+    )
+    .with_file_tunnel(DummyTlsConnector, MockDataStreamFactory::empty());
+    let result = printer.start_print(&unsupplied_job()).await;
+    assert!(
+        matches!(&result, Err(Error::ModelMismatch(m)) if m.contains("no file tunnel") && m.contains("model_unchecked")),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn start_print_publishes_when_the_listed_file_names_an_accepted_model() {
+    let (mqtt_stream, broker) = spawn_broker(|mut server| async move {
+        handle_mqtt_handshake(&mut server).await;
+        let _pushall = read_publish_payload(&mut server).await;
+        read_publish_payload(&mut server).await
+    });
+    let (mqtt_factory, _) = MockDataStreamFactory::with_stream(mqtt_stream);
+    let (tunnel_stream, tunnel) = spawn_broker(|server| {
+        run_mock_listing_tunnel(
+            server,
+            ONE_MODEL.to_owned(),
+            Member::Bytes(slice_info("N7")),
+        )
+    });
+    let (tunnel_factory, _) = MockDataStreamFactory::with_stream(tunnel_stream);
+    let mut printer = PrinterClient::new(
+        DummyTlsConnector,
+        mqtt_factory,
+        test_identity(PrinterModel::P2S),
+    )
+    .with_file_tunnel(DummyTlsConnector, tunnel_factory);
+
+    printer
+        .start_print(&unsupplied_job())
+        .await
+        .expect("start_print");
+
+    let json = broker.await.expect("broker");
+    assert_eq!(json["print"]["command"], "project_file");
+    let seen = tunnel.await.expect("mock tunnel");
+    // The card is listed with no storage label, and the member is addressed by the listed path.
+    assert_eq!(
+        seen[0],
+        r#"{"mtype":12289,"cmdtype":1,"sequence":1,"req":{"type":"model","api_version":2,"notify":"DETAIL"}}"#
+    );
+    assert_eq!(
+        seen[1],
+        r##"{"mtype":12289,"cmdtype":2,"sequence":2,"req":{"paths":["/m/job.3mf#Metadata/slice_info.config"]}}"##
+    );
+    assert!(!printer.is_file_tunnel_connected());
+}
+
+#[tokio::test]
+async fn start_print_refuses_when_the_member_names_another_model() {
+    // N2S is the A1 file of #657.
+    let (message, _) =
+        start_print_refused_by_lookup(ONE_MODEL, Member::Bytes(slice_info("N2S"))).await;
+    assert!(message.contains("N2S"), "{message}");
+}
+
+#[tokio::test]
+async fn start_print_refuses_when_the_file_is_not_listed() {
+    let (message, seen) = start_print_refused_by_lookup(
+        r#"[{"name":"other.3mf","path":"/m/other.3mf","time":1,"size":10}]"#,
+        Member::NotAsked,
+    )
+    .await;
+    assert!(
+        message.contains("not in the printer's model listing"),
+        "{message}"
+    );
+    assert_eq!(seen.len(), 1, "no member is requested");
+}
+
+#[tokio::test]
+async fn start_print_refuses_when_the_name_is_listed_twice() {
+    let (message, _) = start_print_refused_by_lookup(
+        r#"[{"name":"job.3mf","path":"/a/job.3mf","time":1,"size":10},{"name":"job.3mf","path":"/b/job.3mf","time":1,"size":10}]"#,
+        Member::NotAsked,
+    )
+    .await;
+    assert!(
+        message.contains("ambiguous") && message.contains("sliced_for"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn start_print_refuses_when_the_member_is_missing() {
+    let (message, _) = start_print_refused_by_lookup(ONE_MODEL, Member::Missing).await;
+    assert!(
+        message.contains("no Metadata/slice_info.config"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn start_print_refuses_when_the_tunnel_handshake_fails() {
+    let mut printer = PrinterClient::new(
+        DummyTlsConnector,
+        MockDataStreamFactory::empty(),
+        test_identity(PrinterModel::P2S),
+    )
+    .with_file_tunnel(DummyTlsConnector, MockDataStreamFactory::empty());
+    let result = printer.start_print(&unsupplied_job()).await;
+    assert!(
+        matches!(&result, Err(Error::ModelMismatch(m)) if m.contains("connection failed") && m.contains("model_unchecked")),
+        "{result:?}"
+    );
+}

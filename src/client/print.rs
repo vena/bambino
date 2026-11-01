@@ -1,16 +1,50 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
+use alloc::string::String;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use super::{CommandHandle, PrinterClient};
 use crate::error::Error;
+use crate::file_tunnel::{FileKind, TunnelFile};
+use crate::ftps::project::{SLICE_INFO_MAX_BYTES, parse_sliced_for};
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::models::PrinterModel;
 use crate::mqtt::commands::CalibrationMode;
 use crate::mqtt::commands::{IdleIgnoreScope, StandardCommand};
-use crate::mqtt::{PrintJobConfig, SlicedFor, StandardControlRequest};
+use crate::mqtt::{JobFileLocation, PrintJobConfig, SlicedFor, StandardControlRequest};
 use crate::types::control::{CalibrationOption, PrintSpeed, PrintStatus};
+
+/// The file tunnel's storage label for internal storage, the `emmc` in `brtc://emmc/<name>`.
+const INTERNAL_STORAGE_LABEL: &str = "emmc";
+/// The `.3mf` member that records each plate's `printer_model_id`.
+const SLICE_INFO_MEMBER: &str = "Metadata/slice_info.config";
+
+/// Picks the listed file a job's `job_filename` names, matching its final path component.
+///
+/// An error says why no single file matched: none is listed, or several share the name.
+fn find_listed_model(files: Vec<TunnelFile>, job_filename: &str) -> Result<TunnelFile, String> {
+    let name = job_filename.rsplit('/').next().unwrap_or(job_filename);
+    let mut matches = files.into_iter().filter(|f| f.name == name);
+    let first = matches
+        .next()
+        .ok_or_else(|| format!("{name:?} is not in the printer's model listing"))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "several listed files are named {name:?}, so the file is ambiguous"
+        ));
+    }
+    Ok(first)
+}
+
+/// Reads the `printer_model_id` out of the `slice_info.config` bytes `SUB_FILE` returned, or says why they can't be read.
+fn sliced_for_of_member(member: Option<Vec<u8>>) -> Result<Option<String>, String> {
+    let bytes = member.ok_or("the file has no Metadata/slice_info.config")?;
+    let text = core::str::from_utf8(&bytes)
+        .map_err(|_| String::from("Metadata/slice_info.config is not UTF-8"))?;
+    parse_sliced_for(text).map_err(|e| format!("Metadata/slice_info.config can't be read: {e}"))
+}
 
 /// Refuses a sliced file whose `printer_model_id` `model` doesn't accept, or that has none, naming `override_hint` as the way past it.
 ///
@@ -380,9 +414,22 @@ where
     /// [`PrinterFile::sliced_for`](crate::client::PrinterFile::sliced_for) after
     /// [`upload_file`](Self::upload_file), or from
     /// [`read_sliced_for`](crate::ftps::project::read_sliced_for) on a local copy; or call
-    /// [`PrintJobConfig::model_unchecked`]. BambuStudio reads an on-printer file's
-    /// `slice_info.config` through the file tunnel; bambino can't until that arm lands (#636),
-    /// and over FTPS only by a full download (FTPS has no `REST`).
+    /// [`PrintJobConfig::model_unchecked`].
+    ///
+    /// Without one, `start_print` does what BambuStudio does for a file on the printer: on a
+    /// printer that serves the port-6000 file tunnel
+    /// ([`Capabilities::file_tunnel_support`](crate::client::Capabilities::file_tunnel_support);
+    /// needs [`.with_file_tunnel()`](Self::with_file_tunnel)) it lists the models on the file's
+    /// storage (the card, or `emmc` for
+    /// [`from_internal_storage`](PrintJobConfig::from_internal_storage)), finds `job_filename`,
+    /// and reads its `Metadata/slice_info.config` with `SUB_FILE`. Then it applies the same check.
+    /// Any failure of that read (no tunnel, not listed or listed twice, no such member,
+    /// unreadable) is an [`Error::ModelMismatch`] naming the cause, and nothing is published. A
+    /// printer without the tunnel (P1 and A1 series) is refused as before; FTPS can only read it
+    /// by a full download (FTPS has no `REST`). The tunnel session is disconnected afterwards,
+    /// including one the caller had opened with [`file_tunnel()`](Self::file_tunnel), as
+    /// [`read_running_job_images`](Self::read_running_job_images) does. **This tunnel read is not
+    /// verified on hardware (#637).**
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error> {
         if config.run_flow_calibration == CalibrationMode::Auto {
             let support = self.capabilities().pa_calibration_auto_support();
@@ -407,17 +454,8 @@ where
         let model = self.core.identity.model;
         match &config.sliced_for {
             SlicedFor::NotSupplied => {
-                return Err(Error::ModelMismatch(
-                    format!(
-                        "{} was not checked against this printer ({model}): the config doesn't \
-                         say what model the file was sliced for. Supply it with \
-                         PrintJobConfig::sliced_for, from PrinterFile::sliced_for after \
-                         upload_file or read_sliced_for on a local copy, or call \
-                         PrintJobConfig::model_unchecked()",
-                        config.job_filename
-                    )
-                    .into(),
-                ));
+                let id = self.sliced_for_from_printer(config).await?;
+                refuse_unaccepted_model(model, id.as_deref(), "PrintJobConfig::model_unchecked()")?
             }
             SlicedFor::Model(id) => {
                 refuse_unaccepted_model(model, id.as_deref(), "PrintJobConfig::model_unchecked()")?
@@ -430,5 +468,83 @@ where
         }
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))
             .await
+    }
+
+    /// Finds what model an on-printer file was sliced for when the config doesn't say, through the file tunnel as BambuStudio does.
+    ///
+    /// Unverified on hardware (#637). Every failure is an [`Error::ModelMismatch`] naming the cause
+    /// and both ways forward.
+    async fn sliced_for_from_printer(
+        &mut self,
+        config: &PrintJobConfig,
+    ) -> Result<Option<String>, Error> {
+        let model = self.core.identity.model;
+        let ways_forward = "Supply the id with PrintJobConfig::sliced_for (from \
+                            PrinterFile::sliced_for after upload_file, or read_sliced_for on a \
+                            local copy), or call PrintJobConfig::model_unchecked()";
+        if !self.capabilities().file_tunnel_support().is_supported() {
+            return Err(Error::ModelMismatch(
+                format!(
+                    "{} was not checked against this printer ({model}): the config doesn't say \
+                     what model the file was sliced for, and this printer has no file tunnel to \
+                     read it with. {ways_forward}",
+                    config.job_filename
+                )
+                .into(),
+            ));
+        }
+        let read = self.read_sliced_for_through_tunnel(config).await;
+        // A session that failed mid-read can't be reused, and one that worked isn't needed again.
+        self.disconnect_file_tunnel().await;
+        match read {
+            Ok(id) => {
+                log::debug!(
+                    "start_print: file tunnel says {} was sliced for {id:?}",
+                    config.job_filename
+                );
+                Ok(id)
+            }
+            Err(reason) => {
+                log::debug!(
+                    "start_print: file tunnel check of {} failed: {reason}",
+                    config.job_filename
+                );
+                Err(Error::ModelMismatch(
+                    format!(
+                        "{} was not checked against this printer ({model}): reading what model \
+                         it was sliced for through the file tunnel failed ({reason}). {ways_forward}",
+                        config.job_filename
+                    )
+                    .into(),
+                ))
+            }
+        }
+    }
+
+    /// Lists the models on the job's storage, finds the job's file and parses its `slice_info.config`, over the file tunnel.
+    async fn read_sliced_for_through_tunnel(
+        &mut self,
+        config: &PrintJobConfig,
+    ) -> Result<Option<String>, String> {
+        // Studio's file browser sends no storage for the External tab and the printer's label for
+        // the Internal one (reference/08_file_service.md, `REQUEST_MEDIA_ABILITY`).
+        let storage = match config.file_location {
+            JobFileLocation::Card => None,
+            JobFileLocation::InternalStorage => Some(INTERNAL_STORAGE_LABEL),
+        };
+        let mut tunnel = self
+            .file_tunnel()
+            .await
+            .map_err(|e| format!("the connection failed: {e}"))?;
+        let files = tunnel
+            .list_files(FileKind::Model, storage)
+            .await
+            .map_err(|e| format!("listing the models failed: {e}"))?;
+        let file = find_listed_model(files, &config.job_filename)?;
+        let member = tunnel
+            .read_file_member(&file, SLICE_INFO_MEMBER, SLICE_INFO_MAX_BYTES)
+            .await
+            .map_err(|e| format!("reading {SLICE_INFO_MEMBER} failed: {e}"))?;
+        sliced_for_of_member(member)
     }
 }
