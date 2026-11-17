@@ -38,6 +38,8 @@ on:
       - "Makefile"
       - "scripts/check-esp-idf.sh"
       - ".github/workflows/esp-idf.yml"
+  # For a cold build on demand, e.g. after a runner-image or idf-rust image change.
+  workflow_dispatch:
 
 jobs:
   check-esp-idf:

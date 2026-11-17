@@ -15,7 +15,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # rust-cache keys on os.type(), which is "Linux" on every Ubuntu image, so
+      # when ubuntu-latest moved from 24.04 to 26.04 (2026-11-10) the new image
+      # could restore a cache built on the old one. ImageOS ("ubuntu24",
+      # "ubuntu26") is set by GitHub's hosted images but is not in the env
+      # context, hence this step; it fails rather than keying on an empty string.
+      - name: Runner image (cache-key input)
+        id: image
+        run: |
+          [ -n "${ImageOS:-}" ] || { echo "::error::ImageOS unset; cannot key caches by runner image" >&2; exit 1; }
+          echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ steps.image.outputs.os }}
       - run: make check-fast
       # Separate step, not folded into check-fast: rustdoc does not reuse
       # cargo build's artifacts, and the pre-commit hook runs check-fast on
