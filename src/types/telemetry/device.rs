@@ -295,9 +295,10 @@ pub struct NozzleInfo {
     /// Core physical nozzle composition or tool type designation.
     ///
     /// **Two vocabularies by generation.** Legacy printers report the nozzle *material* here
-    /// (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a *flow
-    /// code* instead (`"HH"` = high flow, `"HS"` = standard, followed by a hardware-variant
-    /// digit pair). Do not assume one and parse the other. The related but distinct
+    /// (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a packed
+    /// tool code instead: tool (`H` hotend), flow (`"HH"` = high flow, `"HS"` = standard), then
+    /// a material digit pair (`00` stainless, `01` hardened, `05` tungsten carbide), e.g.
+    /// `"HH01"`. Do not assume one and parse the other. The related but distinct
     /// `nozzle_id` on a K-profile entry uses the flow-code vocabulary only — see
     /// [`crate::diagnostics::KProfileEntry::nozzle_id`].
     #[serde(rename = "type")]

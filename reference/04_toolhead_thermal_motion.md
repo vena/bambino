@@ -125,7 +125,7 @@ The speed values for the cooling fans (excluding the X2D secondary auxiliary fan
 percentage = round(S * 100 / 15)   # ≈ round(S * 6.67)
 ```
 
-*   **Secondary Auxiliary Fan (Right Auxiliary Fan on X2D)**: Mapped to `device.airduct.parts` with `id: 160`. The `"state"` parameter of this part object represents the actual speed directly as an integer percentage value (`0` to `100`) and does not require step conversion.
+*   **Secondary Auxiliary Fan (port 10; right side on X2D, left side on P2S and H3C, see [REF-CLIM-FANS] in chapter 3)**: Mapped to `device.airduct.parts` with `id: 160`. The `"state"` parameter of this part object represents the actual speed directly as an integer percentage value (`0` to `100`) and does not require step conversion.
 
 ##### Fan Oscillation Telemetry Artifacts
 Due to discrete 0–15 PWM-step quantization within the physical fan controller, the reported fan speed value in telemetry may oscillate rapidly between adjacent integer steps when trying to maintain fractional target speeds. Downstream systems parsing this status stream must handle this oscillation to prevent interface flickering or false fan speed alert triggers.
@@ -159,7 +159,7 @@ Sets the part cooling fan speed to 100%:
 ```gcode
 M106 P1 S255
 ```
-Sets the primary auxiliary fan (left side) speed to approximately 50%:
+Sets the port-2 auxiliary fan speed to approximately 50% (left side on X2D, right side on P2S and H3C):
 ```gcode
 M106 P2 S128
 ```
@@ -167,7 +167,7 @@ Sets the chamber exhaust/filtration fan speed to 100%:
 ```gcode
 M106 P3 S255
 ```
-Sets the second left-side auxiliary fan (port 10, X2D/P2S) speed to 100%:
+Sets the second auxiliary fan (port 10, X2D/P2S/H3C; right side on X2D, left side on P2S and H3C) speed to 100%:
 ```gcode
 M106 P10 S255
 ```

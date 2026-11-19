@@ -171,7 +171,8 @@ BambuStudio is looser — `CalibUtils::get_pa_k_n_value_by_cali_idx` scans the w
 **2. `nozzle_id` encodes flow type, and is empty on some models.**
 
 *   `HH00-0.4` = high flow, `HS00-0.4` = standard. A printer can hold both for one diameter — an H2D was observed with 102 high-flow entries against 6 standard ones — and the same filament reads a different K through each.
-*   The **fitted** nozzle reports `HH01`, not `HH00`. Comparison must be on the first **two** characters; the trailing digits are a hardware variant that the calibration table normalizes to `00`.
+*   The **fitted** nozzle reports `HH01`, not `HH00`. Comparison must be on the first **two** characters. The trailing digits are the nozzle **material** (`00` stainless steel, `01` hardened steel, `05` tungsten carbide; BambuStudio `DevNozzleSystem.cpp` `_str2_nozzle_type`), and BambuStudio's `_generate_nozzle_id` (`DeviceManager.cpp`) always writes `00` into a K-profile `nozzle_id`, so a calibration table never distinguishes materials.
+*   Second-character flow codes BambuStudio emits in `nozzle_id`: `S` standard, `H` high flow, `U` TPU high flow, `T` TPU 2.85 (`TPU285`, new with the H3C), `B` E3D high flow (`_generate_nozzle_id`; read back by `DevCalib.cpp` `convert_to_nozzle_type`).
 *   An **X1C declares an empty `nozzle_id` on every profile** (probed live: all eight, against a four-digit `cali_idx` and a populated `setting_id`). A model-capability flag is therefore the wrong thing to gate on — handle the emptiness directly.
 
 Note this is the *same* flow-code vocabulary as `NozzleInfo`'s `type` key on H2-generation printers, but `type` reports nozzle **material** on legacy printers — see §3's note on that key.
@@ -199,7 +200,7 @@ The printer returns the complete onboard profile list over the report topic (`de
         "name": "My Custom PLA Matte",
         "k_value": "0.022000",
         "n_coef": "0.000000",
-        "setting_id": "PF12345678901234567"
+        "setting_id": "GFSA00"
       }
     ]
   }
@@ -216,9 +217,9 @@ Two further per-entry fields are optional and absent from the example above:
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `ams_id` | int | `0` | Links the profile to an AMS unit. |
-| `tray_id` | int | `-1` | Links the profile to an AMS tray slot. **At least X1C firmware spuriously reports `result: "fail"` for an `extrusion_cali` write using `tray_id: -1` even though the write still applies** — do not treat that ack's `result` as authoritative for a `tray_id: -1` write without cross-checking that the profile actually landed. |
+| `tray_id` | int | `-1` | Links the profile to an AMS tray slot. **At least X1C firmware spuriously reports `result: "fail"` for an `extrusion_cali` write using `tray_id: -1` even though the write still applies** — do not treat that ack's `result` as authoritative for a `tray_id: -1` write without cross-checking that the profile actually landed. bambuddy measured the same on an X1C (`reason: "invalid tray_id"`) and found that sending `tray_id: 0` instead turns the ack into `success`, so it now always sends `0` for a profile not tied to a tray (`bambu_mqtt.py` `set_kprofile`, issue #2718). |
 
-*(Verification source: this crate's `KProfileEntry` doc comments in `src/diagnostics/kprofile.rs`; the `tray_id: -1` ack behaviour is a live-probe observation against an X1C.)*
+*(Verification source: this crate's `KProfileEntry` doc comments in `src/diagnostics/kprofile.rs`; the `tray_id: -1` ack behaviour is a live-probe observation against an X1C, independently reproduced by bambuddy.)*
 
 #### Create or Edit a Calibration Profile
 To save or overwrite a specific K-value profile slot, publish an `"extrusion_cali_set"` command containing a nested `"filaments"` array:
@@ -227,16 +228,20 @@ To save or overwrite a specific K-value profile slot, publish an `"extrusion_cal
 {
   "print": {
     "command": "extrusion_cali_set",
+    "nozzle_diameter": "0.4",
     "filaments": [
       {
-        "cali_idx": -1,
+        "tray_id": 0,
+        "ams_id": 0,
+        "slot_id": 0,
         "filament_id": "GFA01",
         "nozzle_diameter": "0.4",
         "nozzle_id": "HS00-0.4",
         "extruder_id": 0,
         "name": "My Custom PLA Matte",
         "k_value": "0.022000",
-        "setting_id": "PF12345678901234567"
+        "n_coef": "0.0",
+        "setting_id": "GFSA00"
       }
     ],
     "sequence_id": "50002"
@@ -244,11 +249,25 @@ To save or overwrite a specific K-value profile slot, publish an `"extrusion_cal
 }
 ```
 
+This is the shape BambuStudio's `MachineObject::command_set_pa_calibration` (`DeviceManager.cpp`) builds when a profile is saved:
+
+*   `nozzle_diameter` is set at the `print` level as well as per entry.
+*   `cali_idx` is written **only when it is `>= 0`**. Leaving it out creates a new profile in the next free slot; sending an index that is not already in the table is rejected with `reason: "no matched cali_idx or filament_id"`, so an index cannot be chosen for a new profile. *(open-bamboo-networking `research/12.08-pa-calibration.md`, X2D; single source for the rejection.)*
+*   `tray_id`, `ams_id`, `slot_id`, `setting_id`, `filament_id`, `name`, `k_value` and `n_coef` are always written. `n_coef` is `"0.0"` for a manual save and the measured value after auto-calibration.
+*   `nozzle_pos` and `nozzle_sn` are added only when a rack position is known.
+*   On an X2D, a frame that left out `tray_id`, `ams_id`, `slot_id` and `setting_id` stored `nozzle_pos` `0` on both extruders, while Studio's full frame stored `nozzle_pos` equal to `extruder_id`. *(open-bamboo-networking, firmware `02.08.04.57`, 2026-10-25; single source.)*
+*   Failure `reason` strings seen: `"no matched cali_idx or filament_id"` on `extrusion_cali_set`, and `"Not find"` on `extrusion_cali_get` for a filament with nothing stored (open-bamboo-networking).
+
 ##### Dual-Nozzle Multi-Profile Calibration
 On IDEX platforms (such as the `H2D`), the `"filaments"` array inside `"extrusion_cali_set"` may carry multiple structured objects to commit calibration constants for both primary (Right - `extruder_id: 0`) and secondary (Left - `extruder_id: 1`) carriages in a single MQTTS write transaction.
 
 ##### Calibration Setting ID Boundary Rule
-The `"setting_id"` parameter inside K-profile calibration payloads (`extrusion_cali_set` and `extrusion_cali_del`) must conform strictly to a 19-character numeric string format consisting of the `"PF"` header prefix followed by exactly 17 numeric digits (e.g., `"PF12345678901234567"`). Alphanumeric setting ID formats (such as `"PFUS9be9e18f81828a"`) are strictly reserved for slicer-side filament presets (`ams_filament_setting` / `tray_info_idx` mappings). Transmitting an alphanumeric setting ID inside K-profile operations will result in execution failure or local EEPROM table corruption.
+**Corrected 2026-11-19.** This section used to say `setting_id` must be `"PF"` followed by exactly 17 digits, and that alphanumeric ids such as `"PFUS…"` were reserved for slicer presets and would fail or corrupt the table. Upstream contradicts that:
+
+*   BambuStudio fills `setting_id` from the **filament preset's own `setting_id`** (`CalibrationWizard.cpp` `cache_preset_info` / `PressureAdvanceWizard::on_cali_start`: `filament_preset->setting_id`). That is a system preset id such as `"GFSA00"` or a user preset id such as `"PFUS…"` — the same vocabulary as `tray_info_idx`.
+*   open-bamboo-networking captured a live Studio `extrusion_cali_set` frame on X2D firmware `02.08.04.57` carrying `"setting_id": "PFUS…"`, and documents other frames with `"GFSA00"` and `"GFL99"`.
+
+No source for the 17-digit rule has been found. Treat `setting_id` as the filament preset id, the same string `ams_filament_setting` sends. BambuStudio sends no `setting_id` on `extrusion_cali_del` (see below).
 
 #### Delete a Calibration Profile
 The delete fields sit **flat in `print`** — there is no `filaments` array, unlike `extrusion_cali_set`. Every upstream client agrees on this: BambuStudio `MachineObject::command_delete_pa_calibration` (`DeviceManager.cpp`), bambuddy `delete_kprofile` (`bambu_mqtt.py`) and OrcaSlicer (`DeviceManager.cpp`). An earlier version of this section nested the fields in `filaments[]` and gave the IDEX form no field naming the profile (no `cali_idx`, no `filament_id`); both were wrong (#313). Not yet verified against a wire capture.
@@ -266,7 +285,7 @@ The profile is identified by `cali_idx` + `filament_id` (plus `extruder_id`/`noz
     "filament_id": "GFA01",
     "cali_idx": 4,
     "nozzle_diameter": "0.4",
-    "setting_id": "PF12345678901234567",
+    "setting_id": "GFSA00",
     "sequence_id": "50003"
   }
 }

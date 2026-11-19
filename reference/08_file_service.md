@@ -115,9 +115,11 @@ Studio also uses some of these for its own client-side failures (`ERROR_PIPE`, `
 {"peer":"studio","api_version":2}
 ```
 
-Studio reads `reply.storage`, an array of storage labels. **(OBN only)**: a P2S answered `["emmc","udisk"]`. The stock upload path sends `{"api_version":3,"peer":"studio","peer_t":3}`, and an X2D answered `{"allow_internal_model_download":true,"api_version":3,"storage":["emmc","udisk"],"upload_storage":["emmc","udisk"]}`. ha-bambulab also accepts a bare array and the keys `upload_storage`/`storage_list`/`storages`, defensively. Probe this rather than guessing storages.
+Studio reads `reply.storage`, an array of storage labels. **(OBN only)**: a P2S answered `["emmc","udisk"]`. The stock upload path sends `{"api_version":3,"peer":"studio","peer_t":3}`, and an X2D answered `{"allow_internal_model_download":true,"api_version":3,"storage":["emmc","udisk"],"upload_storage":["emmc","udisk"]}`. ha-bambulab also accepts a bare array and the keys `upload_storage`/`storage_list`/`storages`, defensively. Probe this rather than guessing storages. **(OBN only)**: an H2C on `01.02.00.00` answers both the `api_version` 2 and 3 requests with the same reply, which has **no** `allow_internal_model_download` key. The key follows `fun2` bit 17 (see "Reading internal models" below).
 
-**Storage labels** seen in `storage` fields: `emmc`, `internal` (internal); `udisk`, `sdcard`, `usb`, `external`, and an absent or empty value (external). Studio's file browser sends `storage` only when its panel has one selected (`m_file_storage`). **(OBN only)**: none for the External tab, `"internal"` for the Internal tab.
+**Storage labels** seen in `storage` fields: `emmc`, `internal`, `udisk`, `sdcard`, `usb`, `external`, and an absent or empty value. Studio's file browser sends `storage` only when its panel has one selected (`m_file_storage`). **(OBN only)**: none for the External tab, `"internal"` for the Internal tab.
+
+**The labels don't select the storage their names suggest.** **(OBN only)**: on an X2D, `LIST_INFO` `type:model` lists the USB stick only for an absent, `""` or `"external"` label; `"internal"`, `"emmc"`, **`"udisk"`** and **`"sdcard"`** all list internal storage (`/userdata/model/history/…`, `/userdata/model/bbl/<model>/…`). With the stick removed, the external labels answer `17` (`STORAGE_UNAVAILABLE`) while the internal ones keep listing. An H2C on `01.02.00.00` also lists internal storage for `"udisk"`, but without a stick it answers `17` for every label, internal ones included. For `type:timelapse` the X2D differs again: `""` lists `/media/usb0/timelapse/…`, `"internal"` returns an empty list, and `"emmc"`/`"udisk"` answer `17`. An earlier version of this section classed `udisk` and `sdcard` as external. bambino sends no label for the card and `"emmc"` for internal storage, which these results support.
 
 #### `LIST_INFO` (1): list files
 
@@ -136,11 +138,31 @@ This is not a subscription. It reads named members out of a file that `LIST_INFO
 ```
 
 - A member is addressed as `<path from LIST_INFO>#<member path inside the zip>`. The member `#thumbnail` is a video's thumbnail.
-- Studio's `FetchModel` asks for `_rels/.rels`, `3D/3dmodel.model`, `Metadata/model_settings.config`, `Metadata/slice_info.config`, `Metadata/project_settings.config` and each `plate_thumbnail_*` member, with `"zip": true`. The reply is then a zip archive containing those members. Studio's `UpdateFocusThumbnail2` requests one image member at a time without `zip`.
+- Studio's `FetchModel` asks for `_rels/.rels`, `3D/3dmodel.model`, `Metadata/model_settings.config`, `Metadata/slice_info.config`, `Metadata/project_settings.config`, `Metadata/filament_sequence.json` (since commit `2d28bb4e0`, commented "Optional part: only written by newer Studio versions") and each `plate_thumbnail_*` member, with `"zip": true`. The reply is then a zip archive containing those members. Studio's `UpdateFocusThumbnail2` requests one image member at a time without `zip`.
 - An older form, `{"files":[<name>, ...]}`, asks for thumbnails by bare name (Studio's `OldThumbnail` path).
-- **(OBN only)**: its client also sends `"api_version":2,"peer":"studio"`, and asks for `#Metadata/plate_<n>.png`, then `#Metadata/plate_no_light_<n>.png`, then `#thumbnail`, to get a plate image.
+- **(OBN only)**: its client asks for `#Metadata/plate_<n>.png`, then `#Metadata/plate_no_light_<n>.png`, to get a plate image. It used to fall back to `#thumbnail` as well, but OBN's own X2D probe found that `#thumbnail` is a **video's** thumbnail only: `<file>.gcode.3mf#thumbnail` answers `result 14`. The X2D returns the same bytes with or without `api_version`/`peer`, and Studio never sends them in `SUB_FILE`.
 
-Each reply frame's `reply` carries `path` (the requested `file#member`), `size`, an optional `mimetype` and `thumbnail`, and `continue: true` when more fragments of the **same** member follow. The member's bytes follow `\n\n`. `size == 0` means the member is missing. `result` stays `CONTINUE` until the last member.
+Each reply frame's `reply` carries `path`, `size`, an optional `mimetype` and `thumbnail`, and `continue: true` when more fragments of the **same** member follow. The member's bytes follow `\n\n`. `size == 0` means the member is missing. `result` stays `CONTINUE` until the last member.
+
+**Reply details (OBN only, X2D probe with a direct client):**
+
+- **Raw mode (no `zip`)**: one frame per requested member, in request order, `result 1` on every frame but the last and `0` on the last. `reply.path` echoes the request entry exactly and is the only way to tell which member a frame holds. `mimetype` is `""` for `.3mf` members.
+- **Zip mode**: the members are packed into one zip, streamed in 20 480-byte fragments. `reply.path` is the bare `<file>`, without `#`, and `reply.offset` is the fragment's offset in the zip.
+- **A missing member or file answers `result 14` (`FILE_READ_WRITE_ERR`) with `reply` `{"path":"<entry>","size":0,"thumbnail":"<entry>"}`**, not a `result 0` frame with `size 0`. The same applies to `#thumbnail` on a `.3mf`, a path without `#`, and any `/media/usb0/…` path with the stick removed (`14`, not `17`). Studio's `UpdateFocusThumbnail2` keys "missing" on `size == 0`, which this reply also satisfies. A relative path or one outside the printer's file area (`/etc/passwd#x`) answers `2` with no `reply`.
+- **The first failing entry ends the request.** In raw mode, entries before it have already arrived with `result 1`, the failure ends the sequence, and later entries are never sent. In zip mode one missing member fails the whole request with `14` and no data. Probe alternative member names in separate requests. (Studio's own `FetchModel` now names an optional member in a zip request, which by this rule would fail for an older file without it; nothing upstream records whether it does.)
+- **Raw frames are capped at 262 144 bytes** (reply JSON + `\n\n` + member). Above that, a member up to 1 MiB gets **no reply at all** and the session stalls for about 12–13 s before it answers the next request; above 1 MiB the answer is an immediate `14`. Zip mode has no such cap. Studio only fetches small thumbnails raw.
+- **`storage` has no effect with an absolute path**: a `/media/usb0/…` path with `storage:"emmc"` and a `/userdata/…` path with no `storage` both succeed.
+
+**Reading internal models depends on `fun2` bit 17.** **(OBN only, for the refusal)**: every printer OBN has seen lists `/userdata/model/…` through `LIST_INFO`, but only one that sets `fun2` bit 17 (`is_support_model_internal_storage`) lets a client read those files:
+
+| Printer, firmware | `fun2` | Bit 17 | `allow_internal_model_download` | Reads of `/userdata/model/…` |
+|---|---|---|---|---|
+| X2D `01.02.00.00` | `B7B77` | set | `true` | served (`SUB_FILE`, `FILE_DOWNLOAD`) |
+| P2S `01.02.00.00` | `3973` | clear | not recorded | `FILE_DOWNLOAD` and `FILE_DEL` answer `2` |
+| H2C `01.02.00.00` | `2011FF` | clear | key absent | `SUB_FILE` and `FILE_DOWNLOAD` answer `2`, with or without Developer Mode |
+| H2D `01.03.00.00` | — | clear | — | `SUB_FILE` and `FILE_DOWNLOAD` answer `2` (third-party report OBN cites) |
+
+The `2` comes back whether or not the file exists, so the firmware rejects the path itself. Internal *timelapses* (`/userdata/media/timelapse/…`) are still served on the P2S, so the refusal covers the model tree, not all of `/userdata`. BambuStudio shows its Internal tab for models only when bit 17 is set (`MediaFilePanel.cpp`), so stock Studio never reads internal models on these printers. ha-bambulab's mocks agree on which models set the bit (X2D set; H2C and P2S clear); its commit `28bec1f` independently reports an H2C refusing a download of an internal copy with `2`.
 
 This needs the file's `path`, so reaching the running job means first finding its file in `LIST_INFO`.
 
@@ -170,7 +192,15 @@ The first reply frame carries `reply.mem_dl_param_size` and the printer's own JS
 2. Chunks, all on the init's `sequence`: `{"frag_id":<n>,"offset":<bytes>,"size":<bytes>}` + `\n\n` + bytes. The last chunk adds `"file_md5"`, the lowercase hex MD5 of the whole file.
 3. One final reply, `result` 0.
 
-**(OBN only), P2S**: send every chunk back to back without reading between them. Waiting for a per-chunk reply, or polling the socket mid-pipeline, gets `-9203` for files over 255 KiB. The printer sends no per-chunk replies, so read exactly one final reply. A P2S reported `chunk_size` 255, and an X2D 255 over LAN. `storage: "emmc"` uploads land in `/userdata/model/history/<path>` on the X2D. Don't send `FILE_DEL` before an upload: `FILE_EXIST` already overwrites.
+**(OBN only), P2S**: send every chunk back to back without reading between them. Waiting for a per-chunk reply, or polling the socket mid-pipeline, gets `-9203` for files over 255 KiB. The printer sends no per-chunk replies, so read exactly one final reply. A P2S reported `chunk_size` 255, and an X2D 255 over LAN. `storage: "emmc"` uploads land in `/userdata/model/history/<path>` on the X2D, where a `FILE_DOWNLOAD` of that path returns the uploaded bytes. Don't send `FILE_DEL` before an upload: `FILE_EXIST` already overwrites.
+
+**(OBN only), H2C `01.02.00.00`** (community report): the same pipeline shape (init `result 1` with `chunk_size` 255, no per-chunk replies, one final `result 0`), with three differences:
+
+- **`history/` is an 8-entry ring.** An upload into a full ring silently evicts the oldest entry, which then disappears from `LIST_INFO`. The same cap is reported for the H2D. `/userdata/model/bbl` is untouched.
+- **Every path is cut to its basename.** `nest1/<name>`, `../<name>` and `/data/<name>` were all accepted and landed as `/userdata/model/history/<name>`.
+- **The file can't be read back.** `FILE_DOWNLOAD` of the uploaded file answers `2` (the bit-17 refusal above), so the X2D read-back does not hold here.
+
+Not exercised on the H2C: `result 19` on re-upload, uploads over 255 KiB, the `-9203` rule, and non-`.3mf` names.
 
 #### `FILE_DEL` (3)
 
@@ -188,7 +218,7 @@ The first reply frame carries `reply.mem_dl_param_size` and the printer's own JS
 
 ### 8.5 Which Printers Serve It
 
-**Serves it:** P2S and X2D (open-bamboo-networking captures, X2D `01.02.00.00`). H2D and H2S are the printers ha-bambulab's client exists for, to reach internal storage FTPS doesn't show. The X1C, H2C and H2D Pro advertise it with `fun` bit 31 (below), but nobody has exercised it on them. **Unknown:** X1, X1E.
+**Serves it:** P2S, X2D and H2C (open-bamboo-networking captures, X2D `01.02.00.00`; an H2C community report on `01.02.00.00` exercised ability, listing, upload and `SUB_FILE`). H2D and H2S are the printers ha-bambulab's client exists for, to reach internal storage FTPS doesn't show. The X1C and H2D Pro advertise it with `fun` bit 31 (below), but nobody has exercised it on them. On the H2C the service is reachable but refuses reads of internal model files (see `fun2` bit 17 in §8.4). **Unknown:** X1, X1E.
 
 **Doesn't serve it: every chamber-image printer (A1, A1 Mini, A2L, P1P, P1S).** On a P1S running `01.10.00.00` (2026-10-15), with no camera client attached:
 
@@ -208,11 +238,11 @@ The P1S's port 6000 is the chamber-image server only. It doesn't recognise the f
 - **Send to Printer** (`SendToPrinterDialog`). With the bit set, `update_show_status` opens an `ft_*` tunnel to `bambu:///local/<ip>?port=6000…` (`GetConnection`) and `on_ok` uploads through `CreateUploadFileJob`, the chunked `FILE_UPLOAD`. Without it, or once the tunnel fails, Studio uploads over FTPS (`SendJob`). The fallback works like this: `GetConnection` arms an 8 s timer that marks the connection failed, and on a LAN printer `ChangeConnectMethod` then switches straight to FTP.
 - **The skip-objects button.** `PrintingTaskPanel::enable_partskip_button` enables it only when `is_support_brtc` is set. The dialog then reads the pick image through `mem:/16`.
 
-With the bit absent, Studio never uses the service. P1 and A1 firmware send no `fun` at all (03 §3.2.1, "Capability Bitfields Are Absent on P1 and A1"), so the bit is false there, which matches the P1S probe. In the captures above, bit 31 is set on every RTSPS model with a `fun` field: X1C (`01.09.00.01`), H2C, H2D, H2D Pro, H2S, P2S and X2D. It is clear on the A2L, the one chamber-image capture that has `fun`. So the X1C, H2C and H2D Pro advertise the service too, though nobody has exercised it on them over the wire. The bit's meaning rests on BambuStudio alone. bambuddy doesn't parse it, though it independently records that H2-series, P2S and X2D firmware receive Studio's uploads over port 6000 (`print_storage.py`, `brtc://emmc/<name>` dispatch URLs).
+With the bit absent, Studio never uses the service. P1 and A1 firmware send no `fun` at all (03 §3.2.1, "Capability Bitfields Are Absent on P1 and A1"), so the bit is false there, which matches the P1S probe. In the captures above, bit 31 is set on every RTSPS model with a `fun` field: X1C (`01.09.00.01`), H2C, H2D, H2D Pro, H2S, P2S and X2D. It is clear on the A2L, the one chamber-image capture that has `fun`. So the X1C, H2C and H2D Pro advertise the service too; the H2C has since been exercised (§8.4), the X1C and H2D Pro have not. The bit's meaning rests on BambuStudio alone. bambuddy doesn't parse it, though it independently records that H2-series, P2S and X2D firmware receive Studio's uploads over port 6000 (`print_storage.py`, `brtc://emmc/<name>` dispatch URLs).
 
 **`ipcam.brtc_service` is not the gate.** ha-bambulab's X1C, H2 and P2S mocks report `"brtc_service": "enable"`, but no source says what it gates. open-bamboo-networking (`research/12.01.05-fields-camera-ai.md`) records two unranked readings. One is an off-LAN "Bambu WebRTC" camera transport, from third-party X1C telemetry seen alongside `DevSignal.bambu.com` signalling. The other is this port-6000 storage service. What "brtc" stands for is unknown. Whatever it means, the port-6000 service is plain TLS over TCP with JSON frames: it has no SDP, ICE, STUN or DTLS-SRTP, so it isn't WebRTC.
 
-The other file-adjacent bits Studio decodes describe features, not the service: `fun` bit 28 (internal timelapse), `fun2` bit 0 (print with eMMC), `fun2` bit 17 (internal model storage) and `cfg` bit 42 (preview image, `mem:/26`). They are set mainly on the X2D. The P2S serves the service with `fun2` bit 17 clear.
+The other file-adjacent bits Studio decodes describe features, not the service: `fun` bit 28 (internal timelapse), `fun2` bit 0 (print with eMMC), `fun2` bit 17 (internal model storage) and `cfg` bit 42 (preview image, `mem:/26`). They are set mainly on the X2D. The P2S and H2C serve the service with `fun2` bit 17 clear, but then refuse reads of internal model files (§8.4).
 
 **Skip objects** doesn't consult `ipcam.file`. Once the button is enabled (above), `PartSkipDialog::fetchUrl` dials port 6000 in LAN mode and falls back to TUTK on failure. Studio also parses `fun` bit 49 as `is_support_partskip`.
 

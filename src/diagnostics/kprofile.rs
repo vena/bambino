@@ -108,8 +108,8 @@ pub struct KProfileEntry {
     /// Two traps follow from that:
     ///
     /// * The **fitted** nozzle reports `HH01`, not `HH00`. Compare on the first **two**
-    ///   characters only; the trailing digits are a hardware variant that the calibration table
-    ///   normalizes to `00`.
+    ///   characters only; the trailing digits are the nozzle material (`01` = hardened steel),
+    ///   which BambuStudio always writes as `00` in a K-profile `nozzle_id`.
     /// * Some models declare this **empty on every profile** — an X1C was probed live with all
     ///   eight entries empty here, against a four-digit `cali_idx` and a populated `setting_id`.
     ///   Handle the emptiness directly; a model-capability flag is the wrong thing to gate on.

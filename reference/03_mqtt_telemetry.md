@@ -53,9 +53,11 @@ The last two are the ones most easily missed: bare subtask names with no `/usr/`
 
 *   **Spaces become `_`**, including a leading or trailing space: `Part ` is echoed as `Part_`.
 *   **Long names are truncated** at about 100 characters and marked with a trailing `...`. The cut is not a fixed character count (a name with multibyte characters came back at 98), so match the marker, not a length.
-*   **A print started from the printer's own screen** reports the file's full name, `.3mf` extension included, as `subtask_name`. A dispatched print reports whatever the client sent.
+*   **A print started from the printer's own screen** reports the file's full name, `.3mf` extension included, as `subtask_name` on the P1S. A dispatched print reports whatever the client sent.
 
 *(Verification source: bambuddy `main.py` `_normalise_subtask_name` / `_SUBTASK_TRUNCATION_MARKER`, issues #2829, #3241 and #3009; single source.)*
+
+**X2D and H2C name a screen-started print differently.** There `subtask_name` is the project title, `<metadata name="Title">` in the file's `3D/3dmodel.model`; only when the title is empty is it the file's base name, **without** the `.gcode.3mf` extension (`V1 - 12mm Height.gcode.3mf` → `"V1 - 12mm Height"`). With a title set, the file name is reported nowhere: on the H2C, `gcode_file` reads `/data/Metadata/plate_N.gcode`. The printer's own `project_file` report of a screen start carries `subtask_name: ""`; the name arrives in the next `push_status`. Do not derive a file name from either field without knowing the model. *(Verification source: open-bamboo-networking `research/12.01.01-fields-job.md`, X2D 2026-10-25 / 2026-11-02 and H2C `01.02.00.00`; single source.)*
 
 ```json
 {
@@ -180,6 +182,17 @@ The active state of the front enclosure door is tracked via bit 23 (`0x00800000`
 
 Supported sensor-equipped architectures share the same bitmask (`0x00800000`) but live in different telemetry fields. For unmonitored models, this bit remains static or fluctuates meaninglessly and must be ignored.
 
+**`stat` bits 23–26 are four door hall sensors**, per BambuStudio's comment in `MachineObject::parse_new_info` (`DeviceManager.cpp`): "stat[23-26]: door hall state, bit0 front door, bit1 top cover, bit2 left door, bit3 right door".
+
+| `stat` bit | Mask | Sensor |
+|---|---|---|
+| 23 | `0x00800000` | Front door (the bit above) |
+| 24 | `0x01000000` | Top cover |
+| 25 | `0x02000000` | Left door |
+| 26 | `0x04000000` | Right door |
+
+BambuStudio itself reads only bit 23. ha-bambulab reads bit 24 as the H2 top cover and records an H2C capture: `stat` `"640258000"` with the cover closed, `"641258000"` open (commit `229df2b`). bambuddy reads neither. Which models fit the left and right door sensors is not recorded anywhere upstream. These are `stat` bits; `home_flag` bit 24 is an unrelated flag (see [REF-HOMEFLAG]).
+
 #### Divergent Nozzle Info Telemetry Keys [REF-NOZZLE-KEYS]
 The structured array nested within `device.nozzle.info` contains nozzle characteristics that programmatically vary based on the physical extruder and carriage architecture. Evaluators must map these keys conditionally based on the active model prefix:
 
@@ -223,15 +236,36 @@ An empty **rack dock** is a different case: it is absent from the payload entire
 bambino implements the two-field test as `NozzleInfo::is_installed()`. *(Verification source: bambuddy issue #2885.)*
 
 ##### `type` Carries Two Vocabularies by Generation
-The `"type"` key (bambino's `NozzleInfo::nozzle_type`) reports the nozzle **material** on legacy printers (e.g. `"hardened_steel"`) but a **flow code** on H2-generation printers (`"HH"` high flow / `"HS"` standard, plus a hardware-variant digit pair). Do not assume one and parse the other. This is the same flow-code vocabulary as a K-profile entry's `nozzle_id` — see §7.2 of `reference/07_diagnostics_hms.md` for its encoding and comparison rule.
+The `"type"` key (bambino's `NozzleInfo::nozzle_type`) reports the nozzle **material** on legacy printers (e.g. `"hardened_steel"`) but a **packed tool code** on H2-generation printers. Do not assume one and parse the other.
+
+BambuStudio's `s_parse_nozzle_type` (`DevNozzleSystem.cpp`) reads the packed code as `[tool][flow][material]`, optionally followed by `-<diameter>`:
+
+| Position | Values |
+|---|---|
+| 1st character: tool | `H` hotend; `C` cutter; `L` laser; `F` fan. Only `H` carries the fields below. |
+| 2nd character: flow (`_str2_nozzle_flow_type`) | `S`, `A`, `X` standard; `H`, `E` high flow; `U` TPU high flow; `T` TPU 2.85 (`TPU285`); `B` E3D high flow |
+| 3rd–4th characters: material (`_str2_nozzle_type`) | `00` stainless steel; `01` hardened steel; `05` tungsten carbide |
+| After `-` | Diameter, e.g. `HS01-0.4` |
+
+So `HH01` is a high-flow, hardened-steel hotend. An earlier version of this section called the two digits a "hardware variant"; they are the material. The exact string `"N/A"` means an unknown nozzle. Since commit `2639c2089`, BambuStudio also accepts `nozzle.info[].diameter` as either a number or a string, and treats a missing one as `0` (`DevNozzleSystemParser::ParseV2_0`). This is the same flow-code vocabulary as a K-profile entry's `nozzle_id` — see §7.2 of `reference/07_diagnostics_hms.md` for its encoding and comparison rule.
 
 #### Fan Speed Telemetry Key Mapping [REF-CLIM-FANS]
 On-board cooling fan speeds are represented in telemetry via the following JSON keys:
 *   `cooling_fan_speed`: Part cooling fan speed.
-*   `big_fan1_speed`: Auxiliary cooling fan speed (represents the primary left-side auxiliary fan).
+*   `big_fan1_speed`: Auxiliary cooling fan speed (the port-2 auxiliary fan, `FAN_REMOTE_COOLING_0_IDX`). Which side of the printer it sits on is model-dependent; see the table below.
 *   `big_fan2_speed`: Chamber exhaust or filtration fan speed.
 *   `heatbreak_fan_speed`: Toolhead heatbreak/hotend fan speed.
-*   `device.airduct.parts`: On models with a second left-side auxiliary fan (`X2D` and `P2S`), its speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage (`0` to `100`) and does not require the 0–15 step conversion used by the other fan telemetry keys. Despite the wire port number and this id suggesting a "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` — a second left-side auxiliary fan, distinct from the primary `FAN_REMOTE_COOLING_0_IDX` (port 2, mirrored into `big_fan1_speed`); confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary part cooling fan" throughout (issue #60).
+*   `device.airduct.parts`: On models with a second auxiliary fan (`X2D`, `P2S`, `H3C`), its speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage (`0` to `100`) and does not require the 0–15 step conversion used by the other fan telemetry keys. BambuStudio's `DevFan.h` names this fan (port 10) `FAN_REMOTE_COOLING_1_IDX`, distinct from the port-2 `FAN_REMOTE_COOLING_0_IDX` mirrored into `big_fan1_speed`.
+
+**The two auxiliary fans sit on different sides on different models.** An earlier version of this section called port 10 "a second left-side auxiliary fan" on X2D and P2S, citing bambuddy test titles; bambuddy has since corrected those titles, and BambuStudio's per-model `resources/printers/<model_id>.json` (`fan` block, cooling mode) gives:
+
+| Model | Port 2 | Port 10 |
+|---|---|---|
+| X2D (`N6`) | Left (Aux) | Right (Aux; Filter in some modes) |
+| P2S (`N7`) | Right (Aux; Filter in heating mode) | Left (Aux) |
+| H3C (`N10`) | Right (Aux; Heating in heating mode) | Left (Aux) |
+
+The H3C file also names port 15 "Chamber". The wire values are the same on every model; only the side differs. *(Verification sources: BambuStudio `resources/printers/N6.json`, `N7.json`, `N10.json`; bambuddy commit `2e1868922`.)*
 
 #### The Settings Bitmask (`cfg`)
 
@@ -264,6 +298,7 @@ Bit positions confirmed against BambuStudio's `/*cfg*/` block (`src/slic3r/GUI/D
 | 32-33 | Idle heating protection |
 | 36-37 | Air purification at print end (`0` disabled, `1` inside, `2` outside) |
 | 38-39 | Snapshot control (read-only here; set by `ipcam_cap_pic_set`; `0` and `3` mean unsupported) |
+| 41 | Air-printing detection, non-visual (the second switch; see "Printer Settings" below) |
 | 42 | Liveview preview supported |
 | 43-44 | Smart nozzle blob detection (v2) mode (`0` off, `1` on, `2` auto) |
 
@@ -282,7 +317,9 @@ Depending on the active firmware track and message type, the `"fun"` key drifts 
 
 #### The Second Capability Bitfield (`fun2`)
 
-`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode (`is_support_pa_mode`: shows the per-job PA profile switch sent as `extrude_cali_manual_mode`, see "PA Profile Switch" below; read via `ModelQuirks::pa_mode_support`), `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage, `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color.
+`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode (`is_support_pa_mode`: shows the per-job PA profile switch sent as `extrude_cali_manual_mode`, see "PA Profile Switch" below; read via `ModelQuirks::pa_mode_support`), `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage (`is_support_model_internal_storage`; see the port-6000 note below), `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color, `25` auto-refill uses the `RefillInfo` protocol, `26` auto-refill supports manual editing, `27` door-open check supports the slow-down mode (`config: 3`, see `set_door_stat` below), `32` non-visual air-printing detection supported (`cfg` bit 41), `36` timelapse memory (also `flag3` bit 20). Bits 25–27, 32 and 36 are read in `MachineObject::parse_new_info` and `DevPrintOptions.cpp`.
+
+**Bit 17 also predicts whether port 6000 will serve internal-storage model files.** open-bamboo-networking found that every printer it tested lists `/userdata/model/…` with `LIST_INFO`, but only one with `fun2` bit 17 set (X2D) lets a client read them. The P2S, H2C and H2D answer `result 2` to `SUB_FILE` and `FILE_DOWNLOAD` of those paths whether the file exists or not, and the `REQUEST_MEDIA_ABILITY` key `allow_internal_model_download` follows the bit. BambuStudio's `MediaFilePanel::UpdateByObj` shows its Internal tab only when the bit is set, and ha-bambulab's model mocks agree on which models set it. The link between the bit and the refusal is open-bamboo-networking's alone. See `08_file_service.md` §8.4.
 
 **Single-source.** Only BambuStudio reads `fun2`. bambuddy parses `fun` for the developer-mode bit alone and does not parse `fun2` in any form; ha-bambulab likewise. This does not meet this project's two-upstream confirmation bar, so treat the bit meanings above as BambuStudio's account rather than as settled.
 
@@ -742,7 +779,7 @@ Three more settings read back from `cfg` like the `print_option` ones, each with
 
 | Setting | Request | Value in `cfg` | Support |
 | --- | --- | --- | --- |
-| Door-open check | `{"system": {"command": "set_door_stat", "config": 0\|1\|2}}`: disabled, warn, pause print (`MachineObject::command_set_door_open_check`) | bits 20-21, same codes | `fun` bit 12 (`DeviceManager.cpp`); bambino falls back to the model having a door sensor |
+| Door-open check | `{"system": {"command": "set_door_stat", "config": 0\|1\|2\|3}}`: disabled, warn, pause print, keep printing but slow the toolhead (`MachineObject::command_set_door_open_check`; `DOOR_OPEN_CHECK_ENABLE_SLOW_DOWN = 3` in `DeviceManager.hpp`) | bits 20-21, same codes | `fun` bit 12 (`DeviceManager.cpp`); bambino falls back to the model having a door sensor. `3` only when `fun2` bit 27 is set: BambuStudio never sends it otherwise ("The slow down behaviour only exists on firmwares reporting fun2[27]; never push it elsewhere") |
 | Idle heating protection | `{"print": {"command": "set_against_continued_heating_mode", "enable": bool}}` (`DevPrintOptions::command_set_against_continued_heating_mode`) | bits 32-33: `0` off, `1` on, `2` unavailable while heating maintenance runs (meaning from `SafetyOptionsDialog.cpp` UI text) | `fun` bit 62 (`DevPrintOptions.cpp`) |
 | Store sent files on external storage | `{"system": {"command": "print_cache_set", "config": bool}}` (`MachineObject::command_set_save_remote_print_file_to_storage`) | bit 19 | none reported; per-model `support_save_remote_print_file_to_storage`: X1, X1C, X2D, P2S, H2S, H2D, H2D Pro, H2C |
 
@@ -903,7 +940,7 @@ During the run the printer reports as if executing a print job, with these disti
 | `6` | + Vibration Compensation | `[14, 1, 3]` | `255` → `14` → `1` → `3` → `0` |
 | `62` | + Motor Noise, Nozzle Height, Heatbed Thermal | `[14, 1, 3, 25]` | `255` → `14` → `1` → `3` → `25` → `255` → `0` |
 
-Each supported bit adds exactly one stage. Stage IDs match pybambu's `CURRENT_STAGE_IDS` (`const.py`): `14` = `cleaning_nozzle_tip` (an unrequested preamble the firmware always queues first), `1` = `auto_bed_leveling`, `3` = `sweeping_xy_mech_mode` (annotated upstream as vibration compensation), `25` = `calibrating_motor_noise`, `255` = idle in the P1 encoding, `0` = `printing`.
+Each supported bit adds exactly one stage. Stage IDs match pybambu's `CURRENT_STAGE_IDS` (`const.py`), which also lists `82` = `heatbed_stabilizing`, annotated "H3C: confirmed on-device as heatbed stabilization"; BambuStudio's `get_stage_string` (`DeviceManager.cpp`) stops at `77`, so `82` is single-source: `14` = `cleaning_nozzle_tip` (an unrequested preamble the firmware always queues first), `1` = `auto_bed_leveling`, `3` = `sweeping_xy_mech_mode` (annotated upstream as vibration compensation), `25` = `calibrating_motor_noise`, `255` = idle in the P1 encoding, `0` = `printing`.
 
 **Unsupported option bits are silently accepted and silently dropped.** The `option: 62` run requested all five externally-documented routines (bits 1-5) on a P1S and queued only four stages: bits 4 (Nozzle Height) and 5 (Heatbed Thermal) produced **no stage at all**. The command was still acknowledged `"result": "success", "reason": "success"`, and no HMS entry or `print_error` was raised at any point in the run. There is therefore no wire-level way to distinguish "routine ran" from "routine silently ignored" other than diffing the requested bitmask against the resulting `stg` queue. Bit 4 being inert on a single-nozzle machine is expected (it is IDEX/dual-nozzle gated); bit 5 being inert on a P1S is a capability limit not previously recorded here.
 

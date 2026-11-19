@@ -1480,7 +1480,7 @@ impl EspIdfTlsConnector {
     ///
     /// **Takes many anchors, mirroring the tokio backend** (`build_verified_client_config`'s
     /// `ca_certs: impl IntoIterator<..>`). Bambu is mid-PKI-rollover: a P1S chains to the
-    /// legacy `BBL CA` root while newer models chain through `BBL Device CA <model>-V2` to
+    /// legacy `BBL CA` root while newer models chain through a `BBL Device CA <model>` to
     /// `BBL CA2 RSA`/`BBL CA2 ECC`, so a caller covering the model range needs several
     /// anchors at once and cannot pick one. See GitHub issue #145.
     ///

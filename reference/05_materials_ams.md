@@ -38,6 +38,10 @@ slot_exists = (tray_exist_bits >> shift_standard) & 1
 
 *   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': `shift_ht = 16 + (ams_id - 128) + slot_id` (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
 
+*   **AMS 3H and AMS-B (unit types `6`/`7`, H3C)**: these 9-slot rack units sit after the AMS Lite range. BambuStudio's `DevAmsTray::get_tray_flag_bit` and `DevAms::GetTrayId` (`DevFilaSystem.cpp`) give `shift = 28 + slot_id` for an AMS 3H (`ZMULTI_A`) and `37 + slot_id` for an AMS-B (`ZMULTI_B`). bambuddy's `utils/tray_ids.py` (`RACK_TRAY_BASE`) agrees. An H3C capture in ha-bambulab (`mock_data/MOCK-H3C.json`) shows a loaded slot 0 as `tray_exist_bits` `"30000000"`.
+
+**Unit presence (`ams_exist_bits`) uses a different layout.** BambuStudio's `DevAms::IsExist` reads `ams_exist_bits` bit `ams_id` for a standard AMS, AMS Lite or AMS 2 Pro, `4 + (ams_id - 128)` for an AMS-HT, `12` for an AMS Lite on an A2L, `13` for an AMS 3H and `14` for an AMS-B. bambuddy measured the standard and AMS-HT bits: an X1C with unit 1 read `"2"`, and `"0"` with the unit unplugged; an H2C with units 0–2 and AMS-HT 128 read `"17"`.
+
 **`tray_reading_bits` shares this layout.** The active-RFID-read bitmask uses the same bit positions: `ams_id*4 + slot` for AMS / AMS Lite / AMS 2 Pro, `16 + (ams_id - 128) + slot` for AMS-HT, and `24 + slot` for an AMS Lite on an A2L (next section). *(Verification source: BambuStudio `DevAmsTray::is_reading` via `sGetAmsFlagBit`, `DeviceCore/DevFilaSystem.cpp`.)*
 
 ##### Unit ID of an AMS Lite Attached to an A2L
@@ -85,6 +89,8 @@ On the P1 and A1 hardware series, when a physical AMS slot is completely empty, 
 
 ##### Incremental Telemetry Update Slot Cleansing Rules
 When the bitwise presence check indicates a spool has been removed (or when the `"state"` transitions to a non-loaded code like `9`), all stale material telemetry fields (including `tray_type`, `tray_color`, `tray_info_idx`, `tag_uid`, `tray_uuid`, and `remain`) must be explicitly cleared or nullified by the parser. This is required because the printer's incremental telemetry updates often omit configuration keys for inactive slots, causing stale material attributes to persist indefinitely in standard parsers.
+
+**Units are removed, not just slots.** When a push carries the `ams.ams` key, BambuStudio's `DevFilaSystemParser::ParseV1_0` (`DevFilaSystem.cpp`) erases every cached unit that the list does not contain, so an empty `ams.ams` list removes all of them. A push without the `ams.ams` key leaves the cached units alone. Treating "key absent" and "empty list" alike therefore keeps an unplugged AMS cached forever: bambuddy found an unplugged unit staying on its printer card until restart (commit `ad62d1063`). bambuddy fixed it with a narrower rule: drop a unit only when `ams_exist_bits` says it is gone (see the presence layout above).
 
 Additionally, some models (such as `H2D`) only emit `{id, state}` in incremental updates when a slot is not fully loaded. A transition to state `9` (empty) or `10` (present but retracted), or receiving an empty string for `tray_type`, must be treated as an explicit clearing signal. Without this active sanitization, stale material parameters from previously loaded spools will persist in the state representation.
 
@@ -140,6 +146,12 @@ Bits 0–3 identify which physical accessory is plugged in. BambuStudio casts th
 | `3` | AMS 2 Pro (BambuStudio `N3F`) | 4 | **yes**, 45–65 °C |
 | `4` | AMS-HT (BambuStudio `N3S`) | 1 | **yes**, 45–85 °C |
 | `5` | AMS Lite for N9 (`AMS_LITE_MIXED`) | varies | no |
+| `6` | AMS 3H (`ZMULTI_A`, H3C) | 9 | **per zone**, see below |
+| `7` | AMS-B (`ZMULTI_B`) | not recorded | **per zone**, see below |
+
+**AMS 3H.** The H3C's AMS 3H reports as unit `id "32"` with nine trays `0`–`8`, module name `n10a` in `get_version` (with no `/<id>` suffix), and a `zone_info[]` array. *(Verification source: ha-bambulab's H3C capture `MOCK-H3C.json`; bambuddy `tray_ids.py` `AMS3H_UNIT_ID = 32`, tested on an H3C; BambuStudio `resources/printers/N10.json` `"hotend_ams_type_string": "n10a"`.)* What unit id an AMS-B reports is not recorded upstream.
+
+**Zones.** Each `zone_info[]` entry carries `zone_id`, `zone_slots` (integers or numeric strings; BambuStudio accepts both), its own `humidity`, `humidity_raw` and `temp`, plus `dry_setting`, `dry_time`, `dry_sf_reason`, `zone_dry_info` and `info`. In the H3C capture, zone `0` holds slots `[5, 7]` and zone `1` the other seven, and `ams_exist_bits` reads `"2000"` (bit 13). BambuStudio treats a zone as able to dry only when it has **exactly two** `zone_slots` (`DevAmsZone::SupportDrying`, `DevFilaSystem.h`), and a type `6`/`7` unit dries only if at least one zone can (`DevAms::SupportDrying`). AMS 3H humidity is a percentage, as on the AMS 2 Pro and AMS-HT (`SupportHumidityPercent`).
 
 **This is the only field that answers "can this unit dry?" — `ams_id` cannot.** Addresses `0..=3` are shared by the original AMS, the AMS Lite and the AMS 2 Pro, and only the last has a heater. A drying command addressed by range rather than unit type reaches heaterless hardware, which acks nothing and leaves `dry_status` at `0`; BambuStudio gates on the type (`Widgets/AMSItem.hpp`, `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and so does bambuddy, by module-name prefix (`print_scheduler.py`, `if module_type not in ("n3f", "n3s"): skip`). Exposed here as `AmsUnitModel` (`src/types/telemetry/ams.rs`) with `supports_drying()` and `dry_temp_range()`.
 
@@ -167,6 +179,8 @@ The extruder assignment field is used on IDEX platforms to track which extruder 
 External spool holders (filament loaded directly into the extruder without an AMS unit) report their state via two distinct telemetry paths depending on the platform architecture:
 *   **Single-Nozzle Platforms (P1S, A1, X1C, H2S, etc.)**: The `print.vt_tray` field contains a single object with the same schema as an AMS tray (`tray_type`, `tray_color`, `tray_info_idx`, `tag_uid`, `tray_uuid`, `remain`, temperature limits, calibration indices, etc.). The virtual tray ID is typically `"254"`.
 *   **Dual-Nozzle IDEX Platforms (H2D, H2D Pro, X2D)**: The `print.vir_slot` field contains an array of objects (one per extruder), each using the same schema. Index `0` corresponds to the right/primary external spool, index `1` to the left/deputy external spool.
+
+*   **H3C (hotend rack)**: one external input per rack hotend, `vir_slot` ids `247`–`255`. Input `v` feeds the hotend with rack address `255 - v`, which is nozzle id `16 + (255 - v)` (BambuStudio `DevAmsTray::get_nozzle_addr_id` / `get_nozzle_pos_id`, `EXT_SPOOL` branch; bambuddy `tray_ids.py`, "247-255 are only ever external inputs").
 
 Both fields are optional — they are only present when the printer has external spool data to report.
 
@@ -290,7 +304,10 @@ The integer values within the flat `ams_mapping` array represent absolute physic
     **Verification source:** BambuStudio's `DevMappingUtil::ams_filament_mapping` (`DevMapping.cpp`) computes the N3S tray index as `ams_id + tray_id`, yielding 128-135, and that value flows through `FilamentInfo::tray_id` into `mapping_v0_json` — the chain that actually builds this flat array. Corroborated independently by Bambuddy, whose `print_scheduler.py::_global_tray_id` returns `ams_id if ams_id >= 128 else ams_id * 4 + tray_id` and whose `bambu_mqtt.py` puts that `tray_id` straight into `command["print"]["ams_mapping"]`.
 
     Do not confuse this with the **16-23** range: BambuStudio carries three different N3S index formulas for three different consumers, and `DevAms::GetTrayId` (`DevFilaSystem.cpp`) yields `16 + (ams_id - 128) + slot_id` — but that value is only ever used as a `tray_exist_bits` bit index (see §5.1), never as a flat `ams_mapping` channel. `DevFilaSystem::GetTrayIndexMap` uses `tray_index = ams_id` (128-135) for calibration `tray_id` and AMS settings. An upstream pybambu comment asserting 16-23 for the flat slot index traces to a **cloud** `amsDetailMapping` observation, a structure the LAN protocol never carries.
+*   **`28` to `36`**: AMS 3H slots (`28 + slot_id`), and **`37` onward** for an AMS-B (`37 + slot_id`). BambuStudio's `DevFilaSystem::GetTrayIndexMap` builds these ids, and bambuddy, tested on an H3C, puts `28 + k` in the flat array with `{"ams_id": 32, "slot_id": k}` in `ams_mapping2`.
 *   **`-1`**: Omit/Unmapped. Mandatory marker for any unused project filament slot or any slot routed to an **External Spool** (non-bus tray).
+
+**At most 32 entries.** BambuStudio caps `ams_mapping`, `ams_mapping2` and `nozzle_mapping` at 32 entries (`MAX_PHYSICAL_FILAMENT_COUNT`; commit `b2a10986e`, whose message says the mappings sent to the printer are limited to 32 entries). This is BambuStudio's own limit; no source records what the printer does with a longer array. A project can now hold up to 64 further *mixed* (virtual colour-blend) filaments, but they come after the 32 physical ones in the filament list and never appear in a mapping. bambino's `AMS_MAX_PROJECT_FILAMENTS` is 32.
 
 ##### External Spool Flat-Mapping Restrictions
 The flat `ams_mapping` array cannot accept absolute external spool IDs (`254` or `255`). To print from an external spool, the flat array must assign `-1` (unmapped) to the respective index, and let the structured `ams_mapping2` array handle specific external routing. Passing virtual external spool IDs directly into the flat array triggers a `"Failed to get AMS mapping table"` exception (such as error `0700_8012` or `07FF_8012`) on the motion board.
@@ -442,6 +459,8 @@ Initiates the filament cutting and physical extraction sequence, returning the a
 }
 ```
 
+**A rack AMS slot is unloaded with `slot_id = 255 - slot`, not `255`.** BambuStudio's new web device page (`DeviceWeb/ViewModels/DevicePage/AmsFilamentHotend/PageFilament.cpp` `s_command_unload_filament`, and `ConnectedSlots/ViewModelActions.cpp` `command_unload_slot`) sends `ams_id` = the unit, `target: 255` and `slot_id: 255 - slot` for an AMS slot, keeping `255` only for an external spool. Its comment: plain `slot_id 255` "the N-series firmware reads as 'unload whatever is loaded'. A real AMS slot needs the 255-slot_id encoding so the right feeder retracts." bambuddy sends the same for the H3C's AMS 3H (`ams_id: 32`, `slot_id: 255 - k`; loading is `ams_id: 32, target: 32, slot_id: k`) and notes that the AMS 3H cannot rewind, so an unload ends with pulling the filament out by hand (`bambu_mqtt.py` `_rack_change_filament`). Which models besides the H3C need this encoding is not recorded.
+
 ---
 
 ### 5.4 Dry-Chamber Operations [REF-AMS-DRYER]
@@ -457,6 +476,7 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
   "print": {
     "command": "ams_filament_drying",
     "ams_id": 128,
+    "zone_id": 0,
     "mode": 1,
     "filament": "PA-CF",
     "temp": 55,
@@ -469,6 +489,8 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
   }
 }
 ```
+
+**`zone_id` is now always sent on a start.** BambuStudio's `CtrlAmsStartDryingHour` writes `zone_id` on every start, and its caller (`AMSDryControl.cpp` `start_sending_drying_command`) passes the unit's drying zone or `0` when it has none. For an AMS 3H the zone must be one that can dry (see "Zones" in §5.1). Whether AMS 2 Pro or AMS-HT firmware reads `zone_id` at all is not recorded. The stop command carries no `zone_id`. **`cooling_temp` is the filament's softening temperature.** BambuStudio's `start_sending_drying_command` sets it from the tray filament's drying preset, `filament_dev_drying_softening_temperature` for the unit's model, defaulting to `50` when no preset is found, for every unit type. bambuddy does the same for an AMS 3H (`bambu_mqtt.py` `ams3h_drying_cooling_temp`) but still sends `20` for other units, the value in the example above.
 
 #### Dryer State Machine & Safety Interlocks
 *   **Heater Enablement**: The heater cannot be activated if any slot in the target unit reports a physical status code of `11` (Loaded). Filament must be fully retracted.
