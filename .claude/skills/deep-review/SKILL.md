@@ -34,7 +34,7 @@ Heuristics, not a fixed list:
 
 - Each top-level `src/` subdirectory is a unit. Split one with >8 files or separable subdirectories (e.g. `mqtt/client/` vs `mqtt/commands/`); merge thin related ones (≤3 files each).
 - Loose top-level files (`lib.rs`, `error.rs`, `models.rs`, …) form one "core" unit. Each `src/bin/*/` binary is its own unit (split if large).
-- Put each `tests/integration/*_test.rs` in the unit whose code it exercises, so one agent sees mock and implementation together. They are modules of one test binary rooted at `tests/integration/main.rs` (#245). `tests/integration/common/` goes in its own small unit or with its heaviest user; `tests/embassy_tls_version_test.rs` goes with `io`.
+- Put each `tests/integration/*_test.rs` in the unit whose code it exercises, so one agent sees mock and implementation together. They are modules of one test binary rooted at `tests/integration/main.rs` (#245). `tests/integration/common/` goes in its own small unit or with its heaviest user; `tests/embassy_tls_version_test.rs` and `tests/embassy_socket_teardown_test.rs` go with `io`.
 - Aim for 3–12 files per unit, weighted by size: a file over ~800 lines counts as 2–3, or becomes its own unit.
 
 Then match invariants once for all units: `ctx_search` `.claude/rules/*.md` for `paths:` globs, and check each unit's directories for a nested `CLAUDE.md`. Record unit → files → matched invariant excerpts.

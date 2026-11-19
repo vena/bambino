@@ -85,9 +85,11 @@ check-commit:
 # Clippy is one `--all-targets --features cli` call, not the plain `cargo clippy`
 # plus `--bin bambino-cli` pair it replaced (#297): neither of those lints test
 # code, since a normal build cfg's `#[cfg(test)]` out and never builds tests/.
-# `cli` only adds dependencies (no `cfg(feature = "cli")` outside src/bin/), so
-# the lib lints the same either way. It stays out of check-commit: 77s against
-# the 49s pair, too much for the per-commit budget above.
+# Outside src/bin/, `cli` also adds `clap::ValueEnum` derives (`cfg_attr`) to the
+# library enums the CLI takes as arguments, so this run lints the lib with them;
+# check-commit's plain `cargo clippy` lints it without. It stays out of
+# check-commit: 77s against the 49s pair, too much for the per-commit budget
+# above.
 check-fast:
 	cargo fmt --check
 	scripts/check-rules-globs.sh

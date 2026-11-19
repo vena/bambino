@@ -30,8 +30,8 @@ jobs:
           key: ${{ steps.image.outputs.os }}
       - run: make check-fast
       # Separate step, not folded into check-fast: rustdoc does not reuse
-      # cargo build's artifacts, and the pre-commit hook runs check-fast on
-      # every commit. Keeping it here is what makes a broken intra-doc link
-      # block a push without taxing every local commit. See the check-docs
-      # comment in the Makefile.
+      # cargo build's artifacts, and the pre-push hook runs check-fast before
+      # every push. Keeping it here is what catches a broken intra-doc link
+      # without adding it to the local hooks. See the check-docs comment in
+      # the Makefile.
       - run: make check-docs

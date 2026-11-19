@@ -5,9 +5,9 @@ description: Checks every claim in README.md against current src/ and reference/
 
 # README Review (bambino)
 
-**Use the lean-ctx tools throughout, never native `Read`, `Bash`, `sed`, `cat` or `grep`.** Pick the one that fits the claim. For example, `ctx_compose` checks a claim that spans several files in one call, `ctx_graph` (`action=symbol`) finds a definition, `ctx_callgraph` finds callers or callees, `ctx_explore` locates behaviour, and `ctx_execute` handles scripted edits to the scratch ledger. `ctx_read`, `ctx_search` and `ctx_shell` cover the rest.
+**Use the lean-ctx tools throughout, never native `Read`, `Bash`, `sed`, `cat` or `grep`.** Pick the one that fits the claim. For example, `ctx_compose` checks a claim that spans several files, or locates behaviour, in one call, `ctx_search` (`action=symbol`) finds a definition by name, `ctx_callgraph` finds callers or callees, and `ctx_execute` handles scripted edits to the scratch ledger. `ctx_read`, `ctx_search` and `ctx_shell` cover the rest.
 
-README is longer than `ctx_read`'s inline limit, so any read of it can stop partway with a truncation notice. That notice is where the tool rule has been broken before. Answer it with another `ctx_read` using `mode="lines:N-M"` that starts at the line where the output stopped, never with a native tool. Read README in windows of about 120 lines; README's lines are long, so a 250-line window still gets cut off. Don't start the ledger until every line has been read.
+README is longer than `ctx_read`'s inline limit, so any read of it can stop partway with a truncation notice. Answer it with another `ctx_read` using `mode="lines:N-M"` that starts at the line where the output stopped, never with a native tool. Read README in windows of about 120 lines; README's lines are long, so a 250-line window still gets cut off. Don't start the ledger until every line has been read.
 
 ## Why this exists
 
