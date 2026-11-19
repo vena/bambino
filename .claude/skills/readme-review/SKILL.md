@@ -26,7 +26,7 @@ A past run spot-checked the code samples, skipped the prose, and reported done. 
    - every link.
 
    Prose claims count exactly as much as code samples.
-3. **Verify every row** with whichever ctx tool fits it (see the tool rule above). When you use `ctx_search`, give it an explicit `max_results`, because it caps results silently.
+3. **Verify every row** with whichever ctx tool fits it (see the tool rule above). When you use `ctx_search`, give it an explicit `max_results`: it stops at 20 by default, and only a footnote says so.
    - APIs: check against `src/`.
    - Model lists: check against the quirks rows and their tests.
    - Limits and defaults: check against the named consts.
