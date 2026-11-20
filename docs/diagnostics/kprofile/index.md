@@ -92,6 +92,19 @@ A2L's AMS Lite is `16`).
 
   [`Error::InvalidArgument`](../../error/index.md#error) when no tray answers to that unit and slot.
 
+- <span id="caliseladdress-new-for"></span>`fn new_for(quirks: &crate::quirks::ModelQuirks, ams_id: u8, slot_id: u8) -> Result<Self, Error>` — [`ModelQuirks`](../../quirks/index.md#modelquirks), [`Error`](../../error/index.md#error)
+
+  Derives the address as [`new`](#caliseladdress) does, also accepting the external inputs `quirks` reports.
+
+  On the H3C, inputs `247..=253` address like `254`/`255`: `tray_id` and `ams_id` are the
+  input's own id and `slot_id` is `0`, because BambuStudio's `GetTrayIndexMap`
+  (`DevFilaSystem.cpp`) maps every virtual tray to `{id, 0}`, and `extrusion_cali_sel` takes
+  its `tray_id` from there (`AMSMaterialsSetting.cpp`).
+
+  # Errors
+
+  [`Error::InvalidArgument`](../../error/index.md#error) when no tray answers to that unit and slot.
+
 #### Trait Implementations
 
 ##### `impl Clone for CaliSelAddress`
