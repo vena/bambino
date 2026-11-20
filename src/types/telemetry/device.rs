@@ -481,7 +481,7 @@ pub struct ExtruderInfo {
     /// Composite-packed temperature; decode with [`temperatures()`](Self::temperatures).
     pub temp: Option<u32>,
 
-    /// Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+    /// Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. A slot byte of `0xff` (including `0xFFFF`) means unmapped — see [`current_ams_slot()`](Self::current_ams_slot).
     pub snow: Option<u32>,
 
     /// Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
