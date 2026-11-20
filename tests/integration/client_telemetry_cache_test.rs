@@ -1678,3 +1678,183 @@ async fn test_lazy_connect_publishes_pushall_before_the_callers_own_command() {
 
     broker_task.await.expect("Broker task panicked");
 }
+
+/// The slow-down door-open mode is refused until `fun2` bit 27 is reported set, both when no
+/// `fun2` has arrived and when it was reported clear; the other modes keep their own gate.
+#[tokio::test]
+async fn test_door_open_slow_down_gated_on_reported_fun2_bit() {
+    assert_eq!(DoorOpenCheck::from_code(3), Some(DoorOpenCheck::SlowDown));
+    assert_eq!(DoorOpenCheck::SlowDown.code(), 3);
+    assert_eq!(DoorOpenCheck::from_code(4), None);
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // fun2 reported with bit 27 clear.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","fun2":"0"}}"#,
+                )
+                .await;
+            // fun2 bit 27 set; cfg door check = 3 (bits 20-21).
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","fun2":"8000000","cfg":"300000"}}"#,
+                )
+                .await;
+            let door = read_publish_payload(&mut server_stream).await;
+            assert_eq!(door["system"]["command"], "set_door_stat");
+            assert_eq!(door["system"]["config"], 3);
+            let warn = read_publish_payload(&mut server_stream).await;
+            assert_eq!(warn["system"]["config"], 1);
+        })
+        .await;
+
+    // Nothing reported yet: the model rule allows the check, but not the slow-down mode.
+    assert_eq!(
+        client.capabilities().door_open_check_slow_down_support(),
+        Support::Assumed(false)
+    );
+    assert!(matches!(
+        client.set_door_open_check(DoorOpenCheck::SlowDown).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("fun2 clear");
+    assert_eq!(
+        client.capabilities().door_open_check_slow_down_support(),
+        Support::Reported(false)
+    );
+    assert!(matches!(
+        client.set_door_open_check(DoorOpenCheck::SlowDown).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("fun2 set");
+    assert_eq!(client.door_open_check(), Some(DoorOpenCheck::SlowDown));
+    client
+        .set_door_open_check(DoorOpenCheck::SlowDown)
+        .await
+        .expect("reported bit lifts the gate");
+    client
+        .set_door_open_check(DoorOpenCheck::Warn)
+        .await
+        .expect("other modes stay allowed");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Non-visual air-print detection reads `cfg` bit 41, is gated on `fun2` bit 32, and is
+/// independent of `air_print_detect`.
+#[tokio::test]
+async fn test_non_visual_air_print_detect_setter_getter_and_capability() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // cfg bit 41 clear, fun2 bit 32 clear.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","fun2":"0","cfg":"0"}}"#,
+                )
+                .await;
+            // cfg bit 41 set (0x20000000000), fun2 bit 32 set (0x100000000).
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","fun2":"100000000","cfg":"20000000000"}}"#,
+                )
+                .await;
+            let set = read_publish_payload(&mut server_stream).await;
+            assert_eq!(set["print"]["command"], "print_option");
+            assert_eq!(set["print"]["air_printing_detection"], false);
+            assert!(set["print"].get("air_print_detect").is_none());
+        })
+        .await;
+
+    assert_eq!(client.non_visual_air_print_detect_enabled(), None);
+    assert!(matches!(
+        client.set_non_visual_air_print_detect(true).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("clear report");
+    assert_eq!(client.non_visual_air_print_detect_enabled(), Some(false));
+    assert_eq!(
+        client.capabilities().non_visual_air_print_detect_support(),
+        Support::Reported(false)
+    );
+    assert!(matches!(
+        client.set_non_visual_air_print_detect(true).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("set report");
+    assert_eq!(client.non_visual_air_print_detect_enabled(), Some(true));
+    assert_eq!(client.air_print_detect_enabled(), None);
+    assert_eq!(
+        client.capabilities().non_visual_air_print_detect_support(),
+        Support::Reported(true)
+    );
+    client
+        .set_non_visual_air_print_detect(false)
+        .await
+        .expect("reported support lifts the gate");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The top cover reads `stat` bit 24 only, on models whose door sensor is `stat`; the H2C
+/// capture values from ha-bambulab decode closed and open, and a frame without `stat` keeps
+/// the last state.
+#[tokio::test]
+async fn test_top_cover_open_from_stat_bit_24() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, br#"{"print":{"stat":"640258000"}}"#)
+                .await;
+            reports
+                .publish(&mut server_stream, br#"{"print":{"stat":"641258000"}}"#)
+                .await;
+            // No stat; home_flag bit 24 (nozzle blob detection) must not matter.
+            reports
+                .publish(&mut server_stream, br#"{"print":{"home_flag":16777216}}"#)
+                .await;
+        })
+        .await;
+
+    assert_eq!(client.is_top_cover_open(), None);
+    client.poll_telemetry().await.expect("closed");
+    assert_eq!(client.is_top_cover_open(), Some(false));
+    assert_eq!(client.is_door_open(), Some(false));
+    client.poll_telemetry().await.expect("open");
+    assert_eq!(client.is_top_cover_open(), Some(true));
+    assert_eq!(client.is_door_open(), Some(false));
+    client.poll_telemetry().await.expect("no stat");
+    assert_eq!(client.is_top_cover_open(), Some(true));
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// A model whose door sensor is not `stat` never reports a top cover, whatever `stat` says.
+#[tokio::test]
+async fn test_top_cover_none_without_stat_door_sensor() {
+    let (mut client, broker_task) = with_broker(
+        X1_SERIAL,
+        PrinterModel::X1C,
+        |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(X1_SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, br#"{"print":{"stat":"641258000"}}"#)
+                .await;
+        },
+    )
+    .await;
+    client.poll_telemetry().await.expect("stat report");
+    assert_eq!(client.is_top_cover_open(), None);
+    broker_task.await.expect("Broker task panicked");
+}

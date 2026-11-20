@@ -12,6 +12,7 @@ use crate::diagnostics::{
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::MqttMessage;
+use crate::quirks::DoorSensor;
 use crate::quirks::context::light_bit;
 use crate::types::control::FanTarget;
 use crate::types::telemetry::merge::{keep_new, merge_keyed, merge_opt};
@@ -50,6 +51,8 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_home_flag_generation: Option<u32>,
     pub(crate) last_gcode_state: Option<String>,
     pub(crate) last_door_open: Option<bool>,
+    /// Top cover state from `stat` bit 24; only written on models whose door sensor is `DoorSensor::Stat`.
+    pub(crate) last_top_cover_open: Option<bool>,
     pub(crate) last_print_error: Option<u32>,
     // Echoed back by the error-dialog commands (`ignore`, error-aware `resume`/`stop`), as
     // BambuStudio's `command_hms_*` do; `job_id` is sparse in telemetry, so it is cached.
@@ -432,6 +435,11 @@ where
         if let Some(open) = print.door_state(self.quirks().door_sensor()) {
             self.core.cache.last_door_open = Some(open);
         }
+        if self.quirks().door_sensor() == DoorSensor::Stat
+            && let Some(open) = print.top_cover_open()
+        {
+            self.core.cache.last_top_cover_open = Some(open);
+        }
         keep_new(&mut self.core.cache.last_print_error, &print.print_error);
         keep_new(&mut self.core.cache.last_job_id, &print.job_id);
         keep_new(&mut self.core.cache.last_subtask_name, &print.subtask_name);
@@ -585,6 +593,19 @@ where
     /// telemetry carrying the model's door field has been observed.
     pub fn is_door_open(&self) -> Option<bool> {
         self.core.cache.last_door_open
+    }
+
+    /// Returns whether the top cover was open as of the last-observed `stat` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    ///
+    /// Reads `stat` bit 24 [REF-NET-DOOR], so `None` unless the model's door sensor is
+    /// `DoorSensor::Stat` (H2/P2/X2 series), and before any `stat` has been observed. Distinct
+    /// from `Some(false)`, which means the cover is closed. Left and right door sensors (bits
+    /// 25-26) are not exposed: no model is known to report them.
+    pub fn is_top_cover_open(&self) -> Option<bool> {
+        if self.quirks().door_sensor() != DoorSensor::Stat {
+            return None;
+        }
+        self.core.cache.last_top_cover_open
     }
 
     /// Returns the printer's mains region as of the last-observed `home_flag` telemetry.

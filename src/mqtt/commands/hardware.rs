@@ -370,6 +370,42 @@ impl AirPrintDetectRequest {
     }
 }
 
+/// Turns the second non-visual air-printing detection on or off.
+///
+/// Not [`AirPrintDetectPayload`]'s `air_print_detect` setting (`home_flag` bit 28) and not the
+/// camera's AI air-printing detector. BambuStudio captions it "Detects air printing caused by
+/// nozzle clogging, filament tangling, or filament grinding"
+/// (`DevPrintOptions::command_non_visual_airprinting_detection`). Single source (BambuStudio);
+/// no capture shows `fun2` bit 32 set.
+#[derive(Debug, Clone, Serialize)]
+pub struct NonVisualAirPrintDetectPayload {
+    /// Wire command name, always `"print_option"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Whether the detection is enabled.
+    pub air_printing_detection: bool,
+}
+
+/// Enables or disables the second non-visual air-printing detection (`air_printing_detection`).
+pub type NonVisualAirPrintDetectRequest = super::Print<NonVisualAirPrintDetectPayload>;
+
+impl NonVisualAirPrintDetectRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
+    /// Builds a `print_option` request enabling or disabling the detection.
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: NonVisualAirPrintDetectPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                air_printing_detection: enable,
+            },
+        }
+    }
+}
+
 /// Sets where chamber air is purified at the end of a print.
 #[derive(Debug, Clone, Serialize)]
 pub struct AirPurificationPayload {

@@ -23,8 +23,8 @@ use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::commands::hardware::PRINT_OP_AUTO_RECOVERY;
 use crate::mqtt::commands::{
     AirPrintDetectRequest, AirPurificationRequest, AutoRecoveryRequest, FilamentBackupRequest,
-    FilamentTangleDetectRequest, NozzleBlobDetectRequest, PromptSoundRequest,
-    SmartNozzleBlobDetectRequest,
+    FilamentTangleDetectRequest, NonVisualAirPrintDetectRequest, NozzleBlobDetectRequest,
+    PromptSoundRequest, SmartNozzleBlobDetectRequest,
 };
 use crate::mqtt::commands::{
     DoorOpenCheckRequest, IdleHeatingProtectionRequest, StoreSentFilesRequest, XcamControlRequest,
@@ -225,6 +225,33 @@ where
             .await
     }
 
+    /// Turns the second non-visual air-printing detection (`air_printing_detection`) on or off.
+    ///
+    /// Studio's caption: "Detects air printing caused by nozzle clogging, filament tangling, or
+    /// filament grinding." A separate setting from
+    /// [`set_air_print_detect()`](Self::set_air_print_detect). Single source (BambuStudio); no
+    /// capture shows `fun2` bit 32 set. Refused until the printer has reported support, so poll
+    /// telemetry after connecting first. Confirm with
+    /// [`non_visual_air_print_detect_enabled()`](Self::non_visual_air_print_detect_enabled) after
+    /// the settle window described in the module docs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when
+    /// [`Capabilities::non_visual_air_print_detect_support`](super::Capabilities::non_visual_air_print_detect_support)
+    /// is `false`.
+    pub async fn set_non_visual_air_print_detect(
+        &mut self,
+        enable: bool,
+    ) -> Result<CommandHandle, Error> {
+        refuse_unless(
+            self.capabilities().non_visual_air_print_detect_support(),
+            "non-visual air-printing detection",
+        )?;
+        self.dispatch(|seq| NonVisualAirPrintDetectRequest::new(enable, seq))
+            .await
+    }
+
     /// Sets where chamber air is purified at the end of every print.
     ///
     /// A persistent setting, unrelated to
@@ -256,11 +283,17 @@ where
     /// Confirm with [`door_open_check()`](Self::door_open_check) after the settle window
     /// described in the module docs.
     ///
+    /// [`DoorOpenCheck::SlowDown`] is stricter: BambuStudio never sends it to a firmware not
+    /// reporting `fun2` bit 27, so it is refused unless the printer has reported that bit set,
+    /// including when no `fun2` has arrived yet.
+    ///
     /// # Errors
     ///
     /// [`Error::ModelMismatch`] when
     /// [`Capabilities::door_open_check_support`](super::Capabilities::door_open_check_support)
-    /// is `false`.
+    /// is `false`, or for `SlowDown` when
+    /// [`Capabilities::door_open_check_slow_down_support`](super::Capabilities::door_open_check_slow_down_support)
+    /// is not `Reported(true)`.
     pub async fn set_door_open_check(
         &mut self,
         mode: DoorOpenCheck,
@@ -269,6 +302,15 @@ where
             self.capabilities().door_open_check_support(),
             "door-open check",
         )?;
+        if mode == DoorOpenCheck::SlowDown {
+            let support = self.capabilities().door_open_check_slow_down_support();
+            if support != Support::Reported(true) {
+                return Err(Error::ModelMismatch(
+                    format!("door-open slow-down not reported by this printer ({support:?})")
+                        .into(),
+                ));
+            }
+        }
         self.dispatch(|seq| DoorOpenCheckRequest::new(mode, seq))
             .await
     }
@@ -410,6 +452,15 @@ where
             .or_else(|| self.setting(bits::AIR_PRINT_DETECT))
     }
 
+    /// Whether the second non-visual air-printing detection is on, as last reported (`print.cfg` bit 41).
+    ///
+    /// Not [`air_print_detect_enabled()`](Self::air_print_detect_enabled). `None` before any
+    /// `cfg`, always on P1 and A1 (which send none).
+    #[must_use]
+    pub fn non_visual_air_print_detect_enabled(&self) -> Option<bool> {
+        self.setting(bits::NON_VISUAL_AIR_PRINT_DETECT)
+    }
+
     /// The smart nozzle blob detection mode, as last reported (`print.cfg` bits 43-44).
     ///
     /// `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
@@ -440,8 +491,7 @@ where
 
     /// The door-open check mode, as last reported (`print.cfg` bits 20-21).
     ///
-    /// `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
-    /// code `3`.
+    /// `None` before any `cfg`, and always on P1 and A1 (which send none).
     #[must_use]
     pub fn door_open_check(&self) -> Option<DoorOpenCheck> {
         DoorOpenCheck::from_code(self.cfg_field(bits::CFG_DOOR_OPEN_CHECK)?)

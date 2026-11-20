@@ -190,6 +190,19 @@ impl<'a> Capabilities<'a> {
         self.quirks.door_open_check_support(&self.context)
     }
 
+    /// Door-open check slow-down mode support — see [`ModelQuirks::door_open_check_slow_down_support`].
+    #[must_use]
+    pub fn door_open_check_slow_down_support(&self) -> Support {
+        self.quirks.door_open_check_slow_down_support(&self.context)
+    }
+
+    /// Non-visual air-printing detection (`air_printing_detection`) support — see [`ModelQuirks::non_visual_air_print_detect_support`].
+    #[must_use]
+    pub fn non_visual_air_print_detect_support(&self) -> Support {
+        self.quirks
+            .non_visual_air_print_detect_support(&self.context)
+    }
+
     /// Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`].
     #[must_use]
     pub fn idle_heating_protection_support(&self) -> Support {

@@ -1134,6 +1134,39 @@ impl ModelQuirks {
         .resolve(ctx, Support::Assumed(false))
     }
 
+    /// Returns whether the printer has the door-open check's slow-down mode, with its provenance.
+    ///
+    /// Reported by `fun2` bit 27 only, BambuStudio's `is_support_door_open_check_slow_down`
+    /// (`DeviceManager.cpp`, `parse_new_info`); `MachineObject::command_set_door_open_check` says
+    /// never to push the mode to a firmware not reporting it. No model rule exists, so nothing
+    /// reported means `Assumed(false)`, always the case on P1 and A1, which send no `fun2`.
+    #[must_use]
+    pub fn door_open_check_slow_down_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: Some(bits::FUN2_DOOR_OPEN_CHECK_SLOW_DOWN_BIT),
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
+    /// Returns whether the printer has the second, non-visual air-printing detection, with its provenance.
+    ///
+    /// This is the `print_option` `air_printing_detection` setting (`cfg` bit 41), separate from
+    /// the `air_print_detect` one [`air_print_detect_support`](Self::air_print_detect_support)
+    /// covers. Reported by `fun2` bit 32 only, BambuStudio's `is_support_detect`
+    /// (`DevPrintOptions.cpp`). No model rule exists, so nothing reported means
+    /// `Assumed(false)`.
+    #[must_use]
+    pub fn non_visual_air_print_detect_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: Some(bits::FUN2_NON_VISUAL_AIR_PRINT_DETECT_BIT),
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
     /// Returns whether the printer serves file-tunnel reads of its internal-storage models, with its provenance.
     ///
     /// Reported by `fun2` bit 17 only, BambuStudio's `is_support_model_internal_storage`
@@ -1893,6 +1926,38 @@ mod tests {
         assert_eq!(x1c.pa_mode_support(&ctx), Support::Reported(true));
         let ctx = QuirkContext::empty().with_fun2(Some("20"));
         assert_eq!(x1c.pa_mode_support(&ctx), Support::Reported(false));
+
+        // Door-open slow-down: `fun2` bit 27 only (0x0800_0000).
+        assert_eq!(
+            x1c.door_open_check_slow_down_support(&empty),
+            Support::Assumed(false)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("8000000"));
+        assert_eq!(
+            x1c.door_open_check_slow_down_support(&ctx),
+            Support::Reported(true)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("0"));
+        assert_eq!(
+            x1c.door_open_check_slow_down_support(&ctx),
+            Support::Reported(false)
+        );
+
+        // Non-visual air-print detection: `fun2` bit 32 only (nibble 8), beyond a u32.
+        assert_eq!(
+            x1c.non_visual_air_print_detect_support(&empty),
+            Support::Assumed(false)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("100000000"));
+        assert_eq!(
+            x1c.non_visual_air_print_detect_support(&ctx),
+            Support::Reported(true)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("8000000"));
+        assert_eq!(
+            x1c.non_visual_air_print_detect_support(&ctx),
+            Support::Reported(false)
+        );
 
         // Internal-model reads: `fun2` bit 17 only. `20000` sets bit 17 only.
         assert_eq!(

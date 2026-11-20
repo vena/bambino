@@ -224,26 +224,33 @@ pub enum DoorOpenCheck {
     Warn,
     /// Pause the print.
     PausePrint,
+    /// Keep printing but slow the toolhead down.
+    ///
+    /// Only on firmware reporting `fun2` bit 27; BambuStudio never sends it elsewhere
+    /// (`MachineObject::command_set_door_open_check`).
+    SlowDown,
 }
 
 impl DoorOpenCheck {
-    /// The wire code: `0` disabled, `1` warn, `2` pause print.
+    /// The wire code: `0` disabled, `1` warn, `2` pause print, `3` slow down.
     #[must_use]
     pub const fn code(self) -> u8 {
         match self {
             DoorOpenCheck::Disabled => 0,
             DoorOpenCheck::Warn => 1,
             DoorOpenCheck::PausePrint => 2,
+            DoorOpenCheck::SlowDown => 3,
         }
     }
 
-    /// Decodes a wire code; `None` for any value outside `0..=2`.
+    /// Decodes a wire code; `None` for any value outside `0..=3`.
     #[must_use]
     pub const fn from_code(code: u32) -> Option<Self> {
         match code {
             0 => Some(DoorOpenCheck::Disabled),
             1 => Some(DoorOpenCheck::Warn),
             2 => Some(DoorOpenCheck::PausePrint),
+            3 => Some(DoorOpenCheck::SlowDown),
             _ => None,
         }
     }

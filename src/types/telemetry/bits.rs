@@ -26,6 +26,11 @@ pub(crate) const HOME_FLAG_SDCARD_SHIFT: u32 = 8;
 pub(crate) const HOME_FLAG_SDCARD_MASK: u32 = 0x3;
 /// Bit 23 of `home_flag` (X1) and of the hex `stat` field (H2/P2/X2): door open [REF-NET-DOOR].
 pub(crate) const DOOR_OPEN: u64 = 1 << 23;
+/// Bit 24 of the hex `stat` field: top cover open [REF-NET-DOOR]. Not `home_flag` bit 24, which is nozzle blob detection.
+///
+/// Bits 25 (left door) and 26 (right door) are the same kind of sensor; no model is known to
+/// report them, so they have no constant.
+pub(crate) const STAT_TOP_COVER_OPEN: u64 = 1 << 24;
 
 /// Whether `axis`'s homed bit is set in `home_flag`.
 pub(crate) fn is_axis_homed(home_flag: u32, axis: Axis) -> bool {
@@ -50,6 +55,11 @@ pub(crate) fn is_220v(home_flag: u32) -> bool {
 /// `home_flag`'s two-bit SD-card state field (bits 8-9), shifted down.
 pub(crate) fn sdcard_state_bits(home_flag: u32) -> u32 {
     (home_flag >> HOME_FLAG_SDCARD_SHIFT) & HOME_FLAG_SDCARD_MASK
+}
+
+/// Whether the top-cover bit is set in a decoded `stat` value.
+pub(crate) fn is_top_cover_open(stat: u64) -> bool {
+    stat & STAT_TOP_COVER_OPEN != 0
 }
 
 /// Whether the door bit is set in a `home_flag` or decoded `stat` value.
@@ -185,6 +195,11 @@ pub(crate) const STORE_SENT_FILES: SettingBits = SettingBits {
     cfg: Some(19),
     home_flag: None,
 };
+/// Non-visual air-printing detection enabled (`air_printing_detection`); `print.cfg` bit 41 only (`DevPrintOptions.cpp`).
+pub(crate) const NON_VISUAL_AIR_PRINT_DETECT: SettingBits = SettingBits {
+    cfg: Some(41),
+    home_flag: None,
+};
 /// Low bit of `print.cfg`'s two-bit door-open check mode (bits 20-21, `DeviceManager.cpp`).
 pub(crate) const CFG_DOOR_OPEN_CHECK: u32 = 20;
 /// Low bit of `print.cfg`'s two-bit idle heating protection state (bits 32-33).
@@ -248,6 +263,10 @@ pub(crate) const FUN2_SMART_NOZZLE_BLOB_DETECT_BIT: u32 = 15;
 pub(crate) const FUN2_PA_MODE_BIT: u32 = 3;
 /// `fun2` bit 17: the printer serves reads of its internal-storage models (BambuStudio `is_support_model_internal_storage`, `DeviceManager.cpp`).
 pub(crate) const FUN2_INTERNAL_MODEL_READ_BIT: u32 = 17;
+/// `fun2` bit 27: the door-open check has a slow-down mode (BambuStudio `is_support_door_open_check_slow_down`, `DeviceManager.cpp`).
+pub(crate) const FUN2_DOOR_OPEN_CHECK_SLOW_DOWN_BIT: u32 = 27;
+/// `fun2` bit 32: non-visual air-printing detection (`air_printing_detection`) supported (BambuStudio `is_support_detect`, `DevPrintOptions.cpp`).
+pub(crate) const FUN2_NON_VISUAL_AIR_PRINT_DETECT_BIT: u32 = 32;
 /// `fun` bit 7: per-job flow dynamics calibration supported (BambuStudio `is_support_pa_calibration`).
 pub(crate) const FUN_PA_CALIBRATION_BIT: u32 = 7;
 /// `home_flag` bit 16: per-job flow dynamics calibration supported (`parse_home_flag`).

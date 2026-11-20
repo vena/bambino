@@ -787,6 +787,19 @@ impl PrinterTelemetry {
             .is_some_and(bits::is_door_open)
     }
 
+    /// Reads the top cover state from bit 24 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
+    ///
+    /// `Some(true)` open, `Some(false)` closed, `None` when `stat` is absent or unreadable. Reads
+    /// `stat` only: `home_flag` bit 24 is the unrelated nozzle blob detection setting. Whether
+    /// the model has a top cover sensor is the caller's question
+    /// ([`DoorSensor::Stat`](crate::quirks::DoorSensor::Stat)).
+    pub fn top_cover_open(&self) -> Option<bool> {
+        self.stat
+            .as_deref()
+            .and_then(bits::hex_u64)
+            .map(bits::is_top_cover_open)
+    }
+
     /// Reads the door state from wherever `sensor` says this model reports it [REF-NET-DOOR].
     ///
     /// `Some(true)` open, `Some(false)` closed, `None` when the model has no sensor or this frame

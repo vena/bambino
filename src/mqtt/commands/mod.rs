@@ -35,8 +35,8 @@ pub use hardware::{
     AirPrintDetectRequest, AirPurificationRequest, AirductMode, AirductRequest,
     AutoRecoveryRequest, BuzzerRequest, DoorOpenCheckRequest, FilamentBackupRequest,
     FilamentTangleDetectRequest, FlashTiming, IdleHeatingProtectionRequest, LedCtrlRequest,
-    NozzleBlobDetectRequest, PromptSoundRequest, SmartNozzleBlobDetectRequest,
-    StoreSentFilesRequest, XcamControlRequest,
+    NonVisualAirPrintDetectRequest, NozzleBlobDetectRequest, PromptSoundRequest,
+    SmartNozzleBlobDetectRequest, StoreSentFilesRequest, XcamControlRequest,
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, JobFileLocation, NozzleRack, PrintJobConfig,
@@ -872,6 +872,10 @@ mod tests {
                     .unwrap(),
                 serde_json::json!({"air_purification": 2}),
             ),
+            (
+                serde_json::to_value(NonVisualAirPrintDetectRequest::new(true, 1)).unwrap(),
+                serde_json::json!({"air_printing_detection": true}),
+            ),
         ];
         for (value, setting) in cases {
             let mut expected = serde_json::json!({"command": "print_option", "sequence_id": "1"});
@@ -889,6 +893,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(DoorOpenCheckRequest::new(DoorOpenCheck::PausePrint, 1)).unwrap(),
             serde_json::json!({"system": {"command": "set_door_stat", "sequence_id": "1", "config": 2}})
+        );
+        assert_eq!(
+            serde_json::to_value(DoorOpenCheckRequest::new(DoorOpenCheck::SlowDown, 1)).unwrap(),
+            serde_json::json!({"system": {"command": "set_door_stat", "sequence_id": "1", "config": 3}})
         );
         assert_eq!(
             serde_json::to_value(IdleHeatingProtectionRequest::new(true, 1)).unwrap(),
