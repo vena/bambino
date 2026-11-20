@@ -263,7 +263,7 @@ bambino's `AmsTray::remain_percent()` returns `None` for `-1`; a consumer should
 These are **two separate wire fields**, and conflating them is a real failure mode:
 
 *   `"tray_info_idx"` carries the **short-format** preset ID (e.g. `"GFA01"` for Bambu PLA Matte, `"GFL05"`).
-*   `"setting_id"` carries the **full** preset identifier — the long form, such as `"GFSL05_07"`, or the unique randomized id the slicer assigns a custom user preset (`"PF"` followed by 17 numeric digits, e.g. `"PF12345678901234567"`). It is optional and may be omitted entirely.
+*   `"setting_id"` carries the **full** preset identifier — the long form, such as `"GFSL05_07"`, or the id the slicer assigns a custom user preset (`"PFUS…"`, as in the open-bamboo-networking capture cited in `reference/07_diagnostics_hms.md` §7.2; no fixed length or digit format is known). It is optional and may be omitted entirely.
 
 **A long id does not belong in `tray_info_idx`.** An A1 sent a 19-character `PFUS…` cloud id in that field and stored only its first 8 characters, uppercased, while acking the command as `"success"`; the slot then resolves to Generic and drops out of the calibration table, which is keyed on the same field (bambuddy issue #3003). This is the printer reacting to the wrong field, not a general width limit worth working around — put the long id in `setting_id` and the short code in `tray_info_idx`.
 

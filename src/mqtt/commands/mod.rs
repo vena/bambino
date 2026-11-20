@@ -1021,10 +1021,10 @@ mod tests {
         // The long preset id belongs here, not in tray_info_idx — a 19-character id in the
         // short field is what an A1 stored as 8 characters while acking success.
         let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10023)
-            .with_setting_id("PF12345678901234567");
+            .with_setting_id("PFUS9be9e18f81828a");
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_info_idx":"GFA01""#));
-        assert!(json.contains(r#""setting_id":"PF12345678901234567""#));
+        assert!(json.contains(r#""setting_id":"PFUS9be9e18f81828a""#));
     }
 
     #[test]

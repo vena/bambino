@@ -1694,7 +1694,7 @@ async fn test_select_k_profile_derives_tray_from_unit_and_slot() {
 fn k_profile_response(nth: u64) -> String {
     let seq = SEQUENCE_ID_FLOOR + nth;
     format!(
-        r#"{{"print":{{"command":"extrusion_cali_get","sequence_id":"{seq}","nozzle_diameter":"0.4","filaments":[{{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}}]}}}}"#
+        r#"{{"print":{{"command":"extrusion_cali_get","sequence_id":"{seq}","nozzle_diameter":"0.4","filaments":[{{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"GFSA00"}}]}}}}"#
     )
 }
 

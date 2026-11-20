@@ -533,13 +533,13 @@ fn test_kprofile_ams_linking_fields() {
             "extruder_id": 0,
             "name": "PLA Matte",
             "k_value": "0.022000",
-            "setting_id": "PF12345678901234567",
+            "setting_id": "GFSA00",
             "ams_id": 0,
             "tray_id": 2
         }"#;
     let entry: crate::diagnostics::KProfileEntry = serde_json::from_str(json).unwrap();
-    assert_eq!(entry.ams_id, Some(0));
-    assert_eq!(entry.tray_id, Some(2));
+    assert_eq!(entry.ams_id, 0);
+    assert_eq!(entry.tray_id, 2);
 }
 
 #[test]
@@ -552,11 +552,12 @@ fn test_kprofile_ams_fields_absent() {
             "extruder_id": 0,
             "name": "PLA",
             "k_value": "0.022",
-            "setting_id": "PF12345678901234567"
+            "setting_id": "GFSA00"
         }"#;
     let entry: crate::diagnostics::KProfileEntry = serde_json::from_str(json).unwrap();
-    assert!(entry.ams_id.is_none());
-    assert!(entry.tray_id.is_none());
+    assert_eq!(entry.ams_id, 0);
+    assert_eq!(entry.tray_id, 0);
+    assert_eq!(entry.slot_id, 0);
 }
 
 #[test]

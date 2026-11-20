@@ -4,9 +4,9 @@
 //! pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-KPROF].
 //!
 //! ## Structural Guidelines & Constraints
-//! * **Setting ID Validation**: Enforces the 19-character numeric `setting_id` boundary
-//!   (`"PF"` followed by exactly 17 decimal digits) to prevent memory table corruption in the local
-//!   EEPROM partition database.
+//! * **Setting ID Validation**: Refuses an empty `setting_id`. The id is the filament preset's own
+//!   id (e.g. `"GFSA00"` for a system preset, `"PFUS..."` for a user preset), so no fixed format
+//!   is enforced.
 //! * **Polymorphic Deletions**: Separate deletion entry types for single-nozzle platforms (which
 //!   also carry `setting_id`) and dual-nozzle IDEX platforms, both sent flat in `print`.
 
@@ -23,27 +23,19 @@ use crate::error::Error;
 use crate::mqtt::commands::ClampedTaskId;
 use crate::types::telemetry::{deserialize_permissive_opt_string, deserialize_permissive_string};
 
-/// Validates whether a provided calibration profile setting ID complies with EEPROM limits.
+/// Reports whether a calibration profile `setting_id` is acceptable, which is any non-empty string.
 ///
-/// **The Calibration Setting ID Boundary Rule [REF-DIAG-KPROF]:**
-/// Stored EEPROM K-profiles require standard 19-character numeric formats consisting of a
-/// `"PF"` header prefix followed by exactly 17 numeric digits. Standard alphanumeric hashes
-/// (e.g. `"PFUS9be9e18f81828a"`) are strictly reserved for slicer-side presets.
-/// Transmitting alphanumeric layouts inside direct database operations causes indexing halts
-/// or table corruption on the physical mainboard.
+/// `setting_id` is the filament preset's own id: a system preset such as `"GFSA00"`, or a user
+/// preset such as `"PFUS..."`. BambuStudio sends it unchanged from `filament_preset->setting_id`
+/// (`MachineObject::command_set_pa_calibration` in `DeviceManager.cpp`, fed by
+/// `cache_preset_info` in `CalibrationWizard.cpp`). No format rule is known, so only an empty id
+/// is refused [REF-DIAG-KPROF].
 #[must_use]
 pub fn is_setting_id_valid(setting_id: &str) -> bool {
-    setting_id
-        .strip_prefix(SETTING_ID_PREFIX)
-        .is_some_and(|d| d.len() == SETTING_ID_DIGITS && d.bytes().all(|b| b.is_ascii_digit()))
+    !setting_id.is_empty()
 }
 
-/// Prefix every stored K-profile `setting_id` starts with.
-const SETTING_ID_PREFIX: &str = "PF";
-/// Decimal digits that follow [`SETTING_ID_PREFIX`].
-const SETTING_ID_DIGITS: usize = 17;
-
-/// `Ok(())` if `setting_id` passes [`is_setting_id_valid`], else an [`Error::InvalidArgument`] naming it.
+/// `Ok(())` if `setting_id` passes [`is_setting_id_valid`], else an [`Error::InvalidArgument`].
 ///
 /// Shared by `ExtrusionCaliSetRequest::new` and `StandardCaliDelRequest::new`.
 fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
@@ -51,11 +43,7 @@ fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::InvalidArgument(
-            format!(
-                "setting_id {setting_id:?} must be {SETTING_ID_PREFIX:?} followed by \
-                 {SETTING_ID_DIGITS} decimal digits"
-            )
-            .into(),
+            "setting_id must not be empty".into(),
         ))
     }
 }
@@ -75,6 +63,10 @@ fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
 pub struct KProfileEntry {
     /// Database index corresponding to the stored slot (-1 indicates a fresh write, and is the
     /// default when the key is absent).
+    ///
+    /// Not serialized when negative: BambuStudio writes `cali_idx` only when it is `>= 0`, and
+    /// leaving it out makes the printer allocate the next free slot.
+    #[serde(skip_serializing_if = "is_negative")]
     pub cali_idx: i32,
     /// Preset identifier associated with the base filament category (e.g. `"GFA01"`).
     pub filament_id: String,
@@ -130,27 +122,51 @@ pub struct KProfileEntry {
     #[serde(deserialize_with = "deserialize_permissive_string")]
     pub k_value: String,
     /// Extrusion coefficient parameters.
+    ///
+    /// Always serialized: `None` is written as `"0.0"`, which is what BambuStudio sends on a
+    /// manual save.
     #[serde(
         deserialize_with = "deserialize_permissive_opt_string",
-        skip_serializing_if = "Option::is_none"
+        serialize_with = "serialize_n_coef"
     )]
     pub n_coef: Option<String>,
-    /// Secure 19-character unique setting identifier.
+    /// The filament preset's own id: a system preset such as `"GFSA00"`, or a user preset such
+    /// as `"PFUS..."`.
+    ///
+    /// BambuStudio sends `filament_preset->setting_id` here (`MachineObject::command_set_pa_calibration`,
+    /// `DeviceManager.cpp`). It is the same string `ams_filament_setting` sends.
     pub setting_id: String,
-    /// Links K-profile to AMS unit (default 0).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ams_id: Option<i32>,
-    /// Links K-profile to AMS tray slot (default -1). At least X1C firmware spuriously
-    /// reports `result: "fail"` for `extrusion_cali` writes using `tray_id: -1` even though
-    /// the write still applies — don't treat that ack `result` as authoritative for a
-    /// `tray_id: -1` write without cross-checking the profile actually landed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tray_id: Option<i32>,
+    /// AMS unit the profile is tied to (default 0). Always serialized.
+    pub ams_id: i32,
+    /// Tray the profile is tied to (default 0). Always serialized.
+    ///
+    /// `0` for a profile not tied to a tray, as BambuStudio's `PACalibResult` (`Calib.hpp`) and
+    /// bambuddy send. Avoid `-1`: at least X1C firmware spuriously reports `result: "fail"` for
+    /// `extrusion_cali` writes using `tray_id: -1` even though the write still applies, so the
+    /// ack `result` is not authoritative for such a write without cross-checking the profile
+    /// actually landed.
+    pub tray_id: i32,
+    /// Unit-local slot the profile is tied to (default 0). Always serialized.
+    pub slot_id: i32,
+}
+
+/// `serde` helper: skip a `cali_idx` that is negative.
+fn is_negative(value: &i32) -> bool {
+    *value < 0
+}
+
+/// `serde` helper: write an absent `n_coef` as `"0.0"`.
+fn serialize_n_coef<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(value.as_deref().unwrap_or("0.0"))
 }
 
 impl Default for KProfileEntry {
     /// The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp`):
-    /// `cali_idx` `-1` (a fresh write), `k_value` `"0"`, everything else empty.
+    /// `cali_idx` `-1` (a fresh write), `k_value` `"0"`, `ams_id`/`tray_id`/`slot_id` `0`,
+    /// everything else empty.
     fn default() -> Self {
         Self {
             cali_idx: -1,
@@ -162,8 +178,9 @@ impl Default for KProfileEntry {
             k_value: String::from("0"),
             n_coef: None,
             setting_id: String::new(),
-            ams_id: None,
-            tray_id: None,
+            ams_id: 0,
+            tray_id: 0,
+            slot_id: 0,
         }
     }
 }
@@ -196,9 +213,11 @@ pub struct ExtrusionCaliGetPayload {
     pub nozzle_diameter: Option<String>,
     /// Which hotend's table to return — `0` = right/main, `1` = left/deputy.
     ///
-    /// Matters on a dual-nozzle machine, where a `cali_idx` is **not** unique across hotends:
-    /// two profiles can share an index and differ only by extruder. Sent by BambuStudio only
-    /// when it has an extruder to name (`use_extruder_id`).
+    /// Scope by extruder on a dual-nozzle machine. Whether a `cali_idx` is unique across hotends
+    /// depends on the model: open-bamboo-networking found it unique across both extruders on an
+    /// X2D, while an H2C was measured with two profiles sharing an index and differing only by
+    /// extruder (`reference/07_diagnostics_hms.md` §7.2 "Resolving a Slot to a Profile"). Sent by
+    /// BambuStudio only when it has an extruder to name (`use_extruder_id`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extruder_id: Option<u8>,
     /// Flow-type-qualified hotend designation, e.g. `"HS00-0.4"` or `"HH00-0.4"`.
@@ -264,8 +283,8 @@ impl ExtrusionCaliGetRequest {
         }
     }
 
-    /// Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` is not
-    /// unique across extruders. `0` = right/main, `1` = left/deputy.
+    /// Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` may not be
+    /// unique across extruders on every model. `0` = right/main, `1` = left/deputy.
     #[must_use]
     pub fn with_extruder_id(mut self, extruder_id: u8) -> Self {
         self.print.extruder_id = Some(extruder_id);
@@ -330,6 +349,10 @@ pub struct ExtrusionCaliSetPayload {
     pub command: &'static str,
     /// Calibration profile entries to write. Multiple entries support IDEX multi-nozzle writes.
     pub filaments: Vec<KProfileEntry>,
+    /// Print-level nozzle diameter, taken from the first entry's `nozzle_diameter` as
+    /// BambuStudio does. Omitted when that is `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nozzle_diameter: Option<String>,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: ClampedTaskId,
 }
@@ -343,8 +366,8 @@ impl ExtrusionCaliSetRequest {
 
     /// Builds a secure write-transaction payload targeting physical EEPROM slots.
     ///
-    /// Verifies that all target profiles carry valid setting identifiers to protect local
-    /// database health. Supports multi-profile writes for IDEX platforms.
+    /// Refuses any profile with an empty `setting_id`. Supports multi-profile writes for IDEX
+    /// platforms. The print-level `nozzle_diameter` is the first entry's.
     pub fn new(
         profiles: Vec<KProfileEntry>,
         sequence_id: impl Into<ClampedTaskId>,
@@ -353,9 +376,11 @@ impl ExtrusionCaliSetRequest {
             ensure_valid_setting_id(&profile.setting_id)?;
         }
 
+        let nozzle_diameter = profiles.first().and_then(|p| p.nozzle_diameter.clone());
         Ok(Self {
             print: ExtrusionCaliSetPayload {
                 command: Self::COMMAND,
+                nozzle_diameter,
                 filaments: profiles,
                 sequence_id: sequence_id.into(),
             },
@@ -515,7 +540,9 @@ pub struct StandardCaliDelEntry {
     pub nozzle_diameter: String,
     /// System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
     pub nozzle_id: String,
-    /// 19-character setting ID of the entry being deleted, validated by [`is_setting_id_valid`].
+    /// Setting ID of the entry being deleted, validated by [`is_setting_id_valid`].
+    ///
+    /// BambuStudio sends none on delete; bambuddy adds it on single-nozzle printers.
     pub setting_id: String,
 }
 
@@ -556,7 +583,7 @@ impl StandardCaliDelRequest {
     /// Wire command name.
     pub const COMMAND: &'static str = "extrusion_cali_del";
 
-    /// Builds a single-nozzle deletion transaction keyed on the setting identifier.
+    /// Builds a single-nozzle deletion transaction, refusing an empty `setting_id`.
     pub fn new(
         target: StandardCaliDelEntry,
         sequence_id: impl Into<ClampedTaskId>,
@@ -610,17 +637,9 @@ mod tests {
 
     #[test]
     fn test_setting_id_validator() {
-        // Correct format: "PF" followed by exactly 17 digits (total length 19)
-        assert!(is_setting_id_valid("PF12345678901234567"));
-
-        // Alphanumeric hash used by slicer presets must fail
-        assert!(!is_setting_id_valid("PFUS9be9e18f81828a"));
-
-        // Short decimal block
-        assert!(!is_setting_id_valid("PF123456"));
-
-        // Missing prefix
-        assert!(!is_setting_id_valid("1234567890123456789"));
+        assert!(is_setting_id_valid("GFSA00"));
+        assert!(is_setting_id_valid("PFUS9be9e18f81828a"));
+        assert!(!is_setting_id_valid(""));
     }
 
     #[test]
@@ -634,14 +653,14 @@ mod tests {
     }
 
     #[test]
-    fn test_extrusion_cali_set_invalid_id() {
+    fn test_extrusion_cali_set_empty_id() {
         let bad_profile = KProfileEntry {
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
-            name: "Faulty ID".into(),
+            name: "Empty ID".into(),
             k_value: "0.022".into(),
-            setting_id: "PF_BAD_ALPHANUM_KEY".into(),
+            setting_id: String::new(),
             ..Default::default()
         };
 
@@ -657,14 +676,68 @@ mod tests {
             nozzle_id: "HS00-0.4".into(),
             name: "Good ID".into(),
             k_value: "0.022".into(),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "PFUS9be9e18f81828a".into(),
             ..Default::default()
         };
 
         let req = ExtrusionCaliSetRequest::new(vec![good_profile], 50002).unwrap();
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("extrusion_cali_set"));
-        assert!(json.contains("PF12345678901234567"));
+        assert!(json.contains("PFUS9be9e18f81828a"));
+    }
+
+    #[test]
+    fn test_extrusion_cali_set_json_matches_bambustudio_shape() {
+        let fresh = KProfileEntry {
+            filament_id: "GFA01".into(),
+            nozzle_diameter: Some("0.4".into()),
+            nozzle_id: "HS00-0.4".into(),
+            name: "Fresh".into(),
+            k_value: "0.022".into(),
+            setting_id: "GFSA00".into(),
+            ..Default::default()
+        };
+        let req = ExtrusionCaliSetRequest::new(vec![fresh.clone()], 50002).unwrap();
+        assert_eq!(
+            serde_json::to_value(&req).unwrap(),
+            serde_json::json!({"print": {
+                "command": "extrusion_cali_set",
+                "nozzle_diameter": "0.4",
+                "sequence_id": "50002",
+                "filaments": [{
+                    "filament_id": "GFA01",
+                    "nozzle_diameter": "0.4",
+                    "nozzle_id": "HS00-0.4",
+                    "extruder_id": 0,
+                    "name": "Fresh",
+                    "k_value": "0.022",
+                    "n_coef": "0.0",
+                    "setting_id": "GFSA00",
+                    "ams_id": 0,
+                    "tray_id": 0,
+                    "slot_id": 0
+                }]
+            }})
+        );
+
+        let existing = KProfileEntry {
+            cali_idx: 7,
+            ..fresh
+        };
+        let req = ExtrusionCaliSetRequest::new(vec![existing], 50002).unwrap();
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["print"]["filaments"][0]["cali_idx"], 7);
+    }
+
+    #[test]
+    fn test_extrusion_cali_set_omits_print_nozzle_diameter_when_none() {
+        let profile = KProfileEntry {
+            setting_id: "GFSA00".into(),
+            ..Default::default()
+        };
+        let req = ExtrusionCaliSetRequest::new(vec![profile], 50002).unwrap();
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json["print"].get("nozzle_diameter").is_none());
     }
 
     #[test]
@@ -696,7 +769,7 @@ mod tests {
             filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
             nozzle_id: "HS00-0.4".into(),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "GFSA00".into(),
         };
         let req = StandardCaliDelRequest::new(entry, 50003).unwrap();
         let json: serde_json::Value = serde_json::to_value(&req).unwrap();
@@ -710,7 +783,7 @@ mod tests {
                 "filament_id": "GFA01",
                 "nozzle_diameter": "0.4",
                 "nozzle_id": "HS00-0.4",
-                "setting_id": "PF12345678901234567",
+                "setting_id": "GFSA00",
                 "sequence_id": "50003"
             }})
         );
@@ -730,14 +803,14 @@ mod tests {
     }
 
     #[test]
-    fn test_standard_cali_del_invalid_id() {
+    fn test_standard_cali_del_empty_id() {
         let entry = StandardCaliDelEntry {
             extruder_id: 0,
             cali_idx: 4,
             filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
             nozzle_id: "HS00-0.4".into(),
-            setting_id: "PFUS9be9e18f81828a".into(),
+            setting_id: String::new(),
         };
         assert!(StandardCaliDelRequest::new(entry, 50003).is_err());
     }
@@ -780,7 +853,7 @@ mod tests {
             nozzle_id: "HS00-0.4".into(),
             name: "Round-tripped".into(),
             k_value: "0.022".into(),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "GFSA00".into(),
             ..Default::default()
         };
 
@@ -793,20 +866,20 @@ mod tests {
     }
 
     #[test]
-    fn test_n_coef_none_omitted_from_json() {
+    fn test_n_coef_none_serialized_as_zero() {
         let profile = KProfileEntry {
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
             name: "Test".into(),
             k_value: "0.022".into(),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "GFSA00".into(),
             ..Default::default()
         };
         let json = serde_json::to_string(&profile).unwrap();
         assert!(
-            !json.contains("n_coef"),
-            "None n_coef should be omitted, not sent as null"
+            json.contains(r#""n_coef":"0.0""#),
+            "None n_coef should be sent as \"0.0\": {json}"
         );
     }
 
@@ -819,7 +892,7 @@ mod tests {
             name: "Test".into(),
             k_value: "0.022".into(),
             n_coef: Some("0.000000".into()),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "GFSA00".into(),
             ..Default::default()
         };
         let json = serde_json::to_string(&profile).unwrap();
@@ -842,7 +915,7 @@ mod tests {
                     "name": "My Custom PLA Matte",
                     "k_value": "0.022000",
                     "n_coef": "0.000000",
-                    "setting_id": "PF12345678901234567"
+                    "setting_id": "GFSA00"
                 }]
             }
         }"#;
@@ -871,7 +944,7 @@ mod tests {
                     "extruder_id": 0,
                     "name": "My Custom PLA Matte",
                     "k_value": "0.022000",
-                    "setting_id": "PF12345678901234567"
+                    "setting_id": "GFSA00"
                 }]
             }
         }"#;
@@ -899,7 +972,7 @@ mod tests {
                     "name": "My Custom PLA Matte",
                     "k_value": 0.022,
                     "n_coef": 0,
-                    "setting_id": "PF12345678901234567"
+                    "setting_id": "GFSA00"
                 }]
             }
         }"#;
@@ -923,7 +996,7 @@ mod tests {
             "extruder_id": 0,
             "name": "My Custom PLA Matte",
             "k_value": null,
-            "setting_id": "PF12345678901234567"
+            "setting_id": "GFSA00"
         }"#;
         assert!(serde_json::from_str::<KProfileEntry>(json).is_err());
     }
@@ -953,7 +1026,7 @@ mod tests {
             nozzle_id: "HS00-0.4".into(),
             name: "Test".into(),
             k_value: "0.022".into(),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "GFSA00".into(),
             ..Default::default()
         };
         assert_clamped(
@@ -983,7 +1056,7 @@ mod tests {
             filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
             nozzle_id: "HS00-0.4".into(),
-            setting_id: "PF12345678901234567".into(),
+            setting_id: "GFSA00".into(),
         };
         assert_clamped(
             &StandardCaliDelRequest::new(standard_entry, raw)

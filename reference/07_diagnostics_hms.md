@@ -217,7 +217,7 @@ Two further per-entry fields are optional and absent from the example above:
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `ams_id` | int | `0` | Links the profile to an AMS unit. |
-| `tray_id` | int | `-1` | Links the profile to an AMS tray slot. **At least X1C firmware spuriously reports `result: "fail"` for an `extrusion_cali` write using `tray_id: -1` even though the write still applies** — do not treat that ack's `result` as authoritative for a `tray_id: -1` write without cross-checking that the profile actually landed. bambuddy measured the same on an X1C (`reason: "invalid tray_id"`) and found that sending `tray_id: 0` instead turns the ack into `success`, so it now always sends `0` for a profile not tied to a tray (`bambu_mqtt.py` `set_kprofile`, issue #2718). |
+| `tray_id` | int | `0` (BambuStudio `PACalibResult`, `libslic3r/Calib.hpp`) | Links the profile to an AMS tray slot. **At least X1C firmware spuriously reports `result: "fail"` for an `extrusion_cali` write using `tray_id: -1` even though the write still applies** — do not treat that ack's `result` as authoritative for a `tray_id: -1` write without cross-checking that the profile actually landed. bambuddy measured the same on an X1C (`reason: "invalid tray_id"`) and found that sending `tray_id: 0` instead turns the ack into `success`, so it now always sends `0` for a profile not tied to a tray (`bambu_mqtt.py` `set_kprofile`, issue #2718). |
 
 *(Verification source: this crate's `KProfileEntry` doc comments in `src/diagnostics/kprofile.rs`; the `tray_id: -1` ack behaviour is a live-probe observation against an X1C, independently reproduced by bambuddy.)*
 
