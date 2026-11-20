@@ -23,8 +23,8 @@ use super::ClampedTaskId;
 /// Folds flat `ams_mapping` channel ids outside the documented space to the `-1` unmapped
 /// sentinel, logging each one.
 ///
-/// Valid ids are `-1` (unmapped), `0..=15` (4 standard units × 4 slots), and `128..=135`
-/// (AMS-HT). Firmware rejects anything else — `254`/`255` in particular — with a visible
+/// Valid ids are `-1` (unmapped), `0..=15` (4 standard units × 4 slots), `28..=36` (the AMS 3H's
+/// nine slots) and `128..=135` (AMS-HT). Firmware rejects anything else — `254`/`255` in particular — with a visible
 /// `0700_8012`/`07FF_8012` error (`reference/05_materials_ams.md`, "External Spool Flat-Mapping
 /// Restrictions").
 ///
@@ -813,6 +813,17 @@ impl ProjectFileRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_flat_mapping_keeps_ams_3h_channels() {
+        // The AMS 3H's flat channels are its global tray ids 28..=36.
+        let kept: Vec<i32> = (28..=36).collect();
+        assert_eq!(sanitize_flat_mapping(kept.clone(), "test"), kept);
+        assert_eq!(
+            sanitize_flat_mapping(vec![27, 37, 28, 254], "test"),
+            vec![-1, -1, 28, -1]
+        );
+    }
 
     #[test]
     fn url_follows_the_file_location() {

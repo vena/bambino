@@ -10,7 +10,10 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use super::ids::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
+use super::ids::{
+    AMS_3H_SLOTS, AMS_3H_TRAY_BASE, AMS_3H_UNIT_ID, AMS_EXTERNAL_SPOOL_DEPUTY_ID,
+    AMS_EXTERNAL_SPOOL_MAIN_ID,
+};
 use serde::{Deserialize, Serialize};
 
 /// Enumeration of possible physical feed locations for loaded spools.
@@ -37,6 +40,15 @@ pub enum MaterialSource {
     /// addresses it by. A `StandardAms { ams_id: 6, .. }` would get both wrong.
     AmsLite {
         /// Tray slot index within the unit (0-3).
+        slot_id: u8,
+    },
+    /// Spool loaded inside the H3C's built-in nine-slot AMS 3H (unit id 32).
+    ///
+    /// Kept separate from [`MaterialSource::StandardAms`] because its flat `ams_mapping` channel
+    /// is the global tray id `28 + slot`, not `ams_id * 4 + slot`, and `ams_mapping2` carries
+    /// `{ams_id: 32, slot_id: k}` with the local slot (bambuddy, tested).
+    Ams3H {
+        /// Tray slot index within the unit (0-8).
         slot_id: u8,
     },
     /// Default virtual external spool holder (used for standard single-nozzle models).
@@ -102,6 +114,16 @@ impl MaterialSource {
                     AmsMapping2Entry::UNMAPPED
                 }
             }
+            MaterialSource::Ams3H { slot_id } => {
+                if *slot_id < AMS_3H_SLOTS {
+                    AmsMapping2Entry {
+                        ams_id: AMS_3H_UNIT_ID,
+                        slot_id: *slot_id,
+                    }
+                } else {
+                    AmsMapping2Entry::UNMAPPED
+                }
+            }
             // `ams_mapping2` is the one place an A2L-attached AMS Lite's *physical* id 16 goes back on
             // the wire, paired with a local slot. CONFIRMED against the firmware's own mapping
             // (bambuddy's `a2l_lite_wire_ids`) and BambuStudio, which writes the unreduced
@@ -136,15 +158,16 @@ impl MaterialSource {
 /// Structured object detailing unit and slot coordinates within `ams_mapping2` arrays.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AmsMapping2Entry {
-    /// AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 128-135 for AMS-HT,
-    /// 254/255 for external/unmapped).
+    /// AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 32 for the AMS 3H,
+    /// 128-135 for AMS-HT, 254/255 for external/unmapped).
     ///
     /// Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
     /// [`AmsEntryKind`] warns about, since a caller reading this field in isolation could add
     /// defensive rejection that breaks A2L support (issue #221). Classify with
     /// [`classify_mapping2_entry`] rather than re-deriving the ranges.
     pub ams_id: u8,
-    /// Tray slot index within the unit (0-3 for standard AMS, 0 for single-slot units).
+    /// Tray slot index within the unit (0-3 for standard AMS, 0-8 for the AMS 3H, 0 for
+    /// single-slot units).
     pub slot_id: u8,
 }
 
@@ -172,6 +195,8 @@ pub enum AmsEntryKind {
     Ht,
     /// The A2L's 4-slot AMS Lite, carried on the wire as physical unit id 16.
     AmsLite,
+    /// The H3C's nine-slot AMS 3H, carried on the wire as unit id 32 with a local slot `0..=8`.
+    Ams3H,
     /// One of the two external-spool sentinel ids (254/255), including the
     /// `{255, 255}` unmapped sentinel.
     External,
@@ -199,6 +224,8 @@ pub fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind {
         && entry.slot_id < super::ids::AMS_SLOTS_PER_UNIT
     {
         AmsEntryKind::AmsLite
+    } else if entry.ams_id == AMS_3H_UNIT_ID && entry.slot_id < AMS_3H_SLOTS {
+        AmsEntryKind::Ams3H
     } else {
         AmsEntryKind::Invalid
     }
@@ -222,6 +249,9 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
         // with a `-1` flat element described the same filament two contradictory ways in one
         // MQTT command.
         AmsEntryKind::AmsLite => entry.slot_id as i32,
+        // The AMS 3H's flat channel is its global tray id, `28 + slot` (bambuddy; BambuStudio's
+        // `GetTrayIndexMap`).
+        AmsEntryKind::Ams3H => i32::from(AMS_3H_TRAY_BASE) + entry.slot_id as i32,
         // External and unmapped slots are strictly mapped to -1, same as MaterialSource's rule.
         AmsEntryKind::External | AmsEntryKind::Invalid => -1,
     }
@@ -345,7 +375,7 @@ pub fn is_external_spool_safety_valid(
     mapping2.iter().any(|entry| {
         matches!(
             classify_mapping2_entry(entry),
-            AmsEntryKind::Standard | AmsEntryKind::Ht | AmsEntryKind::AmsLite
+            AmsEntryKind::Standard | AmsEntryKind::Ht | AmsEntryKind::AmsLite | AmsEntryKind::Ams3H
         )
     })
 }
@@ -445,6 +475,10 @@ pub fn is_ams_pool_composition_valid(
             // One physical id, so at most one unit however many slots reference it.
             AmsEntryKind::AmsLite => uses_ams_lite = true,
             AmsEntryKind::Ht => ht_ids |= 1 << (entry.ams_id - super::ids::AMS_HT_ID_MIN),
+            // The AMS 3H is built into the H3C, so it is outside both pools: counting it would
+            // refuse a print from the one unit every H3C has (`max_standard`/`max_ht` describe
+            // the *external* AMS units, and are 0 for it today).
+            AmsEntryKind::Ams3H => {}
             // External/unmapped sentinels don't occupy a physical unit slot; anything else is a
             // malformed ams_id/slot_id pair — reject exhaustively rather than silently ignoring
             // it like a legitimate external entry.
@@ -481,7 +515,7 @@ pub fn is_external_spool_safety_valid_flat(is_single_nozzle: bool, ams_mapping: 
     ams_mapping.iter().any(|&v| is_physical_flat_channel(v))
 }
 
-/// Returns true if `v` is a flat `ams_mapping` channel naming a physical AMS slot: a standard channel (0–15) or an AMS-HT id (128–135).
+/// Returns true if `v` is a flat `ams_mapping` channel naming a physical AMS slot: a standard channel (0–15), an AMS 3H channel (28–36) or an AMS-HT id (128–135).
 ///
 /// The one definition of that range, shared by this module's safety interlock, the print-job
 /// mapping sanitizer and the client's tray validation: two hand-kept copies could drift so that
@@ -490,7 +524,9 @@ pub(crate) fn is_physical_flat_channel(v: i32) -> bool {
     let max_standard_channel = (i32::from(super::ids::AMS_MAX_STANDARD_ID) + 1)
         * i32::from(super::ids::AMS_SLOTS_PER_UNIT)
         - 1;
+    let ams_3h_channels = i32::from(AMS_3H_TRAY_BASE)..i32::from(AMS_3H_TRAY_BASE + AMS_3H_SLOTS);
     (0..=max_standard_channel).contains(&v)
+        || ams_3h_channels.contains(&v)
         || (i32::from(super::ids::AMS_HT_ID_MIN)..=i32::from(super::ids::AMS_HT_ID_MAX))
             .contains(&v)
 }
@@ -498,6 +534,74 @@ pub(crate) fn is_physical_flat_channel(v: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ams_3h_mapping_entries_and_flat_channels() {
+        // Flat `ams_mapping` carries 28 + k, `ams_mapping2` carries {32, k}.
+        let allocations: Vec<(usize, MaterialSource)> = (0..9u8)
+            .map(|k| (usize::from(k) + 1, MaterialSource::Ams3H { slot_id: k }))
+            .collect();
+        assert_eq!(
+            build_ams_mapping(&allocations),
+            (28..=36).collect::<Vec<i32>>()
+        );
+        let mapping2 = build_ams_mapping2(&allocations);
+        for (k, entry) in (0u8..).zip(&mapping2) {
+            assert_eq!(
+                *entry,
+                AmsMapping2Entry {
+                    ams_id: 32,
+                    slot_id: k
+                }
+            );
+            assert_eq!(classify_mapping2_entry(entry), AmsEntryKind::Ams3H);
+        }
+        // Out-of-range slots fall back to unmapped, as for every other unit.
+        let bad = MaterialSource::Ams3H { slot_id: 9 };
+        assert_eq!(bad.to_mapping2_entry(), AmsMapping2Entry::UNMAPPED);
+        assert_eq!(bad.flat_channel_id(), -1);
+        assert_eq!(
+            classify_mapping2_entry(&AmsMapping2Entry {
+                ams_id: 32,
+                slot_id: 9
+            }),
+            AmsEntryKind::Invalid
+        );
+    }
+
+    #[test]
+    fn test_ams_3h_is_physical_and_outside_the_pool_caps() {
+        let ams_3h = [MaterialSource::Ams3H { slot_id: 4 }.to_mapping2_entry()];
+        // Counts as a physical feed for the single-nozzle `use_ams` interlock.
+        assert!(is_external_spool_safety_valid(true, &ams_3h));
+        // The H3C's quirks row is `Independent { max_standard: 0, max_ht: 0 }`; the built-in unit
+        // is in neither pool.
+        let h3c_pool = AmsPoolComposition::Independent {
+            max_standard: 0,
+            max_ht: 0,
+        };
+        assert!(is_ams_pool_composition_valid(&ams_3h, h3c_pool));
+        // But an external standard unit still counts against the cap.
+        let with_standard = [
+            ams_3h[0].clone(),
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 0,
+            },
+        ];
+        assert!(!is_ams_pool_composition_valid(&with_standard, h3c_pool));
+    }
+
+    #[test]
+    fn test_is_physical_flat_channel_ams_3h_range() {
+        for v in 28..=36 {
+            assert!(is_physical_flat_channel(v), "{v}");
+        }
+        for v in [16, 24, 27, 37, 127] {
+            assert!(!is_physical_flat_channel(v), "{v}");
+        }
+        assert!(is_external_spool_safety_valid_flat(true, &[-1, 28]));
+    }
 
     #[test]
     fn test_build_ams_mapping_flat() {

@@ -14,13 +14,16 @@ fn unit_with_info(info: &str) -> AmsUnit {
 /// `print_scheduler.py`), and slot count (`None` where upstream counts observed trays).
 type UnitModelRow = (u8, AmsUnitModel, Option<(u32, u32)>, Option<u8>);
 
-const UNIT_MODELS: [UnitModelRow; 6] = [
+const UNIT_MODELS: [UnitModelRow; 8] = [
     (0, AmsUnitModel::ExternalSpool, None, None),
     (1, AmsUnitModel::Ams, None, Some(4)),
     (2, AmsUnitModel::AmsLite, None, Some(4)),
     (3, AmsUnitModel::Ams2Pro, Some((45, 65)), Some(4)),
     (4, AmsUnitModel::AmsHt, Some((45, 85)), Some(1)),
     (5, AmsUnitModel::AmsLiteMixed, None, None),
+    // Drying is per zone, not per type: see `test_ams_3h_zone_info_and_drying_support`.
+    (6, AmsUnitModel::Ams3H, None, Some(9)),
+    (7, AmsUnitModel::AmsB, None, None),
 ];
 
 #[test]
@@ -336,6 +339,157 @@ fn test_ams_unit_info_bitmask() {
     assert_eq!(unit.extruder_assignment(), Some(1)); // Left/deputy extruder
 }
 
+/// A `print.ams` block shaped like ha-bambulab's `MOCK-H3C.json` (unit id 32, type 6, two zones),
+/// reduced to three trays. No serials or access codes.
+///
+/// The `state` values are the captured ones: `283` on loaded trays, `160` on empty ones.
+const H3C_AMS_JSON: &str = r#"{
+    "print": { "ams": {
+        "ams": [{
+            "id": "32",
+            "info": "240002006",
+            "dry_info": "1",
+            "zone_info": [
+                { "zone_id": 0, "zone_slots": [5, 7], "temp": "16.7", "humidity": "4",
+                  "humidity_raw": "27", "dry_time": 8, "info": "240002006", "zone_dry_info": "1",
+                  "dry_sf_reason": [],
+                  "dry_setting": { "dry_duration": -1, "dry_filament": "", "dry_temperature": -1 } },
+                { "zone_id": 1, "zone_slots": [0, 1, 2, 3, 4, 6, 8], "temp": "16.2",
+                  "humidity": "2", "humidity_raw": "41", "dry_time": 8, "info": "240002006",
+                  "zone_dry_info": "0", "dry_sf_reason": [] }
+            ],
+            "tray": [
+                { "id": "0", "state": 283, "tray_type": "PLA", "tray_color": "000000FF", "remain": 34 },
+                { "id": "1", "state": 283, "tray_type": "PLA", "tray_color": "FFFFFFFF", "remain": 90 },
+                { "id": "2", "state": 160 },
+                { "id": "8", "state": 160 }
+            ]
+        }],
+        "ams_exist_bits": "2000",
+        "tray_exist_bits": "30000000",
+        "tray_now": "255"
+    } }
+}"#;
+
+#[test]
+fn test_ams_3h_zone_info_and_drying_support() {
+    let report = parse_report(H3C_AMS_JSON);
+    let ams = report.print.unwrap().ams.unwrap();
+    let unit = ams.unit(32).expect("unit 32 is addressable by its id");
+    assert_eq!(unit.unit_model(), Some(AmsUnitModel::Ams3H));
+    assert_eq!(unit.display_name().as_deref(), Some("AMS-3H"));
+    assert_eq!(unit.tray.as_ref().unwrap().len(), 4);
+    assert_eq!(ams.tray(32, 8).and_then(AmsTray::slot), Some(8));
+
+    let zones = unit.zone_info.as_deref().unwrap();
+    assert_eq!(zones.len(), 2);
+    assert_eq!(zones[0].zone_id, Some(0));
+    assert_eq!(zones[0].zone_slots, vec![5, 7]);
+    assert_eq!(zones[0].humidity_percent(), Some(27));
+    assert_eq!(zones[0].humidity_level(), Some(4));
+    assert_eq!(zones[0].temperature_c(), Some(16.7));
+    assert_eq!(zones[0].dry_time, Some(8));
+    assert_eq!(
+        zones[0].dry_setting.as_ref().unwrap().dry_temperature,
+        Some(-1)
+    );
+    assert_eq!(zones[1].zone_slots.len(), 7);
+
+    // `DevAmsZone::SupportDrying`: exactly two slots.
+    assert!(zones[0].supports_drying());
+    assert!(!zones[1].supports_drying());
+    // `DevAms::SupportDrying`: any zone.
+    assert_eq!(unit.supports_drying(), Some(true));
+
+    // No zone with two slots, or no zones at all: no drying.
+    let mut no_dry = unit.clone();
+    no_dry.zone_info.as_mut().unwrap().remove(0);
+    assert_eq!(no_dry.supports_drying(), Some(false));
+    no_dry.zone_info = None;
+    assert_eq!(no_dry.supports_drying(), Some(false));
+}
+
+#[test]
+fn test_ams_zone_slots_accept_numeric_strings_and_drop_junk() {
+    let ams = parse_report(
+        r#"{"print":{"ams":{"ams":[{"id":"32","zone_info":[
+            {"zone_id":0,"zone_slots":["5", 7, "x", null, 300]},
+            {"zone_id":1,"zone_slots":null},
+            {"zone_id":2}]}]}}}"#,
+    )
+    .print
+    .unwrap()
+    .ams
+    .unwrap();
+    let zones = ams.unit(32).unwrap().zone_info.as_deref().unwrap();
+    assert_eq!(zones[0].zone_slots, vec![5, 7]);
+    assert!(zones[1].zone_slots.is_empty() && zones[2].zone_slots.is_empty());
+}
+
+#[test]
+fn test_ams_3h_tray_states_above_255_parse_and_read_loaded_by_metadata() {
+    let ams = parse_report(H3C_AMS_JSON).print.unwrap().ams.unwrap();
+    for slot in [0, 1] {
+        let tray = ams.tray(32, slot).unwrap();
+        assert_eq!(tray.state, Some(283));
+        assert_eq!(tray.state(), 283);
+        // 283 is none of 0 / 9 / 10, so the metadata rule decides: `tray_type` is set.
+        assert!(tray.is_loaded(32));
+        assert_eq!(tray.material(), Some("PLA"));
+    }
+    for slot in [2, 8] {
+        let tray = ams.tray(32, slot).unwrap();
+        assert_eq!(tray.state, Some(160));
+        assert_eq!(tray.material(), None);
+        // No metadata and not state 11: empty.
+        assert!(!tray.is_loaded(32));
+    }
+}
+
+#[test]
+fn test_ams_3h_tray_exist_bits_decode_against_28_plus_slot() {
+    use crate::ams::evaluate_spool_presence;
+    let ams = parse_report(H3C_AMS_JSON).print.unwrap().ams.unwrap();
+    let bits = ams.tray_exist_bits.as_deref().unwrap();
+    // "30000000" is bits 28 and 29: slots 0 and 1 are present, slot 2 is not. (Both are loaded
+    // in the capture's tray list as well.)
+    assert_eq!(ams.ams_exist_bits.as_deref(), Some("2000")); // bit 13
+    assert_eq!(evaluate_spool_presence(bits, 32, 0, true), Some(true));
+    assert_eq!(evaluate_spool_presence(bits, 32, 1, true), Some(true));
+    assert_eq!(evaluate_spool_presence(bits, 32, 2, true), Some(false));
+    assert_eq!(evaluate_spool_presence(bits, 32, 9, true), None);
+}
+
+#[test]
+fn test_ams_zone_info_merges_by_replacement_and_survives_absence() {
+    let first = parse_report(H3C_AMS_JSON).print.unwrap().ams.unwrap();
+    let mut cached = first.clone();
+    // A push for the unit that omits `zone_info` leaves the cached zones alone.
+    let partial =
+        parse_report(r#"{"print":{"ams":{"ams":[{"id":"32","info":"240002006","temp":"20"}]}}}"#)
+            .print
+            .unwrap()
+            .ams
+            .unwrap();
+    cached.merge_from(&partial);
+    assert_eq!(
+        cached.unit(32).unwrap().zone_info.as_ref().unwrap().len(),
+        2
+    );
+    // A present array replaces them.
+    let one = parse_report(
+        r#"{"print":{"ams":{"ams":[{"id":"32","zone_info":[{"zone_id":1,"zone_slots":[0,1]}]}]}}}"#,
+    )
+    .print
+    .unwrap()
+    .ams
+    .unwrap();
+    cached.merge_from(&one);
+    let zones = cached.unit(32).unwrap().zone_info.as_ref().unwrap();
+    assert_eq!(zones.len(), 1);
+    assert_eq!(zones[0].zone_id, Some(1));
+}
+
 #[test]
 fn test_ams_unit_model_table() {
     for (wire, model, dry_range, slots) in UNIT_MODELS {
@@ -352,7 +506,7 @@ fn test_ams_unit_model_table() {
 
     // An unknown type must not be folded onto a neighbouring variant — a wrong guess here is how
     // a drying command reaches a unit with no heater.
-    for wire in 6..=0xF {
+    for wire in 8..=0xF {
         assert_eq!(AmsUnitModel::from_wire(wire), None, "wire type {wire}");
     }
 }

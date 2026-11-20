@@ -1076,6 +1076,7 @@ fn tray_label(source: MaterialSource) -> String {
         MaterialSource::StandardAms { ams_id, slot_id } => format!("AMS {ams_id} slot {slot_id}"),
         MaterialSource::AmsHt { ams_id } => format!("AMS-HT {ams_id}"),
         MaterialSource::AmsLite { slot_id } => format!("AMS Lite slot {slot_id}"),
+        MaterialSource::Ams3H { slot_id } => format!("AMS 3H slot {slot_id}"),
         MaterialSource::ExternalSpool => String::from("external spool"),
         MaterialSource::ExternalSpoolLeft => String::from("external left"),
         MaterialSource::ExternalSpoolRight => String::from("external right"),

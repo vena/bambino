@@ -18,10 +18,10 @@ pub use control::{
 pub use telemetry::{
     AirductCollection, AirductModeListEntry, AirductPart, AmsDryFanStatus, AmsDrySetting,
     AmsDryStatus, AmsDrySubStatus, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit,
-    AmsUnitModel, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry, DeviceTelemetry, ExtToolTelemetry,
-    ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry, LightReport, NetInfo,
-    NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState, TelemetryReport, VirtualTray,
-    XcamDetector, XcamSensitivity, XcamTelemetry, is_developer_mode,
+    AmsUnitModel, AmsZone, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry, DeviceTelemetry,
+    ExtToolTelemetry, ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry, LightReport,
+    NetInfo, NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState, TelemetryReport,
+    VirtualTray, XcamDetector, XcamSensitivity, XcamTelemetry, is_developer_mode,
 };
 pub use telemetry::{HeaterTemps, NozzleTemps, hex_bit, unpack_temperature};
 pub use version::{VersionInfo, VersionModule};

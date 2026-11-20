@@ -8,9 +8,9 @@
 #[cfg(test)]
 use super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID;
 use super::ids::{
-    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID, AMS_HT_ID_MIN,
-    AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_SLOTS_PER_UNIT, is_ams_ht_id, is_external_spool_id,
-    is_standard_id, normalize_ams_unit_id,
+    AMS_3H_SLOTS, AMS_3H_TRAY_BASE, AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID,
+    AMS_HT_ID_MIN, AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_SLOTS_PER_UNIT, is_ams_3h_id, is_ams_ht_id,
+    is_external_spool_id, is_standard_id, normalize_ams_unit_id,
 };
 use crate::types::AmsTray;
 use crate::types::telemetry::ams::AMS_TRAY_STATE_EMPTY;
@@ -43,8 +43,8 @@ pub fn evaluate_spool_presence(
     tray_id: u8,
     power_on_flag: bool,
 ) -> Option<bool> {
-    let parsed_mask = crate::types::telemetry::bits::hex_u64(tray_exist_bits)
-        .and_then(|mask| u32::try_from(mask).ok())?;
+    // 64 bits, not 32: the AMS 3H's slots 4..=8 are bits 32..=36.
+    let parsed_mask = crate::types::telemetry::bits::hex_u64(tray_exist_bits)?;
 
     // Evaluate the shutdown exception boundary
     if parsed_mask == 0 && !power_on_flag {
@@ -61,12 +61,20 @@ pub fn evaluate_spool_presence(
 /// Standard units (0-3) and the A2L-attached AMS Lite's normalized id 6 use
 /// `ams_id * 4 + tray_id`. AMS-HT units (128-135) sit right after the standard block, at
 /// `16 + (ams_id - 128)`; they are single-slot and consecutive ids occupy consecutive bits, so
-/// any `tray_id` but 0 would alias onto a neighbouring unit's bit and is rejected. Every index
-/// is below 32. Accepts exactly the addresses [`resolve_global_tray_id`] accepts, minus the
-/// external spools.
+/// any `tray_id` but 0 would alias onto a neighbouring unit's bit and is rejected. The AMS 3H
+/// (unit 32) takes `28 + tray_id` for `tray_id` `0..=8`, so its top five slots sit above bit 31.
+/// Every index is below 64. Accepts exactly the addresses [`resolve_global_tray_id`] accepts,
+/// minus the external spools.
+///
+/// BambuStudio keys the AMS 3H's `28 + slot` on the unit *type* (`DevAms::GetTrayId`,
+/// `DevAmsTray::get_tray_flag_bit`); this takes only the id, so it keys on 32. The AMS-B
+/// (`37 + slot` upstream) is left out because the unit id it reports is not recorded.
 fn tray_exist_bit_index(ams_id: u8, tray_id: u8) -> Option<u32> {
     if is_ams_ht_id(ams_id) {
         return (tray_id == 0).then(|| 16 + u32::from(ams_id - AMS_HT_ID_MIN));
+    }
+    if is_ams_3h_id(ams_id) {
+        return (tray_id < AMS_3H_SLOTS).then(|| u32::from(AMS_3H_TRAY_BASE) + u32::from(tray_id));
     }
     if (is_standard_id(ams_id) || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
         && tray_id < AMS_SLOTS_PER_UNIT
@@ -134,14 +142,17 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
 /// Computes the unique global channel identifier for a given expansion unit and local tray.
 ///
 /// Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3, the
-/// A2L-attached AMS Lite's normalized 6, AMS-HT 128–135, external 254–255) or if
-/// `tray_id >= 4` on a four-slot path.
+/// A2L-attached AMS Lite's normalized 6, the AMS 3H's 32, AMS-HT 128–135, external 254–255) or
+/// if `tray_id` is past the unit's slots (`>= 4` on a four-slot path, `>= 9` on the AMS 3H).
 ///
 /// The physical mapping aligns as:
 /// * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 /// * **AMS Lite on an A2L**: the normalized id 6 through the same formula, giving global ids
 ///   24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`]
 ///   first (`.claude/rules/ams-lite-on-a2l-unit-id.md`).
+/// * **AMS 3H** (unit 32): nine slots, global ids `28 + tray_id`, i.e. 28–36. BambuStudio keys
+///   this on the unit type; this keys on the id, and leaves out the AMS-B (`37 + slot`) because
+///   its unit id is unrecorded.
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 ///
@@ -157,6 +168,8 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
         if tray_id == 0 { Some(ams_id) } else { None }
     } else if is_external_spool_id(ams_id) {
         Some(ams_id)
+    } else if is_ams_3h_id(ams_id) {
+        (tray_id < AMS_3H_SLOTS).then(|| AMS_3H_TRAY_BASE + tray_id)
     } else if (is_standard_id(ams_id) || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
         && tray_id < AMS_SLOTS_PER_UNIT
     {
@@ -174,6 +187,7 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
 /// - a standard unit's slot is the unit's letter (`A` for id 0) and the 1-based slot, `A1`…`D4`
 /// - an A2L's AMS Lite is `Q1`…`Q4`; `ams_id` may be its physical 16 or its normalized 6
 /// - an AMS-HT is `HT-A`…`HT-H`, lettered from id 128
+/// - an AMS 3H slot has no label here: `None`
 /// - an external spool is `Ext`, or `Ext-R` (255) and `Ext-L` (254) when `extruder_count` is 2
 ///
 /// These are the labels BambuStudio's print, mapping and sync dialogs show, which pass this same
@@ -190,7 +204,14 @@ pub fn slot_label(ams_id: u8, slot_id: u8, extruder_count: u8) -> Option<String>
     const DUAL_EXTRUDER_COUNT: u8 = 2;
     let ams_lite_base = AMS_LITE_ON_A2L_NORMALIZED_ID * AMS_SLOTS_PER_UNIT;
 
-    let tray_id = resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id)?;
+    let ams_id = normalize_ams_unit_id(ams_id);
+    let tray_id = resolve_global_tray_id(ams_id, slot_id)?;
+    // The AMS 3H's labels are BambuStudio's rack labels (`transition_tridid_rack`), which need
+    // the nozzle-rack position of the tray; the legacy formula below would print 28-36 as
+    // `H1`..`J1` / `Q5`.... No label beats a wrong one.
+    if is_ams_3h_id(ams_id) {
+        return None;
+    }
     Some(match tray_id {
         AMS_EXTERNAL_SPOOL_MAIN_ID if extruder_count == DUAL_EXTRUDER_COUNT => "Ext-R".into(),
         AMS_EXTERNAL_SPOOL_DEPUTY_ID if extruder_count == DUAL_EXTRUDER_COUNT => "Ext-L".into(),
@@ -244,6 +265,32 @@ mod tests {
         // Regression (#344): a map built from wire ids carries the physical 16.
         assert_eq!(resolve_printing_global_id(1, Some(0), &[16]), Some(25));
         assert_eq!(resolve_printing_global_id(1, Some(0), &[6]), Some(25));
+    }
+
+    #[test]
+    fn test_ams_3h_global_tray_ids_and_exist_bits() {
+        // BambuStudio `DevAms::GetTrayId` ZMULTI_A: 28 + slot, slots 0..=8.
+        for slot in 0..9u8 {
+            assert_eq!(resolve_global_tray_id(32, slot), Some(28 + slot));
+            // Bits 28..=36: the top five are above bit 31, so the mask is read as 64 bits.
+            let mask = format!("{:x}", 1u64 << (28 + u32::from(slot)));
+            assert_eq!(evaluate_spool_presence(&mask, 32, slot, true), Some(true));
+            assert_eq!(evaluate_spool_presence("1", 32, slot, true), Some(false));
+        }
+        assert_eq!(resolve_global_tray_id(32, 9), None);
+        assert_eq!(evaluate_spool_presence("ffffffffff", 32, 9, true), None);
+        // 28 + 8 = bit 36 only.
+        assert_eq!(
+            evaluate_spool_presence("1000000000", 32, 8, true),
+            Some(true)
+        );
+        // Unit 31/33 are not the AMS 3H.
+        assert_eq!(resolve_global_tray_id(31, 0), None);
+        assert_eq!(resolve_global_tray_id(33, 0), None);
+        // No label for it: the legacy formula would mislabel 28-36.
+        assert_eq!(slot_label(32, 0, 2), None);
+        // `snow` carries the raw slot with unit 32; the normalizer leaves it alone.
+        assert_eq!(resolve_printing_global_id(2, Some(0), &[32]), Some(30));
     }
 
     #[test]
@@ -829,17 +876,22 @@ mod tests {
             if ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID || ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID {
                 continue;
             }
-            for tray_id in 0..8 {
+            // Past the AMS 3H's nine slots, so its out-of-range `tray_id`s are covered.
+            for tray_id in 0..12 {
                 let bit = tray_exist_bit_index(ams_id, tray_id);
                 assert_eq!(
                     bit.is_some(),
                     resolve_global_tray_id(ams_id, tray_id).is_some(),
                     "({ams_id}, {tray_id})"
                 );
+                // 64-bit mask: the AMS 3H's slots 4..=8 are bits 32..=36.
                 assert!(
-                    bit.is_none_or(|b| b < 32),
+                    bit.is_none_or(|b| b < 64),
                     "({ams_id}, {tray_id}) -> {bit:?}"
                 );
+                if bit.is_some_and(|b| b >= 32) {
+                    assert_eq!(ams_id, 32, "only the AMS 3H reaches past bit 31");
+                }
             }
         }
     }

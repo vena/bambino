@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 pub use ams::{
     AmsDryFanStatus, AmsDrySetting, AmsDryStatus, AmsDrySubStatus, AmsFilamentStep,
-    AmsStatusReport, AmsTray, AmsUnit, AmsUnitModel, DryBlockReason, FilamentSwitchInlet,
+    AmsStatusReport, AmsTray, AmsUnit, AmsUnitModel, AmsZone, DryBlockReason, FilamentSwitchInlet,
     VirtualTray,
 };
 pub use bits::{FUN2_REMOTE_DRY_BIT, hex_bit};

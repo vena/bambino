@@ -4,14 +4,24 @@
 //! purpose, so the telemetry types, the parsers, the mapping builders and the client all read
 //! one statement of the address space instead of each spelling the ranges inline.
 //!
-//! An AMS Lite on an A2L is the one unit outside the `0..=3` / `128..=135` / `254..=255` blocks:
-//! see `.claude/rules/ams-lite-on-a2l-unit-id.md` before adding a predicate here.
+//! The blocks, with the global tray ids each resolves to:
+//!
+//! - standard units `0..=3` (4 slots each, trays `0..=15`)
+//! - an AMS Lite on an A2L, physical `16` and normalized `6` (4 slots, trays `24..=27`)
+//! - the AMS 3H, unit `32` (9 slots, trays `28..=36`; see [`AMS_3H_UNIT_ID`])
+//! - AMS-HT units `128..=135` (1 slot each, trays = the unit id)
+//! - external spool holders `254` / `255`
+//!
+//! See `.claude/rules/ams-lite-on-a2l-unit-id.md` before adding a predicate here: the AMS Lite on
+//! an A2L (`16` / `6`) is the unit that rule was written for, and each new block has to be
+//! handled in every layer it names.
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
 /// `ams_change_filament` slot (and target) meaning "unload / retract whatever is loaded".
 pub(crate) const SLOT_UNLOAD: u8 = 255;
 /// The `ams_id`s a caller may pass to an AMS command, as `InvalidArgument` messages state them.
-pub(crate) const VALID_AMS_IDS_TEXT: &str = "0..=3, 6 or 16 (A2L AMS Lite), 128..=135, 254, 255";
+pub(crate) const VALID_AMS_IDS_TEXT: &str =
+    "0..=3, 6 or 16 (A2L AMS Lite), 32 (AMS 3H), 128..=135, 254, 255";
 /// Reverted from `7` back to `3` — the widening to `7` relied on
 /// bambuddy's `ck_ams_id_range` CHECK constraint (0-7), but that range predates bambuddy's
 /// own issue #1274 by a month with no cited evidence of a standard unit above id 3; #1274
@@ -63,6 +73,20 @@ pub(crate) const AMS_LITE_ON_A2L_PHYSICAL_ID: u8 = 16;
 /// The range collides with nothing — standard units occupy bits/ids 0-15 and AMS-HT 16-23 in
 /// `tray_exist_bits`.
 pub(crate) const AMS_LITE_ON_A2L_NORMALIZED_ID: u8 = 6;
+/// The unit id the H3C's built-in AMS 3H (wire unit type 6, BambuStudio `ZMULTI_A`) reports.
+///
+/// Sources: ha-bambulab `MOCK-H3C.json` (`"id": "32"`) and bambuddy `utils/tray_ids.py`
+/// (`AMS3H_UNIT_ID`). BambuStudio never reads this id: it keys the 3H's tray arithmetic on the
+/// unit *type* (`DevAms::GetTrayId`), so helpers here that only have an id key on 32 instead.
+/// The AMS-B (type 7, `ZMULTI_B`, tray base 37) is deliberately absent from every id helper: the
+/// unit id it reports is not recorded, and inventing one would route a real unit's id onto the
+/// wrong tray block.
+pub(crate) const AMS_3H_UNIT_ID: u8 = 32;
+/// Slots of the AMS 3H, local `0..=8`.
+pub(crate) const AMS_3H_SLOTS: u8 = 9;
+/// Global tray id and `tray_exist_bits` bit of the AMS 3H's slot 0 (`28 + slot`), BambuStudio's
+/// `DevAms::GetTrayId` / `DevAmsTray::get_tray_flag_bit` `ZMULTI_A` branch.
+pub(crate) const AMS_3H_TRAY_BASE: u8 = 28;
 /// The single-nozzle external spool, and IDEX's right (primary) carriage — BambuStudio's
 /// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md`, "Virtual / External Spool
 /// Telemetry" and "Virtual Slot Remapping on Single-Nozzle Platforms"). This is the id an
@@ -115,6 +139,12 @@ pub(crate) const fn is_ams_lite_on_a2l_id(ams_id: u8) -> bool {
     ams_id == AMS_LITE_ON_A2L_PHYSICAL_ID || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID
 }
 
+/// Returns true for the AMS 3H's unit id (`32`).
+#[must_use]
+pub(crate) const fn is_ams_3h_id(ams_id: u8) -> bool {
+    ams_id == AMS_3H_UNIT_ID
+}
+
 /// Returns true for an external spool holder id: `254` (deputy) or `255` (main).
 ///
 /// Commands disagree on which pair addresses which holder — `ams_filament_setting` and
@@ -126,10 +156,13 @@ pub(crate) const fn is_external_spool_id(ams_id: u8) -> bool {
 }
 
 /// Returns true if `ams_id` addresses a physical AMS bus unit: standard, AMS-HT, or an
-/// A2L-attached AMS Lite under either spelling. External spools are excluded.
+/// A2L-attached AMS Lite under either spelling, or the AMS 3H. External spools are excluded.
 #[must_use]
 pub(crate) const fn is_bus_unit_id(ams_id: u8) -> bool {
-    is_standard_id(ams_id) || is_ams_ht_id(ams_id) || is_ams_lite_on_a2l_id(ams_id)
+    is_standard_id(ams_id)
+        || is_ams_ht_id(ams_id)
+        || is_ams_lite_on_a2l_id(ams_id)
+        || is_ams_3h_id(ams_id)
 }
 
 /// Returns true for the whole documented `ams_id` address space: a bus unit or an external
@@ -139,14 +172,31 @@ pub(crate) const fn is_valid_ams_id(ams_id: u8) -> bool {
     is_bus_unit_id(ams_id) || is_external_spool_id(ams_id)
 }
 
+/// The slot count of the bus unit at `ams_id`, or `None` where `ams_id` is not a bus unit.
+///
+/// Keyed on the id, since that is all most callers hold; the type-keyed answer is
+/// [`AmsUnitModel::slot_count`](crate::types::telemetry::AmsUnitModel::slot_count).
+#[must_use]
+pub(crate) const fn unit_slot_count(ams_id: u8) -> Option<u8> {
+    if is_ams_ht_id(ams_id) {
+        Some(1)
+    } else if is_ams_3h_id(ams_id) {
+        Some(AMS_3H_SLOTS)
+    } else if is_standard_id(ams_id) || is_ams_lite_on_a2l_id(ams_id) {
+        Some(AMS_SLOTS_PER_UNIT)
+    } else {
+        None
+    }
+}
+
 /// Returns true if `slot_id` is a slot of the bus unit at `ams_id`: `0..=3` on a standard unit
-/// or an A2L-attached AMS Lite, only `0` on a single-slot AMS-HT, nothing elsewhere.
+/// or an A2L-attached AMS Lite, only `0` on a single-slot AMS-HT, `0..=8` on the AMS 3H, nothing
+/// elsewhere.
 #[must_use]
 pub(crate) const fn is_unit_slot(ams_id: u8, slot_id: u8) -> bool {
-    if is_ams_ht_id(ams_id) {
-        slot_id == 0
-    } else {
-        (is_standard_id(ams_id) || is_ams_lite_on_a2l_id(ams_id)) && slot_id < AMS_SLOTS_PER_UNIT
+    match unit_slot_count(ams_id) {
+        Some(count) => slot_id < count,
+        None => false,
     }
 }
 
@@ -177,6 +227,7 @@ mod tests {
                 is_standard_id(id),
                 is_ams_ht_id(id),
                 is_ams_lite_on_a2l_id(id),
+                is_ams_3h_id(id),
                 is_external_spool_id(id),
             ];
             assert!(blocks.iter().filter(|&&b| b).count() <= 1, "{id}");
@@ -185,6 +236,9 @@ mod tests {
         assert!(is_ams_lite_on_a2l_id(6) && is_ams_lite_on_a2l_id(16));
         assert_eq!(wire_ams_id(6), 16);
         assert_eq!(wire_ams_id(128), 128);
+        assert_eq!(wire_ams_id(AMS_3H_UNIT_ID), AMS_3H_UNIT_ID);
+        assert!(is_bus_unit_id(AMS_3H_UNIT_ID) && is_valid_ams_id(AMS_3H_UNIT_ID));
+        assert_eq!(normalize_ams_unit_id(AMS_3H_UNIT_ID), AMS_3H_UNIT_ID);
     }
 
     #[test]
@@ -193,5 +247,8 @@ mod tests {
         assert!(is_unit_slot(16, 3) && is_unit_slot(6, 0));
         assert!(is_unit_slot(128, 0) && !is_unit_slot(128, 1));
         assert!(!is_unit_slot(255, 0) && !is_unit_slot(4, 0));
+        assert!(is_unit_slot(32, 0) && is_unit_slot(32, 8) && !is_unit_slot(32, 9));
+        assert_eq!(unit_slot_count(32), Some(9));
+        assert_eq!(unit_slot_count(255), None);
     }
 }
