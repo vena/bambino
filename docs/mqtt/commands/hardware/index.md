@@ -852,7 +852,7 @@ Sets the printer's clock.
 
 - **`src`**: `u8`
 
-  Sender kind, always `1` — see `SNTP_SRC_STUDIO`.
+  Sender kind, always `1`: BambuStudio's value, the only one documented.
 
 - **`path`**: `u8`
 
