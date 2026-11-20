@@ -14,6 +14,7 @@ use crate::models::PrinterModel;
 use crate::mqtt::commands::CalibrationMode;
 use crate::mqtt::commands::{IdleIgnoreScope, StandardCommand};
 use crate::mqtt::{JobFileLocation, PrintJobConfig, SlicedFor, StandardControlRequest};
+use crate::quirks::Support;
 use crate::types::control::{CalibrationOption, PrintSpeed, PrintStatus};
 
 /// The file tunnel's storage label for internal storage, the `emmc` in `brtc://emmc/<name>`.
@@ -487,6 +488,21 @@ where
                     "{} was not checked against this printer ({model}): the config doesn't say \
                      what model the file was sliced for, and this printer has no file tunnel to \
                      read it with. {ways_forward}",
+                    config.job_filename
+                )
+                .into(),
+            ));
+        }
+        // A printer that reports it doesn't serve these reads answers the member read with `2`,
+        // so refuse now, before any tunnel traffic. Nothing reported: try, as before.
+        if config.file_location == JobFileLocation::InternalStorage
+            && self.capabilities().internal_model_read_support() == Support::Reported(false)
+        {
+            return Err(Error::ModelMismatch(
+                format!(
+                    "{} was not checked against this printer ({model}): the printer reports \
+                     (fun2 bit 17) that it does not serve reads of internal-storage models, so \
+                     what model the file was sliced for can't be read. {ways_forward}",
                     config.job_filename
                 )
                 .into(),

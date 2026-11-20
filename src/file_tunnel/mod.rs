@@ -1,8 +1,11 @@
 //! # Port-6000 File Tunnel
 //!
 //! Client for the TLS file service newer printers run on port 6000 [REF-FILESVC]
-//! (`reference/08_file_service.md`). It reaches internal (eMMC) storage, which FTPS on port 990
-//! does not, and reads members of the running job's `.3mf` without a path.
+//! (`reference/08_file_service.md`). It lists internal (eMMC) storage, which FTPS on port 990
+//! cannot reach, on every printer that serves it, and reads members of the running job's `.3mf`
+//! without a path. Reading an internal-storage model depends on `fun2` bit 17
+//! ([`Capabilities::internal_model_read_support`](crate::client::Capabilities::internal_model_read_support)):
+//! a printer with it clear answers the read with `2` whether or not the file exists.
 //!
 //! Which printers serve it: those whose telemetry sets `fun` bit 31, which BambuStudio reads as
 //! `is_support_brtc` ("support tcp and upload protocol") and uses to choose this service over

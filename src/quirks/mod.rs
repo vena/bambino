@@ -1030,6 +1030,24 @@ impl ModelQuirks {
         .resolve(ctx, Support::Assumed(false))
     }
 
+    /// Returns whether the printer serves file-tunnel reads of its internal-storage models, with its provenance.
+    ///
+    /// Reported by `fun2` bit 17 only, BambuStudio's `is_support_model_internal_storage`
+    /// (`DeviceManager.cpp`, `parse_new_info`), which shows the Internal tab for models only when
+    /// it is set. Listing internal models works regardless; a printer with the bit clear answers
+    /// `SUB_FILE` and `FILE_DOWNLOAD` of one with `2` (`reference/08_file_service.md` §8.4,
+    /// single source). No model rule exists, so nothing reported means `Assumed(false)`, always
+    /// the case on P1 and A1, which send no `fun2`.
+    #[must_use]
+    pub fn internal_model_read_support(&self, ctx: &QuirkContext) -> Support {
+        SupportBits {
+            fun: None,
+            fun2: Some(bits::FUN2_INTERNAL_MODEL_READ_BIT),
+            home_flag: None,
+        }
+        .resolve(ctx, Support::Assumed(false))
+    }
+
     /// Returns whether the printer has the light `node`, with its provenance.
     ///
     /// Answered from telemetry, not a per-model table. BambuStudio has no per-model light data
@@ -1771,6 +1789,22 @@ mod tests {
         assert_eq!(x1c.pa_mode_support(&ctx), Support::Reported(true));
         let ctx = QuirkContext::empty().with_fun2(Some("20"));
         assert_eq!(x1c.pa_mode_support(&ctx), Support::Reported(false));
+
+        // Internal-model reads: `fun2` bit 17 only. `20000` sets bit 17 only.
+        assert_eq!(
+            x1c.internal_model_read_support(&empty),
+            Support::Assumed(false)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("20000"));
+        assert_eq!(
+            x1c.internal_model_read_support(&ctx),
+            Support::Reported(true)
+        );
+        let ctx = QuirkContext::empty().with_fun2(Some("0"));
+        assert_eq!(
+            x1c.internal_model_read_support(&ctx),
+            Support::Reported(false)
+        );
 
         // K-profile selection: any `cali_version` above -1.
         assert_eq!(

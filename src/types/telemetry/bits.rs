@@ -246,6 +246,8 @@ pub(crate) const FUN2_AIR_PURIFICATION_BIT: u32 = 4;
 pub(crate) const FUN2_SMART_NOZZLE_BLOB_DETECT_BIT: u32 = 15;
 /// `fun2` bit 3: the per-job PA profile mode is supported (BambuStudio `is_support_pa_mode`, `DeviceManager.cpp`).
 pub(crate) const FUN2_PA_MODE_BIT: u32 = 3;
+/// `fun2` bit 17: the printer serves reads of its internal-storage models (BambuStudio `is_support_model_internal_storage`, `DeviceManager.cpp`).
+pub(crate) const FUN2_INTERNAL_MODEL_READ_BIT: u32 = 17;
 /// `fun` bit 7: per-job flow dynamics calibration supported (BambuStudio `is_support_pa_calibration`).
 pub(crate) const FUN_PA_CALIBRATION_BIT: u32 = 7;
 /// `home_flag` bit 16: per-job flow dynamics calibration supported (`parse_home_flag`).

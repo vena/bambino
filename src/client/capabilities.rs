@@ -208,6 +208,12 @@ impl<'a> Capabilities<'a> {
         self.quirks.pa_calibration_auto_support(&self.context)
     }
 
+    /// File-tunnel reads of internal-storage models — see [`ModelQuirks::internal_model_read_support`].
+    #[must_use]
+    pub fn internal_model_read_support(&self) -> Support {
+        self.quirks.internal_model_read_support(&self.context)
+    }
+
     /// Per-job PA profile mode support — see [`ModelQuirks::pa_mode_support`].
     #[must_use]
     pub fn pa_mode_support(&self) -> Support {

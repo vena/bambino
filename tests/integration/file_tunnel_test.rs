@@ -493,3 +493,60 @@ async fn start_print_refuses_when_the_tunnel_handshake_fails() {
         "{result:?}"
     );
 }
+
+/// A broker that completes the handshake, takes the connect-time pushall, then reports `fun2`.
+async fn run_broker_reporting_fun2(mut server: DuplexStream, fun2: &'static str) -> DuplexStream {
+    handle_mqtt_handshake(&mut server).await;
+    let _pushall = read_publish_payload(&mut server).await;
+    let report =
+        format!(r#"{{"print":{{"command":"push_status","fun2":"{fun2}","sequence_id":"1"}}}}"#);
+    ReportPublisher::new(SERIAL)
+        .publish(&mut server, report.as_bytes())
+        .await;
+    server
+}
+
+/// **Synthetic report:** `fun2` `"0"` clears bit 17; the tunnel factory is empty, so any dial
+/// would fail with "the connection failed" rather than the bit-17 message.
+#[tokio::test]
+async fn start_print_from_internal_storage_refuses_early_when_bit_17_is_reported_clear() {
+    let (mqtt_stream, _broker) = spawn_broker(|s| run_broker_reporting_fun2(s, "0"));
+    let (mqtt_factory, _) = MockDataStreamFactory::with_stream(mqtt_stream);
+    let mut printer = PrinterClient::new(
+        DummyTlsConnector,
+        mqtt_factory,
+        test_identity(PrinterModel::P2S),
+    )
+    .with_file_tunnel(DummyTlsConnector, MockDataStreamFactory::empty());
+    printer.poll_telemetry().await.expect("fun2 report");
+
+    let result = printer
+        .start_print(&unsupplied_job().from_internal_storage())
+        .await;
+    assert!(
+        matches!(&result, Err(Error::ModelMismatch(m)) if m.contains("fun2 bit 17") && m.contains("model_unchecked") && !m.contains("connection failed")),
+        "{result:?}"
+    );
+}
+
+/// With bit 17 set the lookup proceeds, so the empty factory's dial failure is what surfaces.
+#[tokio::test]
+async fn start_print_from_internal_storage_tries_the_tunnel_when_bit_17_is_set() {
+    let (mqtt_stream, _broker) = spawn_broker(|s| run_broker_reporting_fun2(s, "20000"));
+    let (mqtt_factory, _) = MockDataStreamFactory::with_stream(mqtt_stream);
+    let mut printer = PrinterClient::new(
+        DummyTlsConnector,
+        mqtt_factory,
+        test_identity(PrinterModel::P2S),
+    )
+    .with_file_tunnel(DummyTlsConnector, MockDataStreamFactory::empty());
+    printer.poll_telemetry().await.expect("fun2 report");
+
+    let result = printer
+        .start_print(&unsupplied_job().from_internal_storage())
+        .await;
+    assert!(
+        matches!(&result, Err(Error::ModelMismatch(m)) if m.contains("connection failed")),
+        "{result:?}"
+    );
+}

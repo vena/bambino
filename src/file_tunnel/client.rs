@@ -627,6 +627,14 @@ impl<S: AsyncIo> FileTunnelClient<S> {
     /// `SUB_FILE` addresses members as `<path>#<member>` (Studio's
     /// `PrinterFileSystem::UpdateFocusThumbnail2`). A member larger than `max_bytes` is refused,
     /// and the rest of the stream cancelled.
+    ///
+    /// A missing member is `None` whether the printer answers `result` 0 or, as an X2D does
+    /// (`reference/08_file_service.md` §8.4), a final `result` 14 (`FILE_READ_WRITE_ERR`) whose
+    /// reply has `size` 0. A 14 with a nonzero size, or with no reply, is still an error.
+    ///
+    /// A raw reply larger than 262144 bytes gets no reply at all and stalls the session for about
+    /// 12 to 13 s; above 1 MiB the printer answers 14 at once (single source, same section). The
+    /// read timeout and poisoning already cover the stall.
     pub async fn read_file_member<T: TimerProvider>(
         &mut self,
         timer: &T,
@@ -666,12 +674,20 @@ impl<S: AsyncIo> FileTunnelClient<S> {
                 Err(e) => return self.poison(e),
             };
             let more = env.result == Some(result::CONTINUE);
+            // An X2D answers a missing member with a final 14 and a size-0 reply.
+            let missing_as_14 = env.result == Some(result::FILE_READ_WRITE_ERR)
+                && env.reply.as_ref().is_some_and(|body| body.size == 0);
+            if missing_as_14 {
+                return Ok(None);
+            }
             if !more {
                 require_success("SUB_FILE", env.result)?;
             }
             let body = env.reply.unwrap_or_default();
             // Studio matches each frame to its file by `path` and ignores one that matches no
-            // file. No capture shows how the printer echoes it, so a mismatch is only logged.
+            // file. open-bamboo-networking's X2D capture echoes the request's entry exactly in
+            // raw mode and the bare `<file>` in zip mode (single source), so a mismatch is only
+            // logged.
             if !body.path.is_empty() && body.path != paths[0] {
                 log::debug!(
                     "file tunnel SUB_FILE answered for {:?} after asking for {:?}",
@@ -749,7 +765,12 @@ impl<S: AsyncIo> FileTunnelClient<S> {
         Ok(())
     }
 
-    /// Uploads `source` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
+    /// Uploads `source` to `storage` under `name` (`FILE_UPLOAD`).
+    ///
+    /// A file of the same name is overwritten on external storage. On an H2C, `emmc` uploads go
+    /// into an 8-entry `history/` ring that silently evicts the oldest file, every path is cut to
+    /// its basename, and the uploaded file can't be read back (`reference/08_file_service.md`
+    /// §8.4 `FILE_UPLOAD`, single source).
     ///
     /// `storage` is a label from [`media_ability`](Self::media_ability), such as `emmc`; there is
     /// no default. To print the file afterwards from internal storage, start the job with
@@ -1645,6 +1666,21 @@ mod tests {
 
     #[tokio::test]
     async fn missing_file_member_is_none() {
+        // The X2D's shape: a final 14 with a size-0 reply (open-bamboo-networking capture).
+        let mut client = connected(&[reply(
+            r##"{"cmdtype":2,"result":14,"sequence":1,"reply":{"path":"/m/a.3mf#x","size":0,"thumbnail":"/m/a.3mf#x"}}"##,
+        )])
+        .await;
+        let data = client
+            .read_file_member(&DummyTimer, &listed(Some("/m/a.3mf"), None), "x", 64)
+            .await
+            .unwrap();
+        assert_eq!(data, None);
+    }
+
+    #[tokio::test]
+    async fn size_zero_with_result_zero_is_also_none() {
+        // Studio keys "missing" on size 0.
         let mut client = connected(&[reply(
             r#"{"cmdtype":2,"result":0,"sequence":1,"reply":{"path":"/m/a.3mf#x","size":0}}"#,
         )])
@@ -1654,6 +1690,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(data, None);
+    }
+
+    #[tokio::test]
+    async fn result_14_with_data_or_no_reply_is_an_error() {
+        for body in [
+            r#"{"cmdtype":2,"result":14,"sequence":1,"reply":{"path":"/m/a.3mf#x","size":3}}"#,
+            r#"{"cmdtype":2,"result":14,"sequence":1}"#,
+        ] {
+            let mut client = connected(&[reply(body)]).await;
+            let err = client
+                .read_file_member(&DummyTimer, &listed(Some("/m/a.3mf"), None), "x", 64)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, Error::TunnelReply { result: 14, .. }),
+                "{body}: {err:?}"
+            );
+        }
     }
 
     #[tokio::test]

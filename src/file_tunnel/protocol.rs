@@ -87,6 +87,8 @@ pub(crate) mod result {
     pub(crate) const ERROR_JSON: i64 = 2;
     /// Wrong size; also Studio's code for a `mem:/` status blob reporting size 0.
     pub(crate) const FILE_SIZE_ERR: i64 = 12;
+    /// Read or write failure; on `SUB_FILE`, with a reply of size 0, how an X2D answers a missing member.
+    pub(crate) const FILE_READ_WRITE_ERR: i64 = 14;
     /// The upload's target name exists; Studio continues, and the upload overwrites it.
     pub(crate) const FILE_EXIST: i64 = 19;
 }
