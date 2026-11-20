@@ -33,7 +33,7 @@ fn unit(id: &str, info: Option<&str>, trays: Vec<AmsTray>) -> AmsUnit {
 
 fn report(units: Vec<AmsUnit>) -> AmsStatusReport {
     AmsStatusReport {
-        ams: units,
+        ams: Some(units),
         ..AmsStatusReport::default()
     }
 }

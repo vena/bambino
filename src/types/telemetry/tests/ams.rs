@@ -56,9 +56,9 @@ fn test_ams_nested_wire_format() {
     assert_eq!(ams_status.ams_exist_bits.as_deref(), Some("1"));
     assert_eq!(ams_status.tray_exist_bits.as_deref(), Some("b"));
     assert_eq!(ams_status.tray_now.as_deref(), Some("1"));
-    assert_eq!(ams_status.ams.len(), 1);
+    assert_eq!(ams_status.units().len(), 1);
 
-    let unit = &ams_status.ams[0];
+    let unit = &ams_status.units()[0];
     assert_eq!(unit.id, "0");
     assert_eq!(unit.temp.as_deref(), Some("26.0"));
     assert_eq!(unit.humidity.as_deref(), Some("3"));
@@ -83,7 +83,7 @@ fn test_ams_lite_on_a2l_unit_id_16_is_normalized_to_6_on_ingest() {
     let json =
         r#"{ "print": { "ams": { "ams": [ { "id": "16", "temp": "0", "humidity": "5" } ] } } }"#;
     let report = parse_report(json);
-    let units = &report.print.unwrap().ams.unwrap().ams;
+    let units = &report.print.unwrap().ams.unwrap().ams.unwrap();
     assert_eq!(units[0].id, "6");
 
     // Every other unit id is passed through byte-for-byte.
@@ -92,7 +92,7 @@ fn test_ams_lite_on_a2l_unit_id_16_is_normalized_to_6_on_ingest() {
         { "id": "128", "temp": "0", "humidity": "5" }
     ] } } }"#;
     let report = parse_report(json);
-    let units = &report.print.unwrap().ams.unwrap().ams;
+    let units = &report.print.unwrap().ams.unwrap().ams.unwrap();
     assert_eq!(units[0].id, "0");
     assert_eq!(units[1].id, "128");
 }
@@ -122,7 +122,7 @@ fn test_ams_drying_fields() {
         }"#;
 
     let report = parse_report(json_data);
-    let unit = &report.print.unwrap().ams.unwrap().ams[0];
+    let unit = &report.print.unwrap().ams.unwrap().ams.unwrap()[0];
     assert_eq!(unit.dry_time, Some(142));
     assert_eq!(unit.humidity_raw.as_deref(), Some("8"));
     let dry = unit.dry_setting.as_ref().unwrap();
@@ -321,7 +321,7 @@ fn test_ams_unit_info_bitmask() {
                 }
             }
         }"#;
-    let unit = &parse_print(json).ams.unwrap().ams[0];
+    let unit = &parse_print(json).ams.unwrap().ams.unwrap()[0];
     assert_eq!(unit.info.as_deref(), Some("11002103"));
     assert_eq!(unit.dry_sf_reason, Some(vec![0, 0, 0, 0]));
 
@@ -400,7 +400,7 @@ fn test_dry_block_reasons_decode_from_unit() {
         }
     }"#;
     let report = parse_report(json_data);
-    let unit = &report.print.as_ref().unwrap().ams.as_ref().unwrap().ams[0];
+    let unit = &report.print.as_ref().unwrap().ams.as_ref().unwrap().units()[0];
 
     // Decoded in reported order, raw field untouched — the enum is a layer over the Vec<i32>,
     // not a replacement for it.
@@ -435,7 +435,7 @@ fn test_primary_dry_block_reason_falls_back_to_first_reported() {
         }
     }"#;
     let report = parse_report(json_data);
-    let units = &report.print.as_ref().unwrap().ams.as_ref().unwrap().ams;
+    let units = &report.print.as_ref().unwrap().ams.as_ref().unwrap().units();
 
     // No reason needs the user, so reported order decides.
     assert_eq!(
@@ -694,12 +694,12 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
     // a tray-switch can carry only `{"tray_tar": "3"}`, with the unit/tray array (and every
     // other field) entirely absent rather than explicitly emptied.
     let mut cached = AmsStatusReport {
-        ams: vec![AmsUnit {
+        ams: Some(vec![AmsUnit {
             id: "0".into(),
             temp: Some("26.0".into()),
             humidity: Some("3".into()),
             ..Default::default()
-        }],
+        }]),
         ams_exist_bits: Some("1".into()),
         tray_exist_bits: Some("b".into()),
         tray_now: Some("3".into()),
@@ -708,7 +708,7 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
     };
 
     let partial = AmsStatusReport {
-        ams: vec![],
+        ams: None,
         tray_tar: Some("3".into()),
         ..Default::default()
     };
@@ -716,11 +716,11 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
     cached.merge_from(&partial);
 
     assert_eq!(
-        cached.ams.len(),
+        cached.units().len(),
         1,
         "unit array must survive a partial push"
     );
-    assert_eq!(cached.ams[0].id, "0");
+    assert_eq!(cached.units()[0].id, "0");
     assert_eq!(cached.tray_tar.as_deref(), Some("3"), "new field applies");
     assert_eq!(
         cached.tray_now.as_deref(),
@@ -732,42 +732,66 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
 }
 
 #[test]
-fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
-    // Was test_..._replaces_array_on_full_update, asserting the opposite of this —
-    // rewritten once BambuStudio's DevFilaSystem.cpp confirmed a keyed persistent per-unit
-    // map (system->amsList.find(ams_id), never pruned by a push's contents) is the real
-    // behavior, not whole-array replacement. A push mentioning only unit "1" must not drop
-    // previously-cached unit "0" — it's the same wire-economy principle already
-    // confirmed one level up (the ams key itself can be absent), applied one level deeper.
+fn test_ams_status_report_merge_from_prunes_units_not_in_incoming_array() {
+    // BambuStudio's `DevFilaSystemParser::ParseV1_0` (`DevFilaSystem.cpp`) drops every cached
+    // unit absent from a present `ams.ams` list. A push mentioning only unit "1" therefore
+    // removes cached unit "0" while merging unit "1" into place.
     let mut cached = AmsStatusReport {
-        ams: vec![AmsUnit {
+        ams: Some(vec![AmsUnit {
             id: "0".into(),
             temp: Some("26.0".into()),
-            humidity: Some("3".into()),
             ..Default::default()
-        }],
+        }]),
         ..Default::default()
     };
 
-    let partial = AmsStatusReport {
-        ams: vec![AmsUnit {
+    let incoming = AmsStatusReport {
+        ams: Some(vec![AmsUnit {
             id: "1".into(),
             temp: Some("27.0".into()),
-            humidity: Some("4".into()),
             ..Default::default()
-        }],
+        }]),
         ..Default::default()
     };
 
-    cached.merge_from(&partial);
+    cached.merge_from(&incoming);
 
     assert_eq!(
-        cached.ams.len(),
-        2,
-        "unit 0 must survive a unit-1-only push"
+        cached.units().len(),
+        1,
+        "unit 0 is pruned by a unit-1-only list"
     );
-    assert!(cached.ams.iter().any(|u| u.id == "0"));
-    assert!(cached.ams.iter().any(|u| u.id == "1"));
+    assert_eq!(cached.units()[0].id, "1");
+}
+
+#[test]
+fn test_ams_status_report_merge_from_ams_list_absent_vs_present_vs_empty() {
+    fn report(json: &str) -> AmsStatusReport {
+        serde_json::from_str(json).unwrap()
+    }
+    fn cached() -> AmsStatusReport {
+        report(r#"{"ams":[{"id":"0","temp":"25.0"},{"id":"1","temp":"26.0"}]}"#)
+    }
+    let ids = |r: &AmsStatusReport| r.units().iter().map(|u| u.id.clone()).collect::<Vec<_>>();
+
+    // Key absent: both cached units stay.
+    let mut c = cached();
+    c.merge_from(&report(r#"{"tray_tar":"3"}"#));
+    assert_eq!(ids(&c), ["0", "1"]);
+    assert_eq!(c.tray_tar.as_deref(), Some("3"));
+
+    // Present list naming unit 0 only: unit 1 is pruned, unit 0's fields merge.
+    let mut c = cached();
+    c.merge_from(&report(r#"{"ams":[{"id":"0","humidity":"4"}]}"#));
+    assert_eq!(ids(&c), ["0"]);
+    assert_eq!(c.units()[0].temp.as_deref(), Some("25.0"));
+    assert_eq!(c.units()[0].humidity.as_deref(), Some("4"));
+
+    // Present empty list: every unit is removed.
+    let mut c = cached();
+    c.merge_from(&report(r#"{"ams":[]}"#));
+    assert!(c.units().is_empty());
+    assert!(c.ams.as_ref().is_some_and(Vec::is_empty));
 }
 
 #[test]
@@ -853,7 +877,7 @@ fn test_p1s_print_sequence_ams_merge_never_regresses() {
             None => merged = Some(*ams),
         }
 
-        let unit_count = merged.as_ref().unwrap().ams.len();
+        let unit_count = merged.as_ref().unwrap().units().len();
         if unit_count > 0 {
             saw_non_empty = true;
         } else if saw_non_empty {
@@ -947,7 +971,7 @@ fn test_ams_tray_remain_g_and_filament_setting_id() {
                 }
             }
         }"#;
-    let unit = &parse_print(json).ams.unwrap().ams[0];
+    let unit = &parse_print(json).ams.unwrap().ams.unwrap()[0];
     let trays = unit.tray.as_ref().unwrap();
 
     assert_eq!(trays[0].remain_g, Some(420));
@@ -1208,7 +1232,7 @@ fn test_ams_typed_accessors() {
     assert_eq!(unit.humidity_percent(), Some(17));
 
     let report = AmsStatusReport {
-        ams: vec![unit],
+        ams: Some(vec![unit]),
         ..Default::default()
     };
     assert_eq!(report.unit(1).and_then(AmsUnit::ams_id), Some(1));

@@ -811,7 +811,7 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
         .await
         .expect("poll_telemetry should parse AMS report");
 
-    let raw_tray = &client.ams().unwrap().ams[0].tray.as_ref().unwrap()[0];
+    let raw_tray = &client.ams().unwrap().units()[0].tray.as_ref().unwrap()[0];
     assert_eq!(
         raw_tray.tray_type.as_deref(),
         Some("PLA"),
@@ -820,7 +820,7 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
     assert_eq!(raw_tray.remain, Some(42));
 
     let sanitized = client.sanitized_ams().unwrap();
-    let sanitized_tray = &sanitized.ams[0].tray.as_ref().unwrap()[0];
+    let sanitized_tray = &sanitized.units()[0].tray.as_ref().unwrap()[0];
     assert_eq!(
         sanitized_tray.tray_type, None,
         "sanitized_ams() must clear stale material fields for an empty-state tray"
@@ -828,7 +828,7 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
     assert_eq!(sanitized_tray.remain, Some(-1));
 
     // Confirm sanitized_ams() didn't mutate the cache it read from.
-    let raw_tray_again = &client.ams().unwrap().ams[0].tray.as_ref().unwrap()[0];
+    let raw_tray_again = &client.ams().unwrap().units()[0].tray.as_ref().unwrap()[0];
     assert_eq!(raw_tray_again.tray_type.as_deref(), Some("PLA"));
 
     broker_task.await.expect("Broker task panicked");

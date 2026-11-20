@@ -123,8 +123,12 @@ impl From<AmsFilamentStep> for i64 {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AmsStatusReport {
     /// Array of connected AMS units on the expansion bus.
+    ///
+    /// `None` means the `ams` key was absent from this push, so cached units stay as they were.
+    /// `Some(vec![])` means the key was present but empty, which removes every cached unit
+    /// (see `merge_from`). Read through `units()` when the distinction doesn't matter.
     #[serde(default)]
-    pub ams: Vec<AmsUnit>,
+    pub ams: Option<Vec<AmsUnit>>,
 
     /// Hexadecimal bitmask string indicating which AMS units are physically present.
     pub ams_exist_bits: Option<String>,
@@ -178,10 +182,18 @@ pub struct AmsStatusReport {
 }
 
 impl AmsStatusReport {
+    /// The reported units, or an empty slice when the `ams` key was absent.
+    #[must_use]
+    pub fn units(&self) -> &[AmsUnit] {
+        self.ams.as_deref().unwrap_or_default()
+    }
+
     /// The unit at bus id `ams_id`, as normalized on ingest (an A2L's AMS Lite is `6`).
     #[must_use]
     pub fn unit(&self, ams_id: u8) -> Option<&AmsUnit> {
-        self.ams.iter().find(|unit| unit.ams_id() == Some(ams_id))
+        self.units()
+            .iter()
+            .find(|unit| unit.ams_id() == Some(ams_id))
     }
 
     /// Slot `slot` of the unit at `ams_id`, if both were reported.
@@ -229,15 +241,15 @@ impl Mergeable for AmsStatusReport {
             calibrate_remain_flag,
             cfs,
         } = incoming;
-        if !ams.is_empty() {
-            // Keyed per-unit merge, not wholesale replace — confirmed against
-            // BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`), which looks up each
-            // unit by `ams_id` in a persistent `amsList` map (`system->amsList.find(ams_id)`)
-            // that's never pruned by a push's contents; a unit not mentioned in a given
-            // `print.ams.ams` push stays cached exactly as last observed, and a mentioned
-            // unit's own fields merge in via `AmsUnit::merge_from` rather than replacing the
-            // whole unit.
-            merge_keyed(&mut self.ams, ams, |u| u.id.clone());
+        if let Some(list) = ams {
+            // Keyed per-unit merge, then prune: BambuStudio's `DevFilaSystemParser::ParseV1_0`
+            // (`DevFilaSystem.cpp`) drops every cached unit whose id is absent from a present
+            // `ams.ams` list, so an empty list removes them all. A mentioned unit's own fields
+            // merge in via `AmsUnit::merge_from` rather than replacing the whole unit. An absent
+            // key (`None`) leaves the cache untouched.
+            let cached = self.ams.get_or_insert_with(Vec::new);
+            merge_keyed(cached, list, |u| u.id.clone());
+            cached.retain(|u| list.iter().any(|n| n.id == u.id));
         }
         keep_new(&mut self.ams_exist_bits, ams_exist_bits);
         keep_new(&mut self.tray_exist_bits, tray_exist_bits);

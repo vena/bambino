@@ -179,7 +179,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
     assert_eq!(client.active_fault(), None);
     assert!(client.hms().is_some_and(<[_]>::is_empty));
     assert!(client.active_hms_alerts().is_empty());
-    assert_eq!(client.ams().map(|ams| ams.ams.len()), Some(1));
+    assert_eq!(client.ams().map(|ams| ams.units().len()), Some(1));
     assert!(client.vt_tray().is_some());
     assert!(client.vir_slot().is_none());
     assert!(client.wifi_signal().is_some());

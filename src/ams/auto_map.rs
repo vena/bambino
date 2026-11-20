@@ -297,7 +297,7 @@ fn extruder_candidates(
     let mut out = Vec::new();
     let mut has_ams = false;
     if let Some(report) = ams {
-        has_ams = report.ams.iter().any(reaches);
+        has_ams = report.units().iter().any(reaches);
         bus_candidates(report, reaches, &mut out);
     }
     // BambuStudio offers an extruder's external spool only when no AMS is bound to it.
@@ -352,7 +352,7 @@ fn bus_candidates(
     accept: impl Fn(&AmsUnit) -> bool,
     out: &mut Vec<Candidate>,
 ) {
-    for unit in &report.ams {
+    for unit in report.units() {
         let Some(ams_id) = unit.ams_id() else {
             continue;
         };

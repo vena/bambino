@@ -455,8 +455,8 @@ fn test_p1s_wire_capture_end_to_end() {
 
     // AMS tray ids are strings.
     let ams = print.ams.expect("ams present");
-    assert_eq!(ams.ams.len(), 1);
-    let unit = &ams.ams[0];
+    assert_eq!(ams.units().len(), 1);
+    let unit = &ams.units()[0];
     assert_eq!(unit.id, "0");
     let unit_tray = unit.tray.as_ref().unwrap();
     assert_eq!(unit_tray.len(), 4);
@@ -868,8 +868,8 @@ fn test_h2d_pushall_comprehensive() {
     let ams = print.ams.as_ref().unwrap();
     assert_eq!(ams.tray_read_done_bits.as_deref(), Some("ff"));
     assert_eq!(ams.insert_flag, Some(true));
-    assert_eq!(ams.ams[0].info.as_deref(), Some("2103"));
-    assert_eq!(ams.ams[1].info.as_deref(), Some("2003"));
+    assert_eq!(ams.units()[0].info.as_deref(), Some("2103"));
+    assert_eq!(ams.units()[1].info.as_deref(), Some("2003"));
 
     let device = print.device.unwrap();
     let bed = device.bed.unwrap();

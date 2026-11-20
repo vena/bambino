@@ -292,7 +292,7 @@ fn render_ams(printer: &Printer, w: &mut impl Write) {
     let Some(ams) = printer.sanitized_ams() else {
         return;
     };
-    for unit in &ams.ams {
+    for unit in ams.units() {
         let temp = unit.temp.as_deref().unwrap_or("--");
         let humidity = unit
             .humidity_raw

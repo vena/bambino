@@ -684,7 +684,7 @@ where
     /// proactively scrubbed.
     pub fn sanitized_ams(&self) -> Option<AmsStatusReport> {
         let mut sanitized = self.core.cache.last_ams.clone()?;
-        for unit in &mut sanitized.ams {
+        for unit in sanitized.ams.iter_mut().flatten() {
             // A non-numeric id can't be placed on the bus, so there is no rule to clean it by;
             // treating it as unit 0 used to apply standard-AMS rules to whatever it was.
             let Some(ams_id) = unit.ams_id() else {
