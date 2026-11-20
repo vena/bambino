@@ -491,12 +491,48 @@ impl CaliSelAddress {
     ///
     /// [`Error::InvalidArgument`] when no tray answers to that unit and slot.
     pub fn new(ams_id: u8, slot_id: u8) -> Result<Self, Error> {
+        Self::build(
+            ams_id,
+            slot_id,
+            crate::ams::ids::is_external_spool_id(ams_id),
+            |unit| crate::ams::resolve_global_tray_id(unit, slot_id),
+        )
+    }
+
+    /// Derives the address as [`new`](Self::new) does, also accepting the external inputs `quirks` reports.
+    ///
+    /// On the H3C, inputs `247..=253` address like `254`/`255`: `tray_id` and `ams_id` are the
+    /// input's own id and `slot_id` is `0`, because BambuStudio's `GetTrayIndexMap`
+    /// (`DevFilaSystem.cpp`) maps every virtual tray to `{id, 0}`, and `extrusion_cali_sel` takes
+    /// its `tray_id` from there (`AMSMaterialsSetting.cpp`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when no tray answers to that unit and slot.
+    pub fn new_for(
+        quirks: &crate::quirks::ModelQuirks,
+        ams_id: u8,
+        slot_id: u8,
+    ) -> Result<Self, Error> {
+        Self::build(
+            ams_id,
+            slot_id,
+            quirks.is_external_spool_id(ams_id),
+            |unit| crate::ams::resolve_global_tray_id_for(quirks, unit, slot_id),
+        )
+    }
+
+    fn build(
+        ams_id: u8,
+        slot_id: u8,
+        external: bool,
+        resolve: impl FnOnce(u8) -> Option<u8>,
+    ) -> Result<Self, Error> {
         use crate::ams::ids::{
-            VALID_AMS_IDS_TEXT, is_ams_ht_id, is_external_spool_id, is_valid_ams_id,
-            normalize_ams_unit_id, wire_ams_id,
+            VALID_AMS_IDS_TEXT, is_ams_ht_id, is_valid_ams_id, normalize_ams_unit_id, wire_ams_id,
         };
-        let tray_id = is_valid_ams_id(ams_id)
-            .then(|| crate::ams::resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id))
+        let tray_id = (is_valid_ams_id(ams_id) || external)
+            .then(|| resolve(normalize_ams_unit_id(ams_id)))
             .flatten()
             .ok_or_else(|| {
                 Error::InvalidArgument(
@@ -506,7 +542,7 @@ impl CaliSelAddress {
                     .into(),
                 )
             })?;
-        let local_slot = if is_ams_ht_id(ams_id) || is_external_spool_id(ams_id) {
+        let local_slot = if is_ams_ht_id(ams_id) || external {
             0
         } else {
             slot_id
@@ -738,6 +774,33 @@ mod tests {
         let req = ExtrusionCaliSetRequest::new(vec![profile], 50002).unwrap();
         let json = serde_json::to_value(&req).unwrap();
         assert!(json["print"].get("nozzle_diameter").is_none());
+    }
+
+    #[test]
+    fn test_cali_sel_address_accepts_the_models_external_inputs() {
+        use crate::models::PrinterModel;
+        let h3c = PrinterModel::H3C.quirks();
+        // BambuStudio's GetTrayIndexMap: a virtual tray is `{id, 0}`, whatever slot was asked.
+        assert_eq!(
+            CaliSelAddress::new_for(h3c, 247, 3).unwrap(),
+            CaliSelAddress {
+                ams_id: 247,
+                tray_id: 247,
+                slot_id: 0
+            }
+        );
+        assert_eq!(
+            CaliSelAddress::new_for(h3c, 255, 0).unwrap(),
+            CaliSelAddress::new(255, 0).unwrap()
+        );
+        // Model-free, and on a model without per-dock inputs, 247 is not a tray.
+        assert!(CaliSelAddress::new(247, 0).is_err());
+        assert!(CaliSelAddress::new_for(PrinterModel::X1C.quirks(), 247, 0).is_err());
+        // Bus units resolve as before.
+        assert_eq!(
+            CaliSelAddress::new_for(h3c, 0, 1).unwrap(),
+            CaliSelAddress::new(0, 1).unwrap()
+        );
     }
 
     #[test]

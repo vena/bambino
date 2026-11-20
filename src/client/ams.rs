@@ -437,7 +437,8 @@ where
         filament_id: &str,
         nozzle_diameter: &str,
     ) -> Result<CommandHandle, Error> {
-        let address = crate::diagnostics::kprofile::CaliSelAddress::new(ams_id, slot_id)?;
+        let address =
+            crate::diagnostics::kprofile::CaliSelAddress::new_for(self.quirks(), ams_id, slot_id)?;
         self.dispatch(|seq| {
             crate::diagnostics::ExtrusionCaliSelRequest::new(
                 address,
