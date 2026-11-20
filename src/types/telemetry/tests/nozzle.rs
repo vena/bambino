@@ -257,6 +257,51 @@ fn test_nozzle_info_stat_field() {
 }
 
 #[test]
+fn test_nozzle_diameter_permissive() {
+    let diameter = |field: &str| {
+        let json = format!(
+            r#"{{"device": {{"nozzle": {{"info": [{{ "id": 0{field}, "stat": 256 }}]}}}}}}"#
+        );
+        let nozzle = parse_report(&json)
+            .device
+            .unwrap()
+            .nozzle
+            .unwrap()
+            .info
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            nozzle.stat,
+            Some(256),
+            "rest of NozzleInfo must still parse"
+        );
+        nozzle.diameter
+    };
+    assert_eq!(diameter(r#", "diameter": 0.4"#), Some(0.4));
+    assert_eq!(diameter(r#", "diameter": "0.4""#), Some(0.4));
+    assert_eq!(diameter(r#", "diameter": "abc""#), None);
+    assert_eq!(diameter(""), None);
+}
+
+#[test]
+fn test_ams_slot_field_slot_byte_ff_is_empty() {
+    let extruder = |raw: u32| {
+        let json = format!(r#"{{"id": 0, "snow": {raw}, "spre": {raw}, "star": {raw}}}"#);
+        serde_json::from_str::<ExtruderInfo>(&json).unwrap()
+    };
+    for raw in [0x01FF, 0xFFFF] {
+        let e = extruder(raw);
+        assert_eq!(e.current_ams_slot(), None, "{raw:#x}");
+        assert_eq!(e.previous_ams_slot(), None, "{raw:#x}");
+        assert_eq!(e.target_ams_slot(), None, "{raw:#x}");
+    }
+    let e = extruder(0x0102);
+    assert_eq!(e.current_ams_slot(), Some((1, 2)));
+    assert_eq!(e.previous_ams_slot(), Some((1, 2)));
+    assert_eq!(e.target_ams_slot(), Some((1, 2)));
+}
+
+#[test]
 fn test_decode_nozzle_temperatures_composite_extruder_path() {
     // 4587590 = (70 << 16) | 70, same composite packing as bed/chamber.
     let json = r#"{

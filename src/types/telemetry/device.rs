@@ -281,6 +281,10 @@ pub struct NozzleInfo {
     /// diameter of the nozzle it last held — measured on an idle H2C, where an unoccupied
     /// position read `diameter: 0.4` alongside `max_temp: 0` and serial `"N/A"`. Establish
     /// presence with [`NozzleInfo::is_installed()`] before trusting this.
+    #[serde(
+        default,
+        deserialize_with = "super::loose::deserialize_permissive_opt_f32"
+    )]
     pub diameter: Option<f32>,
 
     /// Target maximum temperature (Standard Platform abbreviated representation). Each of the
@@ -538,12 +542,14 @@ impl ExtruderInfo {
     /// Confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`
     /// (`DevExtruderSystem.cpp`): low 8 bits = slot_id, next 8 bits = ams_id.
     ///
-    /// The sentinel `0xFFFF` decodes to `None` unconditionally, on every extruder count —
-    /// deliberately, not an oversight. BambuStudio's own parser only special-cases `0xffff`
-    /// when `m_total_extder_count == 1` (`DevExtruderSystem.cpp`); on a 2-extruder
-    /// (IDEX) system a raw `0xffff` there falls through to the normal decode instead
-    /// (`ams_id=255, slot_id=255`). bambuddy deliberately diverges from that literal gating
-    /// and matches this crate's unconditional treatment, with a stated rationale
+    /// Any value whose slot byte (low 8 bits) is `0xFF` decodes to `None`, on every extruder
+    /// count — deliberately, not an oversight. This covers `0xFFFF` and values such as
+    /// `0x01FF`. BambuStudio's `ExtderSystemParser::ParseV2_0` (`DevExtruderSystem.cpp`) now
+    /// treats any value whose slot byte is `0xff` as empty, but only on single-extruder
+    /// printers; an older revision special-cased only `0xffff`, and only when
+    /// `m_total_extder_count == 1`. bambino applies the rule everywhere because slot 255 is
+    /// not a real slot on any machine. bambuddy diverges from the literal gating the same way,
+    /// with a stated rationale
     /// (`bambu_mqtt.py`): "0xFFFF decodes to AMS 255 slot 255 and slot 255 is not a
     /// real slot on any machine, so treating it as empty everywhere is strictly safer than
     /// reading it as the external spool." Re-litigated without new evidence in the
@@ -579,7 +585,7 @@ impl ExtruderInfo {
     /// re-derives the id ranges by hand.
     fn decode_ams_slot_field(raw: Option<u32>) -> Option<(u8, u8)> {
         let raw = raw?;
-        if raw == 0xFFFF {
+        if raw & 0xFF == 0xFF {
             return None;
         }
         let slot_id = (raw & 0xFF) as u8;

@@ -117,6 +117,18 @@ where
     Ok(Loose::read(deserializer)?.into_f64())
 }
 
+/// An `f32` sent as a JSON number or a decimal string; an unparsable string reads `None`.
+///
+/// Narrows [`deserialize_permissive_opt_f64`], so the same shapes are accepted.
+pub(crate) fn deserialize_permissive_opt_f32<'de, D>(
+    deserializer: D,
+) -> Result<Option<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_permissive_opt_f64(deserializer)?.map(|f| f as f32))
+}
+
 /// A 32-bit flag word, keeping its bit pattern when firmware sends it as a negative number.
 ///
 /// `home_flag` and `flag3` are signed 32-bit ints on the wire [REF-HOMEFLAG]; bit 31 set
