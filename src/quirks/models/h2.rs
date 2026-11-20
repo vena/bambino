@@ -145,7 +145,10 @@ pub(crate) const H2D_PRO: ModelQuirks = h2(
 /// H2C: Vortek tool-changer platform (6 rack nozzles + 1 fixed nozzle).
 pub(crate) const H2C: ModelQuirks = h2(
     H2_DUAL_VOLUME,
-    NozzleLayout::Rack { nozzles: 7 },
+    NozzleLayout::Rack {
+        docks: 6,
+        fixed_hotend: true,
+    },
     H2S_H2C_MIN_REMOTE_DRY_FIRMWARE,
     &["O1C", "O1C2"],
 );

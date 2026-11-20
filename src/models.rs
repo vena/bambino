@@ -43,6 +43,8 @@ pub enum PrinterModel {
     H2DPro,
     /// H2C (Vortek tool-changer + fixed hotend, 7 nozzles total)
     H2C,
+    /// H3C (Tool-changer with a nine-dock hotend rack and no fixed hotend)
+    H3C,
     /// H2S (Single-nozzle platform sharing H2 mechanics)
     H2S,
     /// Fallback variant for newly released or unrecognized printer targets
@@ -83,7 +85,7 @@ struct ModelSpec {
 /// The supported-model table — one row per [`PrinterModel`] variant except
 /// [`PrinterModel::Unknown`], which is the unrecognized-target fallback, not a model.
 const MODELS: &[ModelSpec] = {
-    use crate::quirks::models::{a1, a2, h2, p1, p2, x1, x2};
+    use crate::quirks::models::{a1, a2, h2, h3, p1, p2, x1, x2};
     &[
         ModelSpec {
             model: PrinterModel::X1C,
@@ -168,6 +170,13 @@ const MODELS: &[ModelSpec] = {
             serial_prefix: "31B",
             dev_tokens: &["O1C", "O1C2", "H2C"],
             quirks: &h2::H2C,
+        },
+        ModelSpec {
+            model: PrinterModel::H3C,
+            display_name: "H3C",
+            serial_prefix: "32X",
+            dev_tokens: &["N10", "H3C"],
+            quirks: &h3::H3C,
         },
         ModelSpec {
             model: PrinterModel::H2S,
@@ -293,6 +302,15 @@ mod tests {
         assert_eq!(resolve_model("09306A521703533", None), PrinterModel::H2S);
         assert_eq!(resolve_model("23906A521703533", None), PrinterModel::H2DPro);
         assert_eq!(resolve_model("31B06A521703533", None), PrinterModel::H2C);
+        assert_eq!(resolve_model("32X000000000000", None), PrinterModel::H3C);
+    }
+
+    #[test]
+    fn test_h3c_dev_token_resolution() {
+        assert_eq!(resolve_model("999000000", Some("N10")), PrinterModel::H3C);
+        assert_eq!(resolve_model("999000000", Some("n10")), PrinterModel::H3C);
+        assert_eq!(resolve_model("999000000", Some("H3C")), PrinterModel::H3C);
+        assert_eq!(PrinterModel::H3C.display_name(), "H3C");
     }
 
     #[test]
@@ -451,6 +469,7 @@ mod tests {
                 | PrinterModel::H2D
                 | PrinterModel::H2DPro
                 | PrinterModel::H2C
+                | PrinterModel::H3C
                 | PrinterModel::H2S => true,
                 PrinterModel::Unknown => false,
             }
@@ -470,6 +489,7 @@ mod tests {
             PrinterModel::H2D,
             PrinterModel::H2DPro,
             PrinterModel::H2C,
+            PrinterModel::H3C,
             PrinterModel::H2S,
             PrinterModel::Unknown,
         ];

@@ -7,6 +7,8 @@ use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use core::ops::RangeInclusive;
+
 use serde::Serialize;
 
 use crate::ams::ids::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
@@ -14,6 +16,7 @@ use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
 use crate::ams::{is_external_spool_safety_valid, is_external_spool_safety_valid_flat};
 use crate::error::Error;
 use crate::models::PrinterModel;
+use crate::quirks::NozzleLayout;
 
 use super::ClampedTaskId;
 
@@ -91,12 +94,13 @@ pub(crate) const RACK_FIXED_NOZZLE_ID: i32 = 1;
 pub(crate) const RACK_FIXED_EXTRUDER_ID: i32 = 1;
 /// Extruder index of the H2C's swappable rack carriage.
 pub(crate) const RACK_RACK_EXTRUDER_ID: i32 = 0;
-/// Lowest physical nozzle ID the rack reports (rack position 1).
-pub(crate) const RACK_NOZZLE_ID_MIN: i32 = *crate::quirks::RACK_NOZZLE_IDS.start() as i32;
-/// Highest physical nozzle ID the rack reports (rack position 6).
-pub(crate) const RACK_NOZZLE_ID_MAX: i32 = *crate::quirks::RACK_NOZZLE_IDS.end() as i32;
 /// Fixed length of the `nozzle_mapping` array on the wire, padded with `-1`.
 pub(crate) const RACK_WIRE_SLOTS: usize = 32;
+
+/// Returns whether `id` is a dock id in `ids`.
+fn rack_id_in_range(id: i32, ids: &RangeInclusive<u8>) -> bool {
+    (i32::from(*ids.start())..=i32::from(*ids.end())).contains(&id)
+}
 
 /// Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs.
 ///
@@ -113,9 +117,10 @@ pub(crate) const RACK_WIRE_SLOTS: usize = 32;
 /// declines rather than guesses when any of the following holds:
 ///
 /// - the slot list is empty, or longer than the wire format carries;
-/// - `rack_nozzle_id` is not a real rack position;
+/// - `layout` is not [`NozzleLayout::Rack`], or `rack_nozzle_id` is outside its dock ids;
 /// - no slot actually needs the rack — BambuStudio omits `nozzle_mapping` for a fixed-hotend-only
 ///   plate, so this matches rather than naming a nozzle it need not name;
+/// - a slot names the fixed hotend's extruder on a rack with no fixed hotend (H3C);
 /// - a slot names a carriage an H2C does not have, meaning the file was mapped for another
 ///   machine and forwarding the value raw would name a physical nozzle by a foreign index.
 ///
@@ -126,17 +131,26 @@ pub(crate) const RACK_WIRE_SLOTS: usize = 32;
 /// `0` and physical IDs `16..=21`. Passing an index where an ID belongs is the entire bug class
 /// this function exists to prevent.
 ///
+/// `layout` is the model's [`NozzleLayout`], which sets the dock range
+/// ([`NozzleLayout::rack_nozzle_ids`]: `16..=21` on an H2C, `16..=24` on an H3C). On a rack with
+/// no fixed hotend (H3C) there is only the rack extruder `0`, so extruder `1` is refused.
+///
 /// **Unverified on hardware here** — no H2C is available. Every value above is taken from
 /// bambuddy's hardware-measured constants; see `reference/03_mqtt_telemetry.md` for the
 /// measurements and the two corrections upstream made to them.
 pub fn resolve_rack_nozzle_mapping(
     slot_extruders: &[i32],
     rack_nozzle_id: i32,
+    layout: NozzleLayout,
 ) -> Option<Vec<i32>> {
+    let NozzleLayout::Rack { fixed_hotend, .. } = layout else {
+        return None;
+    };
+    let rack_nozzle_ids = layout.rack_nozzle_ids()?;
     if slot_extruders.is_empty() || slot_extruders.len() > RACK_WIRE_SLOTS {
         return None;
     }
-    if !(RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX).contains(&rack_nozzle_id) {
+    if !rack_id_in_range(rack_nozzle_id, &rack_nozzle_ids) {
         return None;
     }
     if !slot_extruders.contains(&RACK_RACK_EXTRUDER_ID) {
@@ -153,7 +167,7 @@ pub fn resolve_rack_nozzle_mapping(
         }
         wire[index] = match extruder {
             RACK_RACK_EXTRUDER_ID => rack_nozzle_id,
-            RACK_FIXED_EXTRUDER_ID => RACK_FIXED_NOZZLE_ID,
+            RACK_FIXED_EXTRUDER_ID if fixed_hotend => RACK_FIXED_NOZZLE_ID,
             _ => return None,
         };
     }
@@ -176,8 +190,9 @@ pub enum AmsSource {
 pub struct NozzleRack {
     /// Extruder index per filament slot, negative for unprinted slots.
     pub slot_extruders: Vec<i32>,
-    /// Physical nozzle ID of the rack position the printer currently reports as live, in
-    /// `RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX` (16..=21). The caller must supply this because
+    /// Physical nozzle ID of the rack position the printer currently reports as live, in the
+    /// model's [`rack_nozzle_ids`](crate::quirks::ModelQuirks::rack_nozzle_ids) (`16..=21` on an
+    /// H2C, `16..=24` on an H3C). The caller must supply this because
     /// the mounted hotend can change between slicing and dispatch, and bambino does not model
     /// rack telemetry.
     pub rack_nozzle_id: i32,
@@ -470,24 +485,30 @@ impl PrintJobConfig {
     /// Supplies the tool-changer rack routing for this job (H2C only).
     ///
     /// `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
-    /// `rack_nozzle_id` is the physical ID of the live rack position. See
+    /// `rack_nozzle_id` is the physical ID of the live rack position, checked against `model`'s
+    /// [`rack_nozzle_ids`](crate::quirks::ModelQuirks::rack_nozzle_ids). See
     /// [`resolve_rack_nozzle_mapping`] for how they combine and when the resulting
-    /// `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
+    /// `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models, where
+    /// `rack_nozzle_id` is not checked.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidArgument`] when `rack_nozzle_id` is outside the rack's physical IDs
-    /// (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
+    /// [`Error::InvalidArgument`] when `model` has a rack and `rack_nozzle_id` is outside its
+    /// dock ids, rather than silently sending no mapping.
     pub fn with_nozzle_rack(
         mut self,
         slot_extruders: Vec<i32>,
         rack_nozzle_id: i32,
+        model: PrinterModel,
     ) -> Result<Self, Error> {
-        if !(RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX).contains(&rack_nozzle_id) {
+        if let Some(ids) = model.quirks().rack_nozzle_ids()
+            && !rack_id_in_range(rack_nozzle_id, &ids)
+        {
             return Err(Error::InvalidArgument(
                 format!(
-                    "rack_nozzle_id {rack_nozzle_id} is not a rack position \
-                     ({RACK_NOZZLE_ID_MIN}..={RACK_NOZZLE_ID_MAX})"
+                    "rack_nozzle_id {rack_nozzle_id} is not a rack position on {model} ({}..={})",
+                    ids.start(),
+                    ids.end()
                 )
                 .into(),
             ));
@@ -738,13 +759,13 @@ impl ProjectFileRequest {
         // Both inputs are required and the resolver declines rather than guesses — every path
         // that cannot name the right physical nozzle with confidence lands on `None`, which omits
         // the field and returns firmware to its own pick.
-        let nozzle_mapping = config
-            .nozzle_rack
-            .as_ref()
-            .filter(|_| quirks.has_nozzle_rack())
-            .and_then(|rack| {
-                resolve_rack_nozzle_mapping(&rack.slot_extruders, rack.rack_nozzle_id)
-            });
+        let nozzle_mapping = config.nozzle_rack.as_ref().and_then(|rack| {
+            resolve_rack_nozzle_mapping(
+                &rack.slot_extruders,
+                rack.rack_nozzle_id,
+                quirks.nozzle_layout(),
+            )
+        });
 
         // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's

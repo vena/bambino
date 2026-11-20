@@ -7,6 +7,7 @@
 pub mod a1;
 pub mod a2;
 pub mod h2;
+pub mod h3;
 pub mod p1;
 pub mod p2;
 pub mod unknown;

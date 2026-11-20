@@ -113,6 +113,16 @@ envelope!(Xcam, xcam, "xcam");
 mod tests {
     use super::*;
     use crate::models::PrinterModel;
+    use crate::quirks::NozzleLayout;
+
+    const H2C_RACK: NozzleLayout = NozzleLayout::Rack {
+        docks: 6,
+        fixed_hotend: true,
+    };
+    const H3C_RACK: NozzleLayout = NozzleLayout::Rack {
+        docks: 9,
+        fixed_hotend: false,
+    };
     use crate::types::control::LedNode;
 
     const PLA_SPEC: FilamentSpec<'static> = FilamentSpec {
@@ -540,17 +550,26 @@ mod tests {
         // Extruder index 1 is the FIXED hotend (physical id 1); index 0 is the RACK.
         // Upstream had this inverted once and printed a first layer in mid-air, so the
         // polarity is asserted explicitly rather than left implicit in a wire snapshot.
-        let wire = resolve_rack_nozzle_mapping(&[0, 1, -1], 18).expect("resolvable");
+        let wire = resolve_rack_nozzle_mapping(&[0, 1, -1], 18, H2C_RACK).expect("resolvable");
         assert_eq!(wire[0], 18, "slot 0 uses the rack -> live rack physical id");
         assert_eq!(wire[1], 1, "slot 1 uses the fixed hotend -> physical id 1");
         assert_eq!(wire[2], -1, "slot 2 is not printed");
     }
 
     #[test]
+    fn test_rack_mapping_refuses_the_fixed_extruder_without_a_fixed_hotend() {
+        assert!(resolve_rack_nozzle_mapping(&[0, 1], 16, H3C_RACK).is_none());
+        let wire = resolve_rack_nozzle_mapping(&[0, -1], 16, H3C_RACK).expect("resolvable");
+        assert_eq!(wire[0], 16);
+        assert_eq!(wire[1], -1);
+        assert!(resolve_rack_nozzle_mapping(&[0], 16, NozzleLayout::Dual).is_none());
+    }
+
+    #[test]
     fn test_rack_mapping_is_a_padded_32_slot_array() {
         // Not the plate's filament count. Upstream briefly derived the length from a 3-entry
         // capture, then reverted after a real 3-filament dispatch was observed as 32 entries.
-        let wire = resolve_rack_nozzle_mapping(&[0], 16).expect("resolvable");
+        let wire = resolve_rack_nozzle_mapping(&[0], 16, H2C_RACK).expect("resolvable");
         assert_eq!(wire.len(), 32);
         assert_eq!(wire[0], 16);
         assert!(wire[1..].iter().all(|&v| v == -1), "tail must be -1 padded");
@@ -560,27 +579,35 @@ mod tests {
     fn test_rack_mapping_declines_rather_than_guessing() {
         // Every one of these omits nozzle_mapping so firmware picks — never a wrong physical id.
         assert!(
-            resolve_rack_nozzle_mapping(&[], 16).is_none(),
+            resolve_rack_nozzle_mapping(&[], 16, H2C_RACK).is_none(),
             "empty slots"
         );
         assert!(
-            resolve_rack_nozzle_mapping(&[0; 33], 16).is_none(),
+            resolve_rack_nozzle_mapping(&[0; 33], 16, H2C_RACK).is_none(),
             "more slots than the wire carries"
         );
         assert!(
-            resolve_rack_nozzle_mapping(&[0, 1], 15).is_none(),
+            resolve_rack_nozzle_mapping(&[0, 1], 15, H2C_RACK).is_none(),
             "15 is below the rack id range"
         );
         assert!(
-            resolve_rack_nozzle_mapping(&[0, 1], 22).is_none(),
-            "22 is above the rack id range"
+            resolve_rack_nozzle_mapping(&[0, 1], 22, H2C_RACK).is_none(),
+            "22 is above the H2C rack id range"
         );
         assert!(
-            resolve_rack_nozzle_mapping(&[1, 1], 16).is_none(),
+            resolve_rack_nozzle_mapping(&[0, -1], 22, H3C_RACK).is_some(),
+            "22 is inside the H3C rack id range"
+        );
+        assert!(
+            resolve_rack_nozzle_mapping(&[0, -1], 25, H3C_RACK).is_none(),
+            "25 is above the H3C rack id range"
+        );
+        assert!(
+            resolve_rack_nozzle_mapping(&[1, 1], 16, H2C_RACK).is_none(),
             "no slot needs the rack — Studio omits the field entirely here"
         );
         assert!(
-            resolve_rack_nozzle_mapping(&[0, 2], 16).is_none(),
+            resolve_rack_nozzle_mapping(&[0, 2], 16, H2C_RACK).is_none(),
             "extruder 2 is a carriage an H2C does not have"
         );
     }
@@ -589,9 +616,24 @@ mod tests {
     fn test_with_nozzle_rack_rejects_a_non_rack_id_and_ams_builders_replace_each_other() {
         let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured");
         assert!(matches!(
-            config.clone().with_nozzle_rack(vec![0, 1], 1),
+            config
+                .clone()
+                .with_nozzle_rack(vec![0, 1], 1, PrinterModel::H2C),
             Err(crate::error::Error::InvalidArgument(_))
         ));
+        // 22 is an H3C dock but not an H2C one.
+        assert!(matches!(
+            config
+                .clone()
+                .with_nozzle_rack(vec![0, 1], 22, PrinterModel::H2C),
+            Err(crate::error::Error::InvalidArgument(_))
+        ));
+        assert!(
+            config
+                .clone()
+                .with_nozzle_rack(vec![0, 1], 22, PrinterModel::H3C)
+                .is_ok()
+        );
 
         // #500: the second builder wins outright instead of one silently shadowing the other.
         let entry = crate::ams::AmsMapping2Entry {
@@ -614,7 +656,7 @@ mod tests {
     fn test_nozzle_mapping_omitted_on_non_rack_models_and_present_on_h2c() {
         let with_rack =
             PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
-                .with_nozzle_rack(vec![0, 1], 17)
+                .with_nozzle_rack(vec![0, 1], 17, PrinterModel::H2C)
                 .expect("17 is a rack position");
 
         let h2c = ProjectFileRequest::from_config(&with_rack, 1, PrinterModel::H2C);

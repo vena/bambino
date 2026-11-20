@@ -72,8 +72,9 @@ where
     /// Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
     ///
     /// * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on
-    ///   IDEX). On a tool changer (H2C) the fixed hotend is `0` and the rack slots are
-    ///   [`RACK_NOZZLE_IDS`](crate::quirks::RACK_NOZZLE_IDS) — see
+    ///   IDEX). On a tool changer (H2C, H3C) `0` is the mounted hotend (the fixed one on an H2C)
+    ///   and the rack docks are
+    ///   [`ModelQuirks::rack_nozzle_ids`](crate::quirks::ModelQuirks::rack_nozzle_ids) — see
     ///   [`ModelQuirks::is_valid_nozzle_id`](crate::quirks::ModelQuirks::is_valid_nozzle_id).
     ///
     /// Values exceeding the model's maximum nozzle temperature are clamped automatically.

@@ -209,31 +209,51 @@ pub enum NozzleLayout {
     Single,
     /// Two hotends on independent carriages (IDEX).
     Dual,
-    /// Hotends mounted from a swappable tool-changer rack (H2C: 1 fixed + 6 rack hotends).
+    /// Hotends mounted from a swappable tool-changer rack, with or without a fixed hotend
+    /// (H2C: 6 rack docks + 1 fixed hotend; H3C: 9 rack docks, no fixed hotend).
     ///
     /// A rack model addresses nozzles by *physical ID* rather than by extruder index, and the two
     /// namespaces overlap in a way that makes an untranslated value silently wrong rather than
     /// obviously wrong — see [`crate::mqtt::resolve_rack_nozzle_mapping`].
     Rack {
-        /// Every hotend the machine can hold, the fixed one included.
-        nozzles: u8,
+        /// Rack docks, each holding one swappable hotend. Their physical ids start at
+        /// [`RACK_NOZZLE_ID_BASE`].
+        docks: u8,
+        /// Whether the machine also has a hotend that never goes in the rack (H2C: yes).
+        fixed_hotend: bool,
     },
 }
 
 impl NozzleLayout {
-    /// Returns the number of physical hotends, rack slots included.
+    /// Returns the number of physical hotends, rack docks and the fixed hotend included.
     #[must_use]
     pub fn nozzle_count(self) -> u8 {
         match self {
             Self::Single => 1,
             Self::Dual => 2,
-            Self::Rack { nozzles } => nozzles,
+            Self::Rack {
+                docks,
+                fixed_hotend,
+            } => docks + fixed_hotend as u8,
+        }
+    }
+
+    /// Returns the physical nozzle ids of a rack's docks, or `None` for a layout without a rack.
+    ///
+    /// `RACK_NOZZLE_ID_BASE ..= RACK_NOZZLE_ID_BASE + docks - 1`: `16..=21` for 6 docks, `16..=24` for 9.
+    #[must_use]
+    pub fn rack_nozzle_ids(self) -> Option<core::ops::RangeInclusive<u8>> {
+        match self {
+            Self::Rack { docks, .. } => {
+                Some(RACK_NOZZLE_ID_BASE..=(RACK_NOZZLE_ID_BASE + docks - 1))
+            }
+            _ => None,
         }
     }
 }
 
-/// Nozzle ids of a tool changer's six rack slots (H2C) [REF-THER-DECODE].
-pub const RACK_NOZZLE_IDS: core::ops::RangeInclusive<u8> = 16..=21;
+/// Physical nozzle id of a tool changer's first rack dock; dock `n` (from 0) is `RACK_NOZZLE_ID_BASE + n` [REF-THER-DECODE].
+pub const RACK_NOZZLE_ID_BASE: u8 = 16;
 
 /// A motion axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -562,16 +582,24 @@ impl ModelQuirks {
         self.nozzles
     }
 
-    /// Returns the number of physical hotends: `1` single, `2` IDEX, `7` on the H2C's rack (1 fixed + 6 interchangeable).
+    /// Returns the number of physical hotends: `1` single, `2` IDEX, `7` on the H2C's rack (1 fixed + 6 interchangeable), `9` on the H3C's.
     #[must_use]
     pub fn physical_nozzle_count(&self) -> u8 {
         self.nozzles.nozzle_count()
     }
 
-    /// Returns true if the model mounts its hotends from a swappable tool-changer rack (H2C) — see [`NozzleLayout::Rack`].
+    /// Returns true if the model mounts its hotends from a swappable tool-changer rack (H2C, H3C) — see [`NozzleLayout::Rack`].
     #[must_use]
     pub fn has_nozzle_rack(&self) -> bool {
         matches!(self.nozzles, NozzleLayout::Rack { .. })
+    }
+
+    /// Returns the physical nozzle ids of this model's rack docks, or `None` without a rack.
+    ///
+    /// `RACK_NOZZLE_ID_BASE ..= RACK_NOZZLE_ID_BASE + docks - 1`: `16..=21` on the H2C, `16..=24` on the H3C.
+    #[must_use]
+    pub fn rack_nozzle_ids(&self) -> Option<core::ops::RangeInclusive<u8>> {
+        self.nozzles.rack_nozzle_ids()
     }
 
     /// Returns this model's physical AMS unit pool structure.
@@ -670,19 +698,27 @@ impl ModelQuirks {
 
     /// Whether `id` addresses a nozzle on this model, as `M104 T<id>` and the print-job nozzle mapping use it.
     ///
-    /// On a tool changer ([`has_nozzle_rack`](Self::has_nozzle_rack), H2C) that is the fixed
-    /// hotend `0` or a rack slot in [`RACK_NOZZLE_IDS`] — *not* `0..physical_nozzle_count()`,
-    /// even though that count is `7` there. Elsewhere it is `0..physical_nozzle_count()`.
+    /// On a tool changer ([`has_nozzle_rack`](Self::has_nozzle_rack), H2C and H3C) that is `0` or
+    /// a dock id in [`rack_nozzle_ids`](Self::rack_nozzle_ids) (`16..=21` on the H2C, `16..=24` on
+    /// the H3C) — *not* `0..physical_nozzle_count()`, even though that count is `7` or `9` there.
+    /// Elsewhere it is `0..physical_nozzle_count()`.
     ///
-    /// `reference/04_toolhead_thermal_motion.md` §4 confirms `16..=21` for the rack slots'
+    /// **`0` stays valid on every rack model, the H3C included, though the H3C has no fixed
+    /// hotend** and its telemetry lists only ids `16..=24`. `0` addresses the extruder, meaning
+    /// whichever hotend is currently mounted: BambuStudio's own H3C end G-code (`Bambu Lab H3C 0.4
+    /// nozzle template machine_end_gcode.json`) sends `M104 S0 T0`, Studio's main temperature
+    /// control sends `set_nozzle_temp` with `extruder_index` 0 (`MAIN_EXTRUDER_ID`), and bambuddy
+    /// defaults to `M104 T0`. A nonzero `M104 T0` on an H3C has not been captured; the
+    /// temperature is clamped to `nozzle_temp_max` regardless.
+    ///
+    /// `reference/04_toolhead_thermal_motion.md` §4 confirms `16..=21` for the H2C rack slots'
     /// telemetry `stat` field only, not that a write to a passively stored tool does anything, so
     /// this is a permissive address check, not a statement about effect.
     #[must_use]
     pub fn is_valid_nozzle_id(&self, id: u8) -> bool {
-        if self.has_nozzle_rack() {
-            id == 0 || RACK_NOZZLE_IDS.contains(&id)
-        } else {
-            id < self.physical_nozzle_count()
+        match self.rack_nozzle_ids() {
+            Some(docks) => id == 0 || docks.contains(&id),
+            None => id < self.physical_nozzle_count(),
         }
     }
 
@@ -2415,6 +2451,64 @@ mod tests {
                 .is_supported()
         );
         assert!(q.has_buzzer());
+    }
+
+    #[test]
+    fn test_h3c_quirks() {
+        let q = PrinterModel::H3C.quirks();
+        assert_eq!(q.max_feedrate(Axis::X), 60000);
+        assert_eq!(q.max_feedrate(Axis::Y), 60000);
+        assert_eq!(q.max_feedrate(Axis::Z), 1800);
+        assert_eq!(q.chamber_heater_temp_max(), Some(65));
+        assert_eq!(q.physical_nozzle_count(), 9);
+        assert_eq!(
+            q.nozzle_layout(),
+            NozzleLayout::Rack {
+                docks: 9,
+                fixed_hotend: false
+            }
+        );
+        assert_eq!(q.rack_nozzle_ids(), Some(16..=24));
+        assert!(q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
+        let v = q.build_volume();
+        assert_eq!((v.x, v.y, v.z), (330.0, 320.0, 325.0));
+        assert_eq!(q.nozzle_temp_max(), 350);
+        assert_eq!(q.bed_temp_max(None), 120);
+        assert!(q.has_auxiliary_fan());
+        assert!(q.has_auxiliary2_fan());
+        assert!(!q.has_chamber_exhaust_fan());
+        assert!(q.supports_airduct_mode());
+        assert!(q.has_chamber_temperature_sensor());
+        assert_eq!(q.door_sensor(), DoorSensor::Stat);
+        assert!(
+            !q.prompt_sound_support(&QuirkContext::empty())
+                .is_supported()
+        );
+        assert!(!q.has_buzzer());
+        assert!(q.accepts_sliced_for("N10"));
+        assert!(!q.accepts_sliced_for("O1C"));
+    }
+
+    #[test]
+    fn test_is_valid_nozzle_id_per_rack_model() {
+        let h2c = PrinterModel::H2C.quirks();
+        assert_eq!(h2c.rack_nozzle_ids(), Some(16..=21));
+        for id in [0, 16, 21] {
+            assert!(h2c.is_valid_nozzle_id(id), "H2C accepts {id}");
+        }
+        assert!(!h2c.is_valid_nozzle_id(22));
+
+        let h3c = PrinterModel::H3C.quirks();
+        for id in [0, 16, 24] {
+            assert!(h3c.is_valid_nozzle_id(id), "H3C accepts {id}");
+        }
+        for id in [1, 15, 25] {
+            assert!(!h3c.is_valid_nozzle_id(id), "H3C rejects {id}");
+        }
+
+        assert_eq!(PrinterModel::P1S.quirks().rack_nozzle_ids(), None);
     }
 
     #[test]
