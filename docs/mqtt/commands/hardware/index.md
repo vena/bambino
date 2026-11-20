@@ -20,12 +20,16 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
   - [`FlashTiming`](#flashtiming)
   - [`IdleHeatingProtectionPayload`](#idleheatingprotectionpayload)
   - [`LedCtrlPayload`](#ledctrlpayload)
+  - [`NonVisualAirPrintDetectPayload`](#nonvisualairprintdetectpayload)
   - [`NozzleBlobDetectPayload`](#nozzleblobdetectpayload)
+  - [`PartControlPayload`](#partcontrolpayload)
   - [`PromptSoundPayload`](#promptsoundpayload)
   - [`SmartNozzleBlobDetectPayload`](#smartnozzleblobdetectpayload)
+  - [`SntpPayload`](#sntppayload)
   - [`StoreSentFilesPayload`](#storesentfilespayload)
   - [`XcamControlPayload`](#xcamcontrolpayload)
   - [`AirductMode`](#airductmode)
+  - [`PurifierGear`](#purifiergear)
   - [`AirPrintDetectRequest`](#airprintdetectrequest)
   - [`AirPurificationRequest`](#airpurificationrequest)
   - [`AirductRequest`](#airductrequest)
@@ -36,9 +40,12 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
   - [`FilamentTangleDetectRequest`](#filamenttangledetectrequest)
   - [`IdleHeatingProtectionRequest`](#idleheatingprotectionrequest)
   - [`LedCtrlRequest`](#ledctrlrequest)
+  - [`NonVisualAirPrintDetectRequest`](#nonvisualairprintdetectrequest)
   - [`NozzleBlobDetectRequest`](#nozzleblobdetectrequest)
+  - [`PartControlRequest`](#partcontrolrequest)
   - [`PromptSoundRequest`](#promptsoundrequest)
   - [`SmartNozzleBlobDetectRequest`](#smartnozzleblobdetectrequest)
+  - [`SntpRequest`](#sntprequest)
   - [`StoreSentFilesRequest`](#storesentfilesrequest)
   - [`XcamControlRequest`](#xcamcontrolrequest)
 
@@ -57,12 +64,16 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
 | [`FlashTiming`](#flashtiming) | struct | Flash cycle timing for [`LedCtrlRequest::new_flashing`](#ledctrlrequest); every field is in milliseconds except `loops`. |
 | [`IdleHeatingProtectionPayload`](#idleheatingprotectionpayload) | struct | Turns idle heating protection on or off. |
 | [`LedCtrlPayload`](#ledctrlpayload) | struct | Chamber illumination and toolhead LED control configurations. |
+| [`NonVisualAirPrintDetectPayload`](#nonvisualairprintdetectpayload) | struct | Turns the second non-visual air-printing detection on or off. |
 | [`NozzleBlobDetectPayload`](#nozzleblobdetectpayload) | struct | Turns nozzle blob detection (the original, on/off form) on or off. |
+| [`PartControlPayload`](#partcontrolpayload) | struct | Sets a printer part's state; here the air purifier's gear. |
 | [`PromptSoundPayload`](#promptsoundpayload) | struct | Turns prompt notification sounds on or off; BambuStudio's model profiles enable it on A1, A1 Mini and A2L, and a printer can report support itself. |
 | [`SmartNozzleBlobDetectPayload`](#smartnozzleblobdetectpayload) | struct | Sets the smart nozzle blob detection mode (off, on, or auto). |
+| [`SntpPayload`](#sntppayload) | struct | Sets the printer's clock. |
 | [`StoreSentFilesPayload`](#storesentfilespayload) | struct | Sets whether files sent from Bambu Studio, Bambu Handy and MakerWorld are kept on external storage. |
 | [`XcamControlPayload`](#xcamcontrolpayload) | struct | Turns one camera detector on or off, optionally with its halt sensitivity. |
 | [`AirductMode`](#airductmode) | enum | Airduct operating mode, the `modeId` of `set_airduct` [REF-MQTT-LIFECYCLE]. |
+| [`PurifierGear`](#purifiergear) | enum | Air purifier (APS) fan speed, the `action` of `part_control` for module `aps` and the decoded `device.aps.gear`. |
 | [`AirPrintDetectRequest`](#airprintdetectrequest) | type | Enables or disables non-visual air-printing detection. |
 | [`AirPurificationRequest`](#airpurificationrequest) | type | Sets the end-of-print air purification mode. |
 | [`AirductRequest`](#airductrequest) | type | Switches the airduct between its modes ([`AirductMode`](#airductmode)). |
@@ -73,9 +84,12 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` sett
 | [`FilamentTangleDetectRequest`](#filamenttangledetectrequest) | type | Enables or disables filament tangle detection. |
 | [`IdleHeatingProtectionRequest`](#idleheatingprotectionrequest) | type | Turns idle heating protection on or off (BambuStudio `DevPrintOptions::command_set_against_continued_heating_mode`). |
 | [`LedCtrlRequest`](#ledctrlrequest) | type | Turns chamber or toolhead LEDs on or off. |
+| [`NonVisualAirPrintDetectRequest`](#nonvisualairprintdetectrequest) | type | Enables or disables the second non-visual air-printing detection (`air_printing_detection`). |
 | [`NozzleBlobDetectRequest`](#nozzleblobdetectrequest) | type | Enables or disables nozzle blob detection. |
+| [`PartControlRequest`](#partcontrolrequest) | type | Sets the air purifier's gear (BambuStudio `DevAirPurifier`, `part_control` with module `aps`). |
 | [`PromptSoundRequest`](#promptsoundrequest) | type | Enables or disables the printer's notification sounds. |
 | [`SmartNozzleBlobDetectRequest`](#smartnozzleblobdetectrequest) | type | Sets the smart nozzle blob detection mode. |
+| [`SntpRequest`](#sntprequest) | type | Sets the printer's clock (BambuStudio `MachineObject::command_set_sntp`). |
 | [`StoreSentFilesRequest`](#storesentfilesrequest) | type | Sets whether sent files are kept on external storage (BambuStudio `MachineObject::command_set_save_remote_print_file_to_storage`). |
 | [`XcamControlRequest`](#xcamcontrolrequest) | type | Turns a camera detector on or off (BambuStudio `DevPrintOptions::command_xcam_control`). |
 
@@ -584,6 +598,52 @@ Chamber illumination and toolhead LED control configurations.
 
 - <span id="ledctrlpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `NonVisualAirPrintDetectPayload`
+
+```rust
+struct NonVisualAirPrintDetectPayload {
+    pub command: &'static str,
+    pub sequence_id: super::ClampedTaskId,
+    pub air_printing_detection: bool,
+}
+```
+
+Turns the second non-visual air-printing detection on or off.
+
+Not [`AirPrintDetectPayload`](#airprintdetectpayload)'s `air_print_detect` setting (`home_flag` bit 28) and not the
+camera's AI air-printing detector. BambuStudio captions it "Detects air printing caused by
+nozzle clogging, filament tangling, or filament grinding"
+(`DevPrintOptions::command_non_visual_airprinting_detection`). Single source (BambuStudio);
+no capture shows `fun2` bit 32 set.
+
+#### Fields
+
+- **`command`**: `&'static str`
+
+  Wire command name, always `"print_option"`.
+
+- **`sequence_id`**: `super::ClampedTaskId`
+
+  Request sequence ID, serialized as a string on the wire.
+
+- **`air_printing_detection`**: `bool`
+
+  Whether the detection is enabled.
+
+#### Trait Implementations
+
+##### `impl Clone for NonVisualAirPrintDetectPayload`
+
+- <span id="nonvisualairprintdetectpayload-clone"></span>`fn clone(&self) -> NonVisualAirPrintDetectPayload` — [`NonVisualAirPrintDetectPayload`](#nonvisualairprintdetectpayload)
+
+##### `impl Debug for NonVisualAirPrintDetectPayload`
+
+- <span id="nonvisualairprintdetectpayload-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for NonVisualAirPrintDetectPayload`
+
+- <span id="nonvisualairprintdetectpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
 ### `NozzleBlobDetectPayload`
 
 ```rust
@@ -623,6 +683,51 @@ Turns nozzle blob detection (the original, on/off form) on or off.
 ##### `impl Serialize for NozzleBlobDetectPayload`
 
 - <span id="nozzleblobdetectpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `PartControlPayload`
+
+```rust
+struct PartControlPayload {
+    pub command: &'static str,
+    pub sequence_id: super::ClampedTaskId,
+    pub module: &'static str,
+    pub action: &'static str,
+}
+```
+
+Sets a printer part's state; here the air purifier's gear.
+
+#### Fields
+
+- **`command`**: `&'static str`
+
+  Wire command name, always `"part_control"`.
+
+- **`sequence_id`**: `super::ClampedTaskId`
+
+  Request sequence ID, serialized as a string on the wire.
+
+- **`module`**: `&'static str`
+
+  The part addressed; `"aps"` for the air purifier.
+
+- **`action`**: `&'static str`
+
+  The setting, a decimal string: a JSON string, not a number — see [`PurifierGear::as_wire`](#purifiergear).
+
+#### Trait Implementations
+
+##### `impl Clone for PartControlPayload`
+
+- <span id="partcontrolpayload-clone"></span>`fn clone(&self) -> PartControlPayload` — [`PartControlPayload`](#partcontrolpayload)
+
+##### `impl Debug for PartControlPayload`
+
+- <span id="partcontrolpayload-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for PartControlPayload`
+
+- <span id="partcontrolpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `PromptSoundPayload`
 
@@ -706,6 +811,66 @@ Sets the smart nozzle blob detection mode (off, on, or auto).
 ##### `impl Serialize for SmartNozzleBlobDetectPayload`
 
 - <span id="smartnozzleblobdetectpayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `SntpPayload`
+
+```rust
+struct SntpPayload {
+    pub command: &'static str,
+    pub sequence_id: super::ClampedTaskId,
+    pub second: u64,
+    pub us: u32,
+    pub tz: String,
+    pub src: u8,
+    pub path: u8,
+}
+```
+
+Sets the printer's clock.
+
+#### Fields
+
+- **`command`**: `&'static str`
+
+  Wire command name, always `"sntp"`.
+
+- **`sequence_id`**: `super::ClampedTaskId`
+
+  Request sequence ID, serialized as a string on the wire.
+
+- **`second`**: `u64`
+
+  Unix time, whole seconds.
+
+- **`us`**: `u32`
+
+  Microseconds past `second`, below 1,000,000.
+
+- **`tz`**: `String`
+
+  The UTC offset in effect now, as `"UTC+HH:MM"` or `"UTC-HH:MM"`.
+
+- **`src`**: `u8`
+
+  Sender kind, always `1` — see `SNTP_SRC_STUDIO`.
+
+- **`path`**: `u8`
+
+  Connection path, always `2` (LAN only).
+
+#### Trait Implementations
+
+##### `impl Clone for SntpPayload`
+
+- <span id="sntppayload-clone"></span>`fn clone(&self) -> SntpPayload` — [`SntpPayload`](#sntppayload)
+
+##### `impl Debug for SntpPayload`
+
+- <span id="sntppayload-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for SntpPayload`
+
+- <span id="sntppayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `StoreSentFilesPayload`
 
@@ -867,6 +1032,81 @@ offers in `device.airduct.modeList`.
 
 - <span id="airductmode-partialeq-eq"></span>`fn eq(&self, other: &AirductMode) -> bool` — [`AirductMode`](#airductmode)
 
+### `PurifierGear`
+
+```rust
+enum PurifierGear {
+    Off,
+    Silent,
+    Standard,
+    Max,
+    Auto,
+}
+```
+
+Air purifier (APS) fan speed, the `action` of `part_control` for module `aps` and the decoded `device.aps.gear`.
+
+Values follow BambuStudio's `AIR_PURIFIER_GEAR` (`DeviceCore/DevAirPurifier.hpp`);
+ha-bambulab's `pybambu/air_purifier.py` sends the same codes.
+
+#### Variants
+
+- **`Off`**
+
+  Off (`0`).
+
+- **`Silent`**
+
+  Silent, low speed (`1`).
+
+- **`Standard`**
+
+  Standard, mid speed (`2`).
+
+- **`Max`**
+
+  Max, high speed (`3`).
+
+- **`Auto`**
+
+  Automatic (`15`).
+
+#### Implementations
+
+- <span id="purifiergear-code"></span>`const fn code(self) -> u8`
+
+  The gear's numeric code, as reported in `device.aps.gear`.
+
+- <span id="purifiergear-from-code"></span>`const fn from_code(code: i32) -> Option<Self>`
+
+  Decodes a `device.aps.gear` value; `None` for a code BambuStudio doesn't define.
+
+- <span id="purifiergear-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The `action` string sent on the wire: the decimal code, as BambuStudio's `std::to_string(gear)`.
+
+#### Trait Implementations
+
+##### `impl Clone for PurifierGear`
+
+- <span id="purifiergear-clone"></span>`fn clone(&self) -> PurifierGear` — [`PurifierGear`](#purifiergear)
+
+##### `impl Copy for PurifierGear`
+
+##### `impl Debug for PurifierGear`
+
+- <span id="purifiergear-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PurifierGear`
+
+##### `impl Hash for PurifierGear`
+
+- <span id="purifiergear-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for PurifierGear`
+
+- <span id="purifiergear-partialeq-eq"></span>`fn eq(&self, other: &PurifierGear) -> bool` — [`PurifierGear`](#purifiergear)
+
 ### `AirPrintDetectRequest`
 
 ```rust
@@ -947,6 +1187,14 @@ type LedCtrlRequest = super::System<LedCtrlPayload>;
 
 Turns chamber or toolhead LEDs on or off.
 
+### `NonVisualAirPrintDetectRequest`
+
+```rust
+type NonVisualAirPrintDetectRequest = super::Print<NonVisualAirPrintDetectPayload>;
+```
+
+Enables or disables the second non-visual air-printing detection (`air_printing_detection`).
+
 ### `NozzleBlobDetectRequest`
 
 ```rust
@@ -954,6 +1202,14 @@ type NozzleBlobDetectRequest = super::Print<NozzleBlobDetectPayload>;
 ```
 
 Enables or disables nozzle blob detection.
+
+### `PartControlRequest`
+
+```rust
+type PartControlRequest = super::Print<PartControlPayload>;
+```
+
+Sets the air purifier's gear (BambuStudio `DevAirPurifier`, `part_control` with module `aps`).
 
 ### `PromptSoundRequest`
 
@@ -970,6 +1226,22 @@ type SmartNozzleBlobDetectRequest = super::Print<SmartNozzleBlobDetectPayload>;
 ```
 
 Sets the smart nozzle blob detection mode.
+
+### `SntpRequest`
+
+```rust
+type SntpRequest = super::System<SntpPayload>;
+```
+
+Sets the printer's clock (BambuStudio `MachineObject::command_set_sntp`).
+
+A LAN-only printer with no route to an NTP server keeps whatever clock it has, and that clock
+stamps `hms[].ts_unix`, which `reference/07_diagnostics_hms.md` §7.1 says is not guaranteed
+UTC. Sending this is how BambuStudio sets it.
+
+BambuStudio ignores an `err_code` in the reply (`MachineObject::parse_json`), so a printer
+that doesn't support the command may answer with an error. Which firmware honours it is not
+recorded. Not in `ACK_CORRELATED_COMMANDS`.
 
 ### `StoreSentFilesRequest`
 

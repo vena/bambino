@@ -10,9 +10,9 @@ Exposes command serialization schemas and validation checks to manage stored
 pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-KPROF].
 
 ## Structural Guidelines & Constraints
-* **Setting ID Validation**: Enforces the 19-character numeric `setting_id` boundary
-  (`"PF"` followed by exactly 17 decimal digits) to prevent memory table corruption in the local
-  EEPROM partition database.
+* **Setting ID Validation**: Refuses an empty `setting_id`. The id is the filament preset's own
+  id (e.g. `"GFSA00"` for a system preset, `"PFUS..."` for a user preset), so no fixed format
+  is enforced.
 * **Polymorphic Deletions**: Separate deletion entry types for single-nozzle platforms (which
   also carry `setting_id`) and dual-nozzle IDEX platforms, both sent flat in `print`.
 
@@ -53,7 +53,7 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 | [`KProfileEntry`](#kprofileentry) | struct | Structured representation of a Linear Advance calibration profile entry on the printer. |
 | [`StandardCaliDelEntry`](#standardcalidelentry) | struct | Deletion data fields utilized by standard single-nozzle databases (Schema A). |
 | [`StandardCaliDelPayload`](#standardcalidelpayload) | struct | Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest). |
-| [`is_setting_id_valid`](#is-setting-id-valid) | fn | Validates whether a provided calibration profile setting ID complies with EEPROM limits. |
+| [`is_setting_id_valid`](#is-setting-id-valid) | fn | Reports whether a calibration profile `setting_id` is acceptable, which is any non-empty string. |
 | [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest) | type | JSON request wrapper to trigger a complete dump of the stored calibration database. |
 | [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest) | type | JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP]. |
 | [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest) | type | JSON request wrapper to create or overwrite calibration profile allocations. |
@@ -162,9 +162,11 @@ Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest).
 
   Which hotend's table to return — `0` = right/main, `1` = left/deputy.
   
-  Matters on a dual-nozzle machine, where a `cali_idx` is **not** unique across hotends:
-  two profiles can share an index and differ only by extruder. Sent by BambuStudio only
-  when it has an extruder to name (`use_extruder_id`).
+  Scope by extruder on a dual-nozzle machine. Whether a `cali_idx` is unique across hotends
+  depends on the model: open-bamboo-networking found it unique across both extruders on an
+  X2D, while an H2C was measured with two profiles sharing an index and differing only by
+  extruder (`reference/07_diagnostics_hms.md` §7.2 "Resolving a Slot to a Profile"). Sent by
+  BambuStudio only when it has an extruder to name (`use_extruder_id`).
 
 - **`nozzle_id`**: `Option<String>`
 
@@ -357,6 +359,7 @@ Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest).
 struct ExtrusionCaliSetPayload {
     pub command: &'static str,
     pub filaments: Vec<KProfileEntry>,
+    pub nozzle_diameter: Option<String>,
     pub sequence_id: crate::mqtt::commands::ClampedTaskId,
 }
 ```
@@ -372,6 +375,11 @@ Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest).
 - **`filaments`**: `Vec<KProfileEntry>`
 
   Calibration profile entries to write. Multiple entries support IDEX multi-nozzle writes.
+
+- **`nozzle_diameter`**: `Option<String>`
+
+  Print-level nozzle diameter, taken from the first entry's `nozzle_diameter` as
+  BambuStudio does. Omitted when that is `None`.
 
 - **`sequence_id`**: `crate::mqtt::commands::ClampedTaskId`
 
@@ -507,8 +515,9 @@ struct KProfileEntry {
     pub k_value: String,
     pub n_coef: Option<String>,
     pub setting_id: String,
-    pub ams_id: Option<i32>,
-    pub tray_id: Option<i32>,
+    pub ams_id: i32,
+    pub tray_id: i32,
+    pub slot_id: i32,
 }
 ```
 
@@ -525,6 +534,9 @@ the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out
 
   Database index corresponding to the stored slot (-1 indicates a fresh write, and is the
   default when the key is absent).
+  
+  Not serialized when negative: BambuStudio writes `cali_idx` only when it is `>= 0`, and
+  leaving it out makes the printer allocate the next free slot.
 
 - **`filament_id`**: `String`
 
@@ -560,8 +572,8 @@ the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out
   Two traps follow from that:
   
   * The **fitted** nozzle reports `HH01`, not `HH00`. Compare on the first **two**
-    characters only; the trailing digits are a hardware variant that the calibration table
-    normalizes to `00`.
+    characters only; the trailing digits are the nozzle material (`01` = hardened steel),
+    which BambuStudio always writes as `00` in a K-profile `nozzle_id`.
   * Some models declare this **empty on every profile** — an X1C was probed live with all
     eight entries empty here, against a four-digit `cali_idx` and a populated `setting_id`.
     Handle the emptiness directly; a model-capability flag is the wrong thing to gate on.
@@ -589,21 +601,35 @@ the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out
 - **`n_coef`**: `Option<String>`
 
   Extrusion coefficient parameters.
+  
+  Always serialized: `None` is written as `"0.0"`, which is what BambuStudio sends on a
+  manual save.
 
 - **`setting_id`**: `String`
 
-  Secure 19-character unique setting identifier.
+  The filament preset's own id: a system preset such as `"GFSA00"`, or a user preset such
+  as `"PFUS..."`.
+  
+  BambuStudio sends `filament_preset->setting_id` here (`MachineObject::command_set_pa_calibration`,
+  `DeviceManager.cpp`). It is the same string `ams_filament_setting` sends.
 
-- **`ams_id`**: `Option<i32>`
+- **`ams_id`**: `i32`
 
-  Links K-profile to AMS unit (default 0).
+  AMS unit the profile is tied to (default 0). Always serialized.
 
-- **`tray_id`**: `Option<i32>`
+- **`tray_id`**: `i32`
 
-  Links K-profile to AMS tray slot (default -1). At least X1C firmware spuriously
-  reports `result: "fail"` for `extrusion_cali` writes using `tray_id: -1` even though
-  the write still applies — don't treat that ack `result` as authoritative for a
-  `tray_id: -1` write without cross-checking the profile actually landed.
+  Tray the profile is tied to (default 0). Always serialized.
+  
+  `0` for a profile not tied to a tray, as BambuStudio's `PACalibResult` (`Calib.hpp`) and
+  bambuddy send. Avoid `-1`: at least X1C firmware spuriously reports `result: "fail"` for
+  `extrusion_cali` writes using `tray_id: -1` even though the write still applies, so the
+  ack `result` is not authoritative for such a write without cross-checking the profile
+  actually landed.
+
+- **`slot_id`**: `i32`
+
+  Unit-local slot the profile is tied to (default 0). Always serialized.
 
 #### Trait Implementations
 
@@ -620,7 +646,8 @@ the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out
 - <span id="kprofileentry-default"></span>`fn default() -> Self`
 
   The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp`):
-  `cali_idx` `-1` (a fresh write), `k_value` `"0"`, everything else empty.
+  `cali_idx` `-1` (a fresh write), `k_value` `"0"`, `ams_id`/`tray_id`/`slot_id` `0`,
+  everything else empty.
 
 ##### `impl Deserialize<'de> for KProfileEntry`
 
@@ -679,7 +706,9 @@ OrcaSlicer all send `extrusion_cali_del` that way (`reference/07_diagnostics_hms
 
 - **`setting_id`**: `String`
 
-  19-character setting ID of the entry being deleted, validated by [`is_setting_id_valid`](#is-setting-id-valid).
+  Setting ID of the entry being deleted, validated by [`is_setting_id_valid`](#is-setting-id-valid).
+  
+  BambuStudio sends none on delete; bambuddy adds it on single-nozzle printers.
 
 #### Trait Implementations
 
@@ -807,12 +836,11 @@ JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-D
 fn is_setting_id_valid(setting_id: &str) -> bool
 ```
 
-Validates whether a provided calibration profile setting ID complies with EEPROM limits.
+Reports whether a calibration profile `setting_id` is acceptable, which is any non-empty string.
 
-**The Calibration Setting ID Boundary Rule [REF-DIAG-KPROF]:**
-Stored EEPROM K-profiles require standard 19-character numeric formats consisting of a
-`"PF"` header prefix followed by exactly 17 numeric digits. Standard alphanumeric hashes
-(e.g. `"PFUS9be9e18f81828a"`) are strictly reserved for slicer-side presets.
-Transmitting alphanumeric layouts inside direct database operations causes indexing halts
-or table corruption on the physical mainboard.
+`setting_id` is the filament preset's own id: a system preset such as `"GFSA00"`, or a user
+preset such as `"PFUS..."`. BambuStudio sends it unchanged from `filament_preset->setting_id`
+(`MachineObject::command_set_pa_calibration` in `DeviceManager.cpp`, fed by
+`cache_preset_info` in `CalibrationWizard.cpp`). No format rule is known, so only an empty id
+is refused [REF-DIAG-KPROF].
 

@@ -299,6 +299,7 @@ enum DoorOpenCheck {
     Disabled,
     Warn,
     PausePrint,
+    SlowDown,
 }
 ```
 
@@ -318,15 +319,22 @@ What the printer does when its door opens mid-print, `set_door_stat`'s `config` 
 
   Pause the print.
 
+- **`SlowDown`**
+
+  Keep printing but slow the toolhead down.
+  
+  Only on firmware reporting `fun2` bit 27; BambuStudio never sends it elsewhere
+  (`MachineObject::command_set_door_open_check`).
+
 #### Implementations
 
 - <span id="dooropencheck-code"></span>`const fn code(self) -> u8`
 
-  The wire code: `0` disabled, `1` warn, `2` pause print.
+  The wire code: `0` disabled, `1` warn, `2` pause print, `3` slow down.
 
 - <span id="dooropencheck-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
 
-  Decodes a wire code; `None` for any value outside `0..=2`.
+  Decodes a wire code; `None` for any value outside `0..=3`.
 
 #### Trait Implementations
 
@@ -355,9 +363,9 @@ What the printer does when its door opens mid-print, `set_door_stat`'s `config` 
 ```rust
 enum FanTarget {
     PartCooling,
-    AuxiliaryLeft,
+    Auxiliary,
     ChamberExhaust,
-    AuxiliaryLeft2,
+    Auxiliary2,
 }
 ```
 
@@ -369,24 +377,27 @@ Target onboard cooling fans [REF-CLIM-FANS].
 
   Primary part cooling fan (Port 1).
 
-- **`AuxiliaryLeft`**
+- **`Auxiliary`**
 
-  Primary left-side auxiliary fan (Port 2).
+  Primary auxiliary fan (Port 2).
+  
+  Which side of the printer it sits on depends on the model: left on the X2D, right on the
+  P2S and H3C/N10 (BambuStudio `resources/printers/<model_id>.json`, `fan` block).
 
 - **`ChamberExhaust`**
 
   Chamber exhaust/filtration fan (Port 3).
 
-- **`AuxiliaryLeft2`**
+- **`Auxiliary2`**
 
-  Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+  Secondary auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
   
-  Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
-  "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](#fantarget)'s
-  primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
-  Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
-  part cooling fan" throughout (issue #60).
+  BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX`, distinct from
+  [`Auxiliary`](#fantarget)'s port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into
+  `big_fan1_speed`). Reads at `device.airduct.parts[id=160].state`.
+  
+  The side is per model (BambuStudio `resources/printers/<model_id>.json`, `fan` block):
+  right on the X2D, left on the P2S and H3C/N10. Port 2 is the opposite side on each.
 
 #### Implementations
 

@@ -18,6 +18,7 @@ tray data, and calculating global indexes.
 | [`clean_stale_tray_data`](#clean-stale-tray-data) | fn | Explicitly sanitizes and nullifies telemetry fields when a physical slot becomes empty. |
 | [`evaluate_spool_presence`](#evaluate-spool-presence) | fn | Evaluates if a physical spool is present in a specific standard AMS slot. |
 | [`resolve_global_tray_id`](#resolve-global-tray-id) | fn | Computes the unique global channel identifier for a given expansion unit and local tray. |
+| [`resolve_global_tray_id_for`](#resolve-global-tray-id-for) | fn | Resolves a global tray id as [`resolve_global_tray_id`](#resolve-global-tray-id) does, but accepts the external inputs `quirks` reports. |
 | [`resolve_printing_global_id`](#resolve-printing-global-id) | fn | Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map` inversion, accounting for IDEX map translations. |
 | [`slot_label`](#slot-label) | fn | BambuStudio's short label for a slot or external spool, such as `"A1"`, `"HT-A"` or `"Ext-R"`. |
 
@@ -101,14 +102,17 @@ fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8>
 Computes the unique global channel identifier for a given expansion unit and local tray.
 
 Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3, the
-A2L-attached AMS Lite's normalized 6, AMS-HT 128–135, external 254–255) or if
-`tray_id >= 4` on a four-slot path.
+A2L-attached AMS Lite's normalized 6, the AMS 3H's 32, AMS-HT 128–135, external 254–255) or
+if `tray_id` is past the unit's slots (`>= 4` on a four-slot path, `>= 9` on the AMS 3H).
 
 The physical mapping aligns as:
 * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 * **AMS Lite on an A2L**: the normalized id 6 through the same formula, giving global ids
   24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id)
   first (`.claude/rules/ams-lite-on-a2l-unit-id.md`).
+* **AMS 3H** (unit 32): nine slots, global ids `28 + tray_id`, i.e. 28–36. BambuStudio keys
+  this on the unit type; this keys on the id, and leaves out the AMS-B (`37 + slot`) because
+  its unit id is unrecorded.
 * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 
@@ -118,6 +122,19 @@ rather than silently ignored. Without that check this function and its sibling
 AMS-HT id paired with a bad `tray_id` (from a mis-decoded `tray_now`, say) got a
 silently-accepted `Some(ams_id)` here but `None` there, masking the caller bug the
 sibling catches. [`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id)'s doc comment requires the two to agree.
+
+### `resolve_global_tray_id_for`
+
+```rust
+fn resolve_global_tray_id_for(quirks: &crate::quirks::ModelQuirks, ams_id: u8, tray_id: u8) -> Option<u8>
+```
+
+**Types:** [`ModelQuirks`](../../quirks/index.md#modelquirks)
+
+Resolves a global tray id as [`resolve_global_tray_id`](#resolve-global-tray-id) does, but accepts the external inputs `quirks` reports.
+
+On the H3C `247..=253` are external inputs too, and resolve to the id itself as `254`/`255`
+do. Every other address resolves exactly as in the model-free function.
 
 ### `resolve_printing_global_id`
 
@@ -159,6 +176,7 @@ applied to the global tray id [`resolve_global_tray_id`](#resolve-global-tray-id
 - a standard unit's slot is the unit's letter (`A` for id 0) and the 1-based slot, `A1`…`D4`
 - an A2L's AMS Lite is `Q1`…`Q4`; `ams_id` may be its physical 16 or its normalized 6
 - an AMS-HT is `HT-A`…`HT-H`, lettered from id 128
+- an AMS 3H slot has no label here: `None`
 - an external spool is `Ext`, or `Ext-R` (255) and `Ext-L` (254) when `extruder_count` is 2
 
 These are the labels BambuStudio's print, mapping and sync dialogs show, which pass this same

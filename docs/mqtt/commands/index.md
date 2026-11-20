@@ -126,6 +126,7 @@ struct DryingParams {
     pub rotate_tray: bool,
     pub cooling_temp: u32,
     pub close_power_conflict: bool,
+    pub zone_id: u8,
 }
 ```
 
@@ -164,6 +165,10 @@ least `temp` and `duration_hours`.
 - **`close_power_conflict`**: `bool`
 
   Whether to override the AMS unit's power-conflict interlock.
+
+- **`zone_id`**: `u8`
+
+  The zone to dry on a unit with several (the AMS 3H); `0` otherwise, as BambuStudio sends.
 
 #### Trait Implementations
 
@@ -370,8 +375,9 @@ Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_map
 
 - **`rack_nozzle_id`**: `i32`
 
-  Physical nozzle ID of the rack position the printer currently reports as live, in
-  `RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX` (16..=21). The caller must supply this because
+  Physical nozzle ID of the rack position the printer currently reports as live, in the
+  model's [`rack_nozzle_ids`](../../quirks/index.md#modelquirks) (`16..=21` on an
+  H2C, `16..=24` on an H3C). The caller must supply this because
   the mounted hotend can change between slicing and dispatch, and bambino does not model
   rack telemetry.
 
@@ -612,19 +618,21 @@ defaults for calibration flags.
 
   Enables or disables first-layer inspection for this job.
 
-- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
+- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32, model: PrinterModel) -> Result<Self, Error>` — [`PrinterModel`](../../models/index.md#printermodel), [`Error`](../../error/index.md#error)
 
   Supplies the tool-changer rack routing for this job (H2C only).
 
   `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
-  `rack_nozzle_id` is the physical ID of the live rack position. See
+  `rack_nozzle_id` is the physical ID of the live rack position, checked against `model`'s
+  [`rack_nozzle_ids`](../../quirks/index.md#modelquirks). See
   [`resolve_rack_nozzle_mapping`](print_job/index.md#resolve-rack-nozzle-mapping) for how they combine and when the resulting
-  `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
+  `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models, where
+  `rack_nozzle_id` is not checked.
 
   # Errors
 
-  [`Error::InvalidArgument`](../../error/index.md#error) when `rack_nozzle_id` is outside the rack's physical IDs
-  (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
+  [`Error::InvalidArgument`](../../error/index.md#error) when `model` has a rack and `rack_nozzle_id` is outside its
+  dock ids, rather than silently sending no mapping.
 
 - <span id="printjobconfig-pa-profile-sharing"></span>`fn pa_profile_sharing(self, shared_by_type: bool) -> Self`
 
@@ -789,8 +797,8 @@ The `print` namespace envelope a command payload is published in.
 
 - <span id="print-with-extruder-id"></span>`fn with_extruder_id(self, extruder_id: u8) -> Self`
 
-  Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` is not
-  unique across extruders. `0` = right/main, `1` = left/deputy.
+  Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` may not be
+  unique across extruders on every model. `0` = right/main, `1` = left/deputy.
 
 - <span id="print-with-nozzle-id"></span>`fn with_nozzle_id(self, nozzle_id: &str) -> Self`
 
@@ -808,8 +816,8 @@ The `print` namespace envelope a command payload is published in.
 
   Builds a secure write-transaction payload targeting physical EEPROM slots.
 
-  Verifies that all target profiles carry valid setting identifiers to protect local
-  database health. Supports multi-profile writes for IDEX platforms.
+  Refuses any profile with an empty `setting_id`. Supports multi-profile writes for IDEX
+  platforms. The print-level `nozzle_diameter` is the first entry's.
 
 - <span id="print-const-command"></span>`const COMMAND: &'static str`
 
@@ -839,7 +847,7 @@ The `print` namespace envelope a command payload is published in.
 
 - <span id="print-new"></span>`fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`StandardCaliDelEntry`](../../diagnostics/kprofile/index.md#standardcalidelentry), [`ClampedTaskId`](#clampedtaskid), [`Error`](../../error/index.md#error)
 
-  Builds a single-nozzle deletion transaction keyed on the setting identifier.
+  Builds a single-nozzle deletion transaction, refusing an empty `setting_id`.
 
 - <span id="print-const-command"></span>`const COMMAND: &'static str`
 
@@ -963,6 +971,18 @@ The `print` namespace envelope a command payload is published in.
   Builds a request unloading (retracting) the filament fed from the unit at wire address `ams_id`.
 
   `slot_id` and `target` are both the `255` unload sentinel, as in BambuStudio.
+
+- <span id="print-unload-slot"></span>`fn unload_slot(ams_id: u8, slot: u8, temps: ChangeTemps, extruder_id: Option<u8>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ChangeTemps`](ams/index.md#changetemps), [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a request unloading `slot` of a rack AMS unit (the AMS 3H) at wire address `ams_id`.
+
+  Sends `target: 255` and `slot_id: 255 - slot`, the encoding BambuStudio's web device page
+  uses for a real AMS slot (`PageFilament.cpp` `s_command_unload_filament`,
+  `ViewModelActions.cpp` `command_unload_slot`); a plain `slot_id: 255` is read as "unload
+  whatever is loaded" and does not retract that slot's feeder. Which models besides the H3C
+  need this encoding is unrecorded; every other unit and external spools use
+  [`unload`](#print). A slot past the unit's own is the caller's to refuse, as
+  `PrinterClient` does.
 
 - <span id="print-const-command"></span>`const COMMAND: &'static str`
 
@@ -1099,6 +1119,12 @@ The `print` namespace envelope a command payload is published in.
 
 - <span id="print-const-command"></span>`const COMMAND: &'static str`
 
+- <span id="print-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `print_option` request enabling or disabling the detection.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
 - <span id="print-new"></span>`fn new(mode: AirPurificationMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`AirPurificationMode`](../../types/control/index.md#airpurificationmode), [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `print_option` request setting the end-of-print air purification mode.
@@ -1114,6 +1140,12 @@ The `print` namespace envelope a command payload is published in.
 - <span id="print-new"></span>`fn new(mode: BuzzerMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`BuzzerMode`](../../types/control/index.md#buzzermode), [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `buzzer_ctrl` request for the given alarm mode.
+
+- <span id="print-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="print-air-purifier"></span>`fn air_purifier(gear: PurifierGear, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`PurifierGear`](hardware/index.md#purifiergear), [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `part_control` request setting the air purifier's gear.
 
 - <span id="print-const-command"></span>`const COMMAND: &'static str`
 
@@ -1230,6 +1262,21 @@ The `system` namespace envelope a command payload is published in.
 - <span id="system-new"></span>`fn new(store: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `print_cache_set` request.
+
+- <span id="system-const-command"></span>`const COMMAND: &'static str`
+
+- <span id="system-new"></span>`fn new(unix_seconds: u64, micros: u32, utc_offset_minutes: i32, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`ClampedTaskId`](#clampedtaskid), [`Error`](../../error/index.md#error)
+
+  Builds an `sntp` request for the given Unix time and the UTC offset in effect now.
+
+  `src` is `1`, BambuStudio's value and the only documented one; `path` is `2` (LAN only).
+  The offset must be the one in force at `unix_seconds`, daylight saving included: the
+  printer stores it as a plain offset.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../../error/index.md#error) when `micros` is 1,000,000 or more, or when
+  `utc_offset_minutes` is outside -12:00 to +14:00.
 
 - <span id="system-const-command"></span>`const COMMAND: &'static str`
 
@@ -1511,6 +1558,81 @@ offers in `device.airduct.modeList`.
 ##### `impl PartialEq for AirductMode`
 
 - <span id="airductmode-partialeq-eq"></span>`fn eq(&self, other: &AirductMode) -> bool` — [`AirductMode`](hardware/index.md#airductmode)
+
+### `PurifierGear`
+
+```rust
+enum PurifierGear {
+    Off,
+    Silent,
+    Standard,
+    Max,
+    Auto,
+}
+```
+
+Air purifier (APS) fan speed, the `action` of `part_control` for module `aps` and the decoded `device.aps.gear`.
+
+Values follow BambuStudio's `AIR_PURIFIER_GEAR` (`DeviceCore/DevAirPurifier.hpp`);
+ha-bambulab's `pybambu/air_purifier.py` sends the same codes.
+
+#### Variants
+
+- **`Off`**
+
+  Off (`0`).
+
+- **`Silent`**
+
+  Silent, low speed (`1`).
+
+- **`Standard`**
+
+  Standard, mid speed (`2`).
+
+- **`Max`**
+
+  Max, high speed (`3`).
+
+- **`Auto`**
+
+  Automatic (`15`).
+
+#### Implementations
+
+- <span id="purifiergear-code"></span>`const fn code(self) -> u8`
+
+  The gear's numeric code, as reported in `device.aps.gear`.
+
+- <span id="purifiergear-from-code"></span>`const fn from_code(code: i32) -> Option<Self>`
+
+  Decodes a `device.aps.gear` value; `None` for a code BambuStudio doesn't define.
+
+- <span id="purifiergear-as-wire"></span>`const fn as_wire(self) -> &'static str`
+
+  The `action` string sent on the wire: the decimal code, as BambuStudio's `std::to_string(gear)`.
+
+#### Trait Implementations
+
+##### `impl Clone for PurifierGear`
+
+- <span id="purifiergear-clone"></span>`fn clone(&self) -> PurifierGear` — [`PurifierGear`](hardware/index.md#purifiergear)
+
+##### `impl Copy for PurifierGear`
+
+##### `impl Debug for PurifierGear`
+
+- <span id="purifiergear-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PurifierGear`
+
+##### `impl Hash for PurifierGear`
+
+- <span id="purifiergear-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for PurifierGear`
+
+- <span id="purifiergear-partialeq-eq"></span>`fn eq(&self, other: &PurifierGear) -> bool` — [`PurifierGear`](hardware/index.md#purifiergear)
 
 ### `AmsMappingTable`
 
@@ -1968,6 +2090,14 @@ type LedCtrlRequest = super::System<LedCtrlPayload>;
 
 Turns chamber or toolhead LEDs on or off.
 
+### `NonVisualAirPrintDetectRequest`
+
+```rust
+type NonVisualAirPrintDetectRequest = super::Print<NonVisualAirPrintDetectPayload>;
+```
+
+Enables or disables the second non-visual air-printing detection (`air_printing_detection`).
+
 ### `NozzleBlobDetectRequest`
 
 ```rust
@@ -1975,6 +2105,14 @@ type NozzleBlobDetectRequest = super::Print<NozzleBlobDetectPayload>;
 ```
 
 Enables or disables nozzle blob detection.
+
+### `PartControlRequest`
+
+```rust
+type PartControlRequest = super::Print<PartControlPayload>;
+```
+
+Sets the air purifier's gear (BambuStudio `DevAirPurifier`, `part_control` with module `aps`).
 
 ### `PromptSoundRequest`
 
@@ -1991,6 +2129,22 @@ type SmartNozzleBlobDetectRequest = super::Print<SmartNozzleBlobDetectPayload>;
 ```
 
 Sets the smart nozzle blob detection mode.
+
+### `SntpRequest`
+
+```rust
+type SntpRequest = super::System<SntpPayload>;
+```
+
+Sets the printer's clock (BambuStudio `MachineObject::command_set_sntp`).
+
+A LAN-only printer with no route to an NTP server keeps whatever clock it has, and that clock
+stamps `hms[].ts_unix`, which `reference/07_diagnostics_hms.md` §7.1 says is not guaranteed
+UTC. Sending this is how BambuStudio sets it.
+
+BambuStudio ignores an `err_code` in the reply (`MachineObject::parse_json`), so a printer
+that doesn't support the command may answer with an error. Which firmware honours it is not
+recorded. Not in `ACK_CORRELATED_COMMANDS`.
 
 ### `StoreSentFilesRequest`
 
@@ -2058,8 +2212,10 @@ Requests a full state dump from the printer (all telemetry fields at once).
 ### `resolve_rack_nozzle_mapping`
 
 ```rust
-fn resolve_rack_nozzle_mapping(slot_extruders: &[i32], rack_nozzle_id: i32) -> Option<Vec<i32>>
+fn resolve_rack_nozzle_mapping(slot_extruders: &[i32], rack_nozzle_id: i32, layout: crate::quirks::NozzleLayout) -> Option<Vec<i32>>
 ```
+
+**Types:** [`NozzleLayout`](../../quirks/index.md#nozzlelayout)
 
 Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs.
 
@@ -2076,9 +2232,10 @@ print with another millimetres off the bed. Upstream reached that failure twice,
 declines rather than guesses when any of the following holds:
 
 - the slot list is empty, or longer than the wire format carries;
-- `rack_nozzle_id` is not a real rack position;
+- `layout` is not [`NozzleLayout::Rack`](../../quirks/index.md#nozzlelayout), or `rack_nozzle_id` is outside its dock ids;
 - no slot actually needs the rack — BambuStudio omits `nozzle_mapping` for a fixed-hotend-only
   plate, so this matches rather than naming a nozzle it need not name;
+- a slot names the fixed hotend's extruder on a rack with no fixed hotend (H3C);
 - a slot names a carriage an H2C does not have, meaning the file was mapped for another
   machine and forwarding the value raw would name a physical nozzle by a foreign index.
 
@@ -2088,6 +2245,10 @@ Extruder indices and physical nozzle IDs overlap numerically and mean different 
 H2C the *fixed* hotend is extruder index `1` and physical ID `1`; the *rack* is extruder index
 `0` and physical IDs `16..=21`. Passing an index where an ID belongs is the entire bug class
 this function exists to prevent.
+
+`layout` is the model's [`NozzleLayout`](../../quirks/index.md#nozzlelayout), which sets the dock range
+([`NozzleLayout::rack_nozzle_ids`]: `16..=21` on an H2C, `16..=24` on an H3C). On a rack with
+no fixed hotend (H3C) there is only the rack extruder `0`, so extruder `1` is refused.
 
 **Unverified on hardware here** — no H2C is available. Every value above is taken from
 bambuddy's hardware-measured constants; see `reference/03_mqtt_telemetry.md` for the

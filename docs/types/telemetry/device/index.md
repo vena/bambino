@@ -9,6 +9,7 @@ Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, ca
 ## Contents
 
 - [Types](#types)
+  - [`AirPurifierTelemetry`](#airpurifiertelemetry)
   - [`AirductCollection`](#airductcollection)
   - [`AirductModeListEntry`](#airductmodelistentry)
   - [`AirductPart`](#airductpart)
@@ -25,6 +26,7 @@ Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, ca
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`AirPurifierTelemetry`](#airpurifiertelemetry) | struct | Air purifier (APS) state from `device.aps`, per BambuStudio's `DevAirPurifier.cpp`. |
 | [`AirductCollection`](#airductcollection) | struct | Climate parts collection nested within `device` parameters. |
 | [`AirductModeListEntry`](#airductmodelistentry) | struct | Entry in the airduct mode availability list reported by the printer. |
 | [`AirductPart`](#airductpart) | struct | Represents an individual auxiliary routing component. |
@@ -38,6 +40,75 @@ Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, ca
 | [`NozzleInfo`](#nozzleinfo) | struct | Dynamic extruder nozzle details. |
 
 ## Types
+
+### `AirPurifierTelemetry`
+
+```rust
+struct AirPurifierTelemetry {
+    pub kind: Option<i32>,
+    pub pm: Option<i32>,
+    pub gear: Option<i32>,
+    pub rpm: Option<i32>,
+}
+```
+
+Air purifier (APS) state from `device.aps`, per BambuStudio's `DevAirPurifier.cpp`.
+
+Leaves out the filter fields (`f_type`, `f_use`, `f_to`) only ha-bambulab reports.
+
+#### Fields
+
+- **`kind`**: `Option<i32>`
+
+  Accessory type code (`type` on the wire); meaning unrecorded.
+
+- **`pm`**: `Option<i32>`
+
+  Particulate reading (`pm`); unit unrecorded.
+
+- **`gear`**: `Option<i32>`
+
+  Gear code (`gear`); decode with [`AirPurifierTelemetry::purifier_gear`](#airpurifiertelemetry).
+
+- **`rpm`**: `Option<i32>`
+
+  Fan speed (`rpm`).
+
+#### Implementations
+
+- <span id="airpurifiertelemetry-purifier-gear"></span>`fn purifier_gear(&self) -> Option<PurifierGear>` — [`PurifierGear`](../../../mqtt/commands/hardware/index.md#purifiergear)
+
+  The reported gear as a [`PurifierGear`](../../../mqtt/commands/hardware/index.md#purifiergear); `None` when absent or not a code BambuStudio defines.
+
+#### Trait Implementations
+
+##### `impl Clone for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-clone"></span>`fn clone(&self) -> AirPurifierTelemetry` — [`AirPurifierTelemetry`](#airpurifiertelemetry)
+
+##### `impl Debug for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-default"></span>`fn default() -> AirPurifierTelemetry` — [`AirPurifierTelemetry`](#airpurifiertelemetry)
+
+##### `impl Deserialize<'de> for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for AirPurifierTelemetry`
+
+##### `impl Eq for AirPurifierTelemetry`
+
+##### `impl PartialEq for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-partialeq-eq"></span>`fn eq(&self, other: &AirPurifierTelemetry) -> bool` — [`AirPurifierTelemetry`](#airpurifiertelemetry)
+
+##### `impl Serialize for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `AirductCollection`
 
@@ -159,8 +230,8 @@ Represents an individual auxiliary routing component.
 
 - **`id`**: `u32`
 
-  Part index matching hardware configurations (e.g., `160` for the second left-side
-  auxiliary fan on X2D/P2S — despite the wire port number suggesting a "right" fan).
+  Part index matching hardware configurations (e.g., `160` for the second
+  auxiliary fan on X2D/P2S, port 10).
 
 - **`state`**: `Option<i32>`
 
@@ -281,6 +352,7 @@ struct DeviceTelemetry {
     pub ext_tool: Option<ExtToolTelemetry>,
     pub fire_ext: Option<serde_json::Value>,
     pub bed_temp: Option<u32>,
+    pub aps: Option<AirPurifierTelemetry>,
 }
 ```
 
@@ -328,6 +400,12 @@ Appears at two locations on the wire:
   pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
   never consult this field either. Parsed for wire-format completeness only —
   The bed-temperature decode deliberately does not read it.
+
+- **`aps`**: `Option<AirPurifierTelemetry>`
+
+  Air purifier (APS) state; present only while the accessory reports.
+  
+  Whether the accessory is fitted is `print.aux` bit 37, not this object's presence.
 
 #### Trait Implementations
 
@@ -500,7 +578,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. A slot byte of `0xff` (including `0xFFFF`) means unmapped — see [`current_ams_slot()`](#extruderinfo).
 
 - **`spre`**: `Option<u32>`
 
@@ -725,9 +803,10 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Core physical nozzle composition or tool type designation.
   
   **Two vocabularies by generation.** Legacy printers report the nozzle *material* here
-  (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a *flow
-  code* instead (`"HH"` = high flow, `"HS"` = standard, followed by a hardware-variant
-  digit pair). Do not assume one and parse the other. The related but distinct
+  (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a packed
+  tool code instead: tool (`H` hotend), flow (`"HH"` = high flow, `"HS"` = standard), then
+  a material digit pair (`00` stainless, `01` hardened, `05` tungsten carbide), e.g.
+  `"HH01"`. Do not assume one and parse the other. The related but distinct
   `nozzle_id` on a K-profile entry uses the flow-code vocabulary only — see
   `crate::diagnostics::KProfileEntry::nozzle_id`.
 

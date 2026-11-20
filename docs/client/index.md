@@ -19,7 +19,7 @@ The client applies model-aware safety checks automatically:
 - **Chamber heater guards** — `set_chamber_temperature()` rejects requests on models
   without an active PTC heater (open-frame machines like A1/P1).
 - **Fan routing** — Fan commands are directed to the correct controller, including
-  the second left-side auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
+  the second auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
 
 ## Contents
 
@@ -417,6 +417,14 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
 
   Door-open check support — see [`ModelQuirks::door_open_check_support`](../quirks/index.md#modelquirks).
 
+- <span id="capabilities-door-open-check-slow-down-support"></span>`fn door_open_check_slow_down_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Door-open check slow-down mode support — see [`ModelQuirks::door_open_check_slow_down_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-non-visual-air-print-detect-support"></span>`fn non_visual_air_print_detect_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Non-visual air-printing detection (`air_printing_detection`) support — see [`ModelQuirks::non_visual_air_print_detect_support`](../quirks/index.md#modelquirks).
+
 - <span id="capabilities-idle-heating-protection-support"></span>`fn idle_heating_protection_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
   Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`](../quirks/index.md#modelquirks).
@@ -428,6 +436,10 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
 - <span id="capabilities-pa-calibration-auto-support"></span>`fn pa_calibration_auto_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
   Auto mode for per-job flow dynamics calibration — see [`ModelQuirks::pa_calibration_auto_support`](../quirks/index.md#modelquirks).
+
+- <span id="capabilities-internal-model-read-support"></span>`fn internal_model_read_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  File-tunnel reads of internal-storage models — see [`ModelQuirks::internal_model_read_support`](../quirks/index.md#modelquirks).
 
 - <span id="capabilities-pa-mode-support"></span>`fn pa_mode_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
@@ -759,6 +771,15 @@ client
   Defaults to the [`material()`](drying/index.md#dryingcycle)'s softening temperature, else
   [`DEFAULT_COMMAND_COOLING_TEMP`](../types/drying/index.md#default-command-cooling-temp), BambuStudio's own fallback.
 
+- <span id="dryingcycle-with-zone"></span>`fn with_zone(self, zone_id: u8) -> Self`
+
+  Names the drying zone to start, for a unit that has several (the AMS 3H). Defaults to `0`.
+
+  `0` is what BambuStudio sends for a unit without zones (`m_dry_zone_id.value_or(0)` in
+  `AMSDryControl.cpp`). On an AMS 3H or AMS-B, [`send()`](drying/index.md#dryingcycle) checks the zone against
+  the unit's reported `zone_info` and refuses one that does not exist or cannot dry (a zone
+  dries only with exactly two slots). On any other unit the value is sent as set.
+
 - <span id="dryingcycle-close-power-conflict"></span>`fn close_power_conflict(self, close: bool) -> Self`
 
   Whether to override the AMS unit's power-conflict interlock. Defaults to `false`.
@@ -796,6 +817,12 @@ client
   attached box must have a heater.
 
   [`Error::InvalidArgument`](../error/index.md#error) for an `ams_id` outside the documented address space.
+
+  On an AMS 3H or AMS-B, whose type alone does not settle drying, the cached unit decides:
+  [`Error::ModelMismatch`](../error/index.md#error) when its `zone_info` has not been reported yet (this includes an
+  unobserved unit `32`), or when the [`with_zone()`](drying/index.md#dryingcycle) zone cannot dry;
+  [`Error::InvalidArgument`](../error/index.md#error) when no reported zone has that id. No temperature range is
+  enforced for these units, because none is recorded.
 
   [`Error::InvalidArgument`](../error/index.md#error) when the temperature falls outside the unit's
   [`dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not
@@ -1239,10 +1266,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
     AMS Lite (`6` as telemetry reports it, or its physical `16`), or `254`/`255` for
-    external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
-  * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
-    load, or `255` to unload/retract (see `ams_change_filament` examples in
-    `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
+    external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively). The H3C also takes
+    its per-dock external inputs `247..=253`
+    ([`ModelQuirks::external_spool_ids`](../quirks/index.md#modelquirks)),
+    and its AMS 3H is unit `32`.
+  * `slot_id`: Slot within the AMS (`0..=3`, `0..=8` on the AMS 3H), `254` for a
+    single-nozzle external-spool load, or `255` to unload/retract (see `ams_change_filament`
+    examples in `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]). A `255` unload on the
+    AMS 3H is the plain sentinel and does not name a slot; use
+    [`unload_ams_3h_slot`](#printerclient).
   * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
 
   The wire's `target` field is derived, not caller-supplied — see
@@ -1259,6 +1291,29 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   every AMS reports its extruder as "not fixed" (`0xE`) and can reach either hotend
   through the switch, so a `None` here means the firmware has nothing to derive from and
   **discards the command in silence** — load and unload simply do nothing.
+
+- <span id="superprinterclient-unload-ams-3h-slot"></span>`async fn unload_ams_3h_slot(&mut self, slot_id: u8, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Retracts one slot of the H3C's AMS 3H (unit `32`), sending `slot_id` as `255 - slot_id`.
+
+  [`change_filament`](#printerclient) with `slot_id` `255` sends the plain unload
+  sentinel, which the firmware reads as "unload whatever is loaded"; a rack AMS slot needs
+  the `255 - slot` encoding so that slot's own feeder retracts. BambuStudio's web device
+  page does this for every AMS slot and keeps `255` only for an external spool
+  (`PageFilament.cpp` `s_command_unload_filament`, `ViewModelActions.cpp`
+  `command_unload_slot`); bambuddy sends it for the AMS 3H and tested it on an H3C
+  (`bambu_mqtt.py` `_rack_change_filament`). **Which other models need this encoding is
+  unrecorded**, so no other unit has a method for it.
+
+  **The AMS 3H cannot rewind the filament**, so the unload ends with pulling it out by hand
+  (bambuddy's note on the same code). `extruder_id`, `curr_temp` and `tar_temp` are as for
+  [`change_filament`](#printerclient).
+
+  **Wire framing is unverified on hardware** (`slot_id` and `target` as above).
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) when `slot_id` is not one of the unit's nine slots (`0..=8`).
 
 - <span id="superprinterclient-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self) -> bool`
 
@@ -1342,7 +1397,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`AmsFilamentSettingRequest::new`](../mqtt/index.md).
 
   * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
-    AMS Lite (`6` or its physical `16`; sent as `16`), or an external spool.
+    AMS Lite (`6` or its physical `16`; sent as `16`), or an external spool (on the H3C,
+    any of its inputs `247..=255`).
   * `slot_id`: Slot within the unit (`0..=3`, `0` on AMS-HT), or `0` for an external spool.
   * `filament` / `details`: what to store; see [`FilamentSpec`](../mqtt/commands/ams/index.md#filamentspec) and
     [`TrayFilamentDetails`](../mqtt/commands/ams/index.md#trayfilamentdetails).
@@ -2048,6 +2104,40 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
 
+- <span id="superprinterclient-set-air-purifier-gear"></span>`async fn set_air_purifier_gear(&mut self, gear: PurifierGear) -> Result<CommandHandle, Error>` — [`PurifierGear`](../mqtt/commands/hardware/index.md#purifiergear), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets the air purifier (APS) gear.
+
+  Refused unless the printer has reported the accessory fitted (`print.aux` bit 37, see
+  [`air_purifier_present()`](#printerclient)), so poll telemetry after
+  connecting first.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when `aux` bit 37 is clear, or when no `aux` has been reported.
+
+- <span id="superprinterclient-set-clock"></span>`async fn set_clock(&mut self, unix_seconds: u64, micros: u32, utc_offset_minutes: i32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sets the printer's clock, as BambuStudio does on every connection.
+
+  The caller supplies the time, since `no_std` targets have no wall clock; `micros` is the
+  part past `unix_seconds` and `utc_offset_minutes` the offset in effect at that time,
+  daylight saving included. Not sent automatically on connect. Sends BambuStudio's `src`
+  (`1`, the only documented value) and `path` `2` (LAN only).
+
+  A LAN-only printer with no route to an NTP server otherwise keeps whatever clock it has,
+  and that clock stamps `hms[].ts_unix`, which `reference/07_diagnostics_hms.md` §7.1 says
+  is not guaranteed UTC.
+
+  The command isn't ack-correlated: BambuStudio ignores an `err_code` in the reply
+  (`MachineObject::parse_json`), so a printer that doesn't support it may answer with an
+  error. Which firmware honours it is unrecorded.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) when `micros` is 1,000,000 or more, or `utc_offset_minutes` is
+  outside -12:00 to +14:00.
+
 - <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error>` — [`BuzzerMode`](../types/control/index.md#buzzermode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
@@ -2563,6 +2653,24 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`Capabilities::air_print_detect_support`](capabilities/index.md#capabilities)
   is `false`.
 
+- <span id="superprinterclient-set-non-visual-air-print-detect"></span>`async fn set_non_visual_air_print_detect(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns the second non-visual air-printing detection (`air_printing_detection`) on or off.
+
+  Studio's caption: "Detects air printing caused by nozzle clogging, filament tangling, or
+  filament grinding." A separate setting from
+  [`set_air_print_detect()`](#printerclient). Single source (BambuStudio); no
+  capture shows `fun2` bit 32 set. Refused until the printer has reported support, so poll
+  telemetry after connecting first. Confirm with
+  [`non_visual_air_print_detect_enabled()`](#printerclient) after
+  the settle window described in the module docs.
+
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) when
+  [`Capabilities::non_visual_air_print_detect_support`](capabilities/index.md#capabilities)
+  is `false`.
+
 - <span id="superprinterclient-set-air-purification"></span>`async fn set_air_purification(&mut self, mode: AirPurificationMode) -> Result<CommandHandle, Error>` — [`AirPurificationMode`](../types/control/index.md#airpurificationmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets where chamber air is purified at the end of every print.
@@ -2587,11 +2695,17 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Confirm with [`door_open_check()`](#printerclient) after the settle window
   described in the module docs.
 
+  [`DoorOpenCheck::SlowDown`](../types/control/index.md#dooropencheck) is stricter: BambuStudio never sends it to a firmware not
+  reporting `fun2` bit 27, so it is refused unless the printer has reported that bit set,
+  including when no `fun2` has arrived yet.
+
   # Errors
 
   [`Error::ModelMismatch`](../error/index.md#error) when
   [`Capabilities::door_open_check_support`](capabilities/index.md#capabilities)
-  is `false`.
+  is `false`, or for `SlowDown` when
+  [`Capabilities::door_open_check_slow_down_support`](capabilities/index.md#capabilities)
+  is not `Reported(true)`.
 
 - <span id="superprinterclient-set-idle-heating-protection"></span>`async fn set_idle_heating_protection(&mut self, enable: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -2664,6 +2778,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Whether non-visual air-printing detection is on, as last reported (`home_flag` bit 28).
 
+- <span id="superprinterclient-non-visual-air-print-detect-enabled"></span>`fn non_visual_air_print_detect_enabled(&self) -> Option<bool>`
+
+  Whether the second non-visual air-printing detection is on, as last reported (`print.cfg` bit 41).
+
+  Not [`air_print_detect_enabled()`](#printerclient). `None` before any
+  `cfg`, always on P1 and A1 (which send none).
+
 - <span id="superprinterclient-smart-nozzle-blob-detect-mode"></span>`fn smart_nozzle_blob_detect_mode(&self) -> Option<NozzleBlobDetectMode>` — [`NozzleBlobDetectMode`](../types/control/index.md#nozzleblobdetectmode)
 
   The smart nozzle blob detection mode, as last reported (`print.cfg` bits 43-44).
@@ -2682,8 +2803,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   The door-open check mode, as last reported (`print.cfg` bits 20-21).
 
-  `None` before any `cfg`, always on P1 and A1 (which send none), and for the unassigned
-  code `3`.
+  `None` before any `cfg`, and always on P1 and A1 (which send none).
 
 - <span id="superprinterclient-idle-heating-protection"></span>`fn idle_heating_protection(&self) -> Option<IdleHeatingProtection>` — [`IdleHeatingProtection`](../types/control/index.md#idleheatingprotection)
 
@@ -2855,6 +2975,20 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   `None` before any telemetry carried a `device` object, from either wire location.
 
+- <span id="superprinterclient-air-purifier"></span>`fn air_purifier(&self) -> Option<&AirPurifierTelemetry>` — [`AirPurifierTelemetry`](../types/telemetry/device/index.md#airpurifiertelemetry)
+
+  Returns the air purifier (APS) state as of the last-observed `device.aps`.
+
+  `None` until a `device` object carrying `aps` has been seen. Whether the accessory is
+  fitted is [`air_purifier_present()`](#printerclient).
+
+- <span id="superprinterclient-air-purifier-present"></span>`fn air_purifier_present(&self) -> Option<bool>`
+
+  Returns whether an air purifier (APS) is fitted, from the last-observed `print.aux` bit 37.
+
+  `None` until a frame carrying `aux` has been seen — distinct from `Some(false)`, a
+  reported absence. Which printers accept the accessory is not recorded.
+
 - <span id="superprinterclient-is-door-open"></span>`fn is_door_open(&self) -> Option<bool>`
 
   Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
@@ -2863,6 +2997,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `DoorSensor::None`, e.g. A1/A2) — distinct from `Some(false)`, which means a
   sensor-equipped model's telemetry confirms the door is closed. Also `None` before any
   telemetry carrying the model's door field has been observed.
+
+- <span id="superprinterclient-is-top-cover-open"></span>`fn is_top_cover_open(&self) -> Option<bool>`
+
+  Returns whether the top cover was open as of the last-observed `stat` telemetry (via [`poll_telemetry()`](#printerclient)).
+
+  Reads `stat` bit 24 [REF-NET-DOOR], so `None` unless the model's door sensor is
+  `DoorSensor::Stat` (H2/P2/X2 series), and before any `stat` has been observed. Distinct
+  from `Some(false)`, which means the cover is closed. Left and right door sensors (bits
+  25-26) are not exposed: no model is known to report them.
 
 - <span id="superprinterclient-is-220v-power"></span>`fn is_220v_power(&self) -> Option<bool>`
 
@@ -3001,8 +3144,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns `fan`'s speed as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)); `None` before any telemetry carrying it.
 
-  [`FanTarget::AuxiliaryLeft2`](../types/control/index.md#fantarget) (X2D/P2S, port 10) reports at a different wire location
-  than the other three — `device.airduct.parts[id=160].state`, already a percentage
+  [`FanTarget::Auxiliary2`](../types/control/index.md#fantarget) (X2D/P2S, port 10; right on the X2D, left on the P2S)
+  reports at a different wire location than the other three — `device.airduct.parts[id=160].state`, already a percentage
   [REF-CLIM-FANS] — which this handles.
 
 - <span id="superprinterclient-heatbreak-fan-speed"></span>`fn heatbreak_fan_speed(&self) -> Option<u8>`
@@ -3093,8 +3236,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
 
   * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on
-    IDEX). On a tool changer (H2C) the fixed hotend is `0` and the rack slots are
-    [`RACK_NOZZLE_IDS`](../quirks/index.md#rack-nozzle-ids) — see
+    IDEX). On a tool changer (H2C, H3C) `0` is the mounted hotend (the fixed one on an H2C)
+    and the rack docks are
+    [`ModelQuirks::rack_nozzle_ids`](../quirks/index.md#modelquirks) — see
     [`ModelQuirks::is_valid_nozzle_id`](../quirks/index.md#modelquirks).
 
   Values exceeding the model's maximum nozzle temperature are clamped automatically.
@@ -3628,6 +3772,7 @@ enum DoorOpenCheck {
     Disabled,
     Warn,
     PausePrint,
+    SlowDown,
 }
 ```
 
@@ -3647,15 +3792,22 @@ What the printer does when its door opens mid-print, `set_door_stat`'s `config` 
 
   Pause the print.
 
+- **`SlowDown`**
+
+  Keep printing but slow the toolhead down.
+  
+  Only on firmware reporting `fun2` bit 27; BambuStudio never sends it elsewhere
+  (`MachineObject::command_set_door_open_check`).
+
 #### Implementations
 
 - <span id="dooropencheck-code"></span>`const fn code(self) -> u8`
 
-  The wire code: `0` disabled, `1` warn, `2` pause print.
+  The wire code: `0` disabled, `1` warn, `2` pause print, `3` slow down.
 
 - <span id="dooropencheck-from-code"></span>`const fn from_code(code: u32) -> Option<Self>`
 
-  Decodes a wire code; `None` for any value outside `0..=2`.
+  Decodes a wire code; `None` for any value outside `0..=3`.
 
 #### Trait Implementations
 
@@ -3684,9 +3836,9 @@ What the printer does when its door opens mid-print, `set_door_stat`'s `config` 
 ```rust
 enum FanTarget {
     PartCooling,
-    AuxiliaryLeft,
+    Auxiliary,
     ChamberExhaust,
-    AuxiliaryLeft2,
+    Auxiliary2,
 }
 ```
 
@@ -3698,24 +3850,27 @@ Target onboard cooling fans [REF-CLIM-FANS].
 
   Primary part cooling fan (Port 1).
 
-- **`AuxiliaryLeft`**
+- **`Auxiliary`**
 
-  Primary left-side auxiliary fan (Port 2).
+  Primary auxiliary fan (Port 2).
+  
+  Which side of the printer it sits on depends on the model: left on the X2D, right on the
+  P2S and H3C/N10 (BambuStudio `resources/printers/<model_id>.json`, `fan` block).
 
 - **`ChamberExhaust`**
 
   Chamber exhaust/filtration fan (Port 3).
 
-- **`AuxiliaryLeft2`**
+- **`Auxiliary2`**
 
-  Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+  Secondary auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
   
-  Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
-  "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](../types/control/index.md#fantarget)'s
-  primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
-  Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
-  part cooling fan" throughout (issue #60).
+  BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX`, distinct from
+  [`Auxiliary`](../types/control/index.md#fantarget)'s port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into
+  `big_fan1_speed`). Reads at `device.airduct.parts[id=160].state`.
+  
+  The side is per model (BambuStudio `resources/printers/<model_id>.json`, `fan` block):
+  right on the X2D, left on the P2S and H3C/N10. Port 2 is the opposite side on each.
 
 #### Implementations
 

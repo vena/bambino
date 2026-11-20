@@ -115,6 +115,15 @@ client
   Defaults to the [`material()`](#dryingcycle)'s softening temperature, else
   [`DEFAULT_COMMAND_COOLING_TEMP`](../../types/drying/index.md#default-command-cooling-temp), BambuStudio's own fallback.
 
+- <span id="dryingcycle-with-zone"></span>`fn with_zone(self, zone_id: u8) -> Self`
+
+  Names the drying zone to start, for a unit that has several (the AMS 3H). Defaults to `0`.
+
+  `0` is what BambuStudio sends for a unit without zones (`m_dry_zone_id.value_or(0)` in
+  `AMSDryControl.cpp`). On an AMS 3H or AMS-B, [`send()`](#dryingcycle) checks the zone against
+  the unit's reported `zone_info` and refuses one that does not exist or cannot dry (a zone
+  dries only with exactly two slots). On any other unit the value is sent as set.
+
 - <span id="dryingcycle-close-power-conflict"></span>`fn close_power_conflict(self, close: bool) -> Self`
 
   Whether to override the AMS unit's power-conflict interlock. Defaults to `false`.
@@ -152,6 +161,12 @@ client
   attached box must have a heater.
 
   [`Error::InvalidArgument`](../../error/index.md#error) for an `ams_id` outside the documented address space.
+
+  On an AMS 3H or AMS-B, whose type alone does not settle drying, the cached unit decides:
+  [`Error::ModelMismatch`](../../error/index.md#error) when its `zone_info` has not been reported yet (this includes an
+  unobserved unit `32`), or when the [`with_zone()`](#dryingcycle) zone cannot dry;
+  [`Error::InvalidArgument`](../../error/index.md#error) when no reported zone has that id. No temperature range is
+  enforced for these units, because none is recorded.
 
   [`Error::InvalidArgument`](../../error/index.md#error) when the temperature falls outside the unit's
   [`dry_temp_range`](../../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not

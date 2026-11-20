@@ -45,6 +45,7 @@ enum PrinterModel {
     H2D,
     H2DPro,
     H2C,
+    H3C,
     H2S,
     Unknown,
 }
@@ -105,6 +106,10 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 - **`H2C`**
 
   H2C (Vortek tool-changer + fixed hotend, 7 nozzles total)
+
+- **`H3C`**
+
+  H3C (Tool-changer with a nine-dock hotend rack and no fixed hotend)
 
 - **`H2S`**
 

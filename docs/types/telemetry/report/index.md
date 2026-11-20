@@ -472,7 +472,7 @@ raw field and re-implementing the decode:
 
 - **`big_fan1_speed`**: `Option<String>`
 
-  On-board left-side auxiliary fan speed (represented as discrete steps 0 to 15).
+  On-board auxiliary fan speed (represented as discrete steps 0 to 15).
 
 - **`big_fan2_speed`**: `Option<String>`
 
@@ -876,6 +876,13 @@ raw field and re-implementing the decode:
   bits on every frame that carries `home_flag`, so they are followed here; see
   `reference/03_mqtt_telemetry.md` for the disagreement.
 
+- <span id="printertelemetry-air-purifier-present"></span>`fn air_purifier_present(&self) -> Option<bool>`
+
+  Whether this frame's `aux` bit 37 reports an air purifier (APS) fitted (BambuStudio `DevAirPurifier`).
+
+  `None` when the frame carries no `aux` (or an empty one), as BambuStudio leaves its
+  presence flag untouched then. Distinct from `Some(false)`, a reported absence.
+
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
   Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
@@ -887,6 +894,15 @@ raw field and re-implementing the decode:
   Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
 
   Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
+
+- <span id="printertelemetry-top-cover-open"></span>`fn top_cover_open(&self) -> Option<bool>`
+
+  Reads the top cover state from bit 24 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
+
+  `Some(true)` open, `Some(false)` closed, `None` when `stat` is absent or unreadable. Reads
+  `stat` only: `home_flag` bit 24 is the unrelated nozzle blob detection setting. Whether
+  the model has a top cover sensor is the caller's question
+  ([`DoorSensor::Stat`](../../../quirks/index.md#doorsensor)).
 
 - <span id="printertelemetry-door-state"></span>`fn door_state(&self, sensor: crate::quirks::DoorSensor) -> Option<bool>` — [`DoorSensor`](../../../quirks/index.md#doorsensor)
 

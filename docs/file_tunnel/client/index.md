@@ -173,6 +173,14 @@ header is refused above [`DEFAULT_MAX_FRAME_PAYLOAD`](../index.md#default-max-fr
   `PrinterFileSystem::UpdateFocusThumbnail2`). A member larger than `max_bytes` is refused,
   and the rest of the stream cancelled.
 
+  A missing member is `None` whether the printer answers `result` 0 or, as an X2D does
+  (`reference/08_file_service.md` §8.4), a final `result` 14 (`FILE_READ_WRITE_ERR`) whose
+  reply has `size` 0. A 14 with a nonzero size, or with no reply, is still an error.
+
+  A raw reply larger than 262144 bytes gets no reply at all and stalls the session for about
+  12 to 13 s; above 1 MiB the printer answers 14 at once (single source, same section). The
+  read timeout and poisoning already cover the stall.
+
 - <span id="filetunnelclient-delete-file"></span>`async fn delete_file<T: TimerProvider>(&mut self, timer: &T, file: &TunnelFile) -> Result<(), Error>` — [`TunnelFile`](../index.md#tunnelfile), [`Error`](../../error/index.md#error)
 
   Deletes a listed file (`FILE_DEL`).
@@ -183,7 +191,12 @@ header is refused above [`DEFAULT_MAX_FRAME_PAYLOAD`](../index.md#default-max-fr
 
 - <span id="filetunnelclient-upload"></span>`async fn upload<T: TimerProvider>(&mut self, timer: &T, storage: &str, name: &str, source: impl UploadSource) -> Result<(), Error>` — [`UploadSource`](../../upload/index.md#uploadsource), [`Error`](../../error/index.md#error)
 
-  Uploads `source` to `storage` under `name` (`FILE_UPLOAD`), overwriting a file of that name.
+  Uploads `source` to `storage` under `name` (`FILE_UPLOAD`).
+
+  A file of the same name is overwritten on external storage. On an H2C, `emmc` uploads go
+  into an 8-entry `history/` ring that silently evicts the oldest file, every path is cut to
+  its basename, and the uploaded file can't be read back (`reference/08_file_service.md`
+  §8.4 `FILE_UPLOAD`, single source).
 
   `storage` is a label from [`media_ability`](#filetunnelclient), such as `emmc`; there is
   no default. To print the file afterwards from internal storage, start the job with

@@ -144,8 +144,8 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`ams_id`**: `u8`
 
-  AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 128-135 for AMS-HT,
-  254/255 for external/unmapped).
+  AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 32 for the AMS 3H,
+  128-135 for AMS-HT, 254/255 for external/unmapped).
   
   Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
   [`AmsEntryKind`](mapping/index.md#amsentrykind) warns about, since a caller reading this field in isolation could add
@@ -154,7 +154,8 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`slot_id`**: `u8`
 
-  Tray slot index within the unit (0-3 for standard AMS, 0 for single-slot units).
+  Tray slot index within the unit (0-3 for standard AMS, 0-8 for the AMS 3H, 0 for
+  single-slot units).
 
 #### Implementations
 
@@ -193,6 +194,7 @@ enum AmsEntryKind {
     Standard,
     Ht,
     AmsLite,
+    Ams3H,
     External,
     Invalid,
 }
@@ -220,6 +222,10 @@ cannot omit a unit type by hand.
 - **`AmsLite`**
 
   The A2L's 4-slot AMS Lite, carried on the wire as physical unit id 16.
+
+- **`Ams3H`**
+
+  The H3C's nine-slot AMS 3H, carried on the wire as unit id 32 with a local slot `0..=8`.
 
 - **`External`**
 
@@ -377,9 +383,15 @@ enum MaterialSource {
     AmsLite {
         slot_id: u8,
     },
+    Ams3H {
+        slot_id: u8,
+    },
     ExternalSpool,
     ExternalSpoolLeft,
     ExternalSpoolRight,
+    ExternalInput {
+        ams_id: u8,
+    },
     Unmapped,
 }
 ```
@@ -406,6 +418,14 @@ Enumeration of possible physical feed locations for loaded spools.
   carries the **physical** unit id 16 rather than the normalized 6 the rest of the crate
   addresses it by. A `StandardAms { ams_id: 6, .. }` would get both wrong.
 
+- **`Ams3H`**
+
+  Spool loaded inside the H3C's built-in nine-slot AMS 3H (unit id 32).
+  
+  Kept separate from [`MaterialSource::StandardAms`](mapping/index.md#materialsource) because its flat `ams_mapping` channel
+  is the global tray id `28 + slot`, not `ams_id * 4 + slot`, and `ams_mapping2` carries
+  `{ams_id: 32, slot_id: k}` with the local slot (bambuddy, tested).
+
 - **`ExternalSpool`**
 
   Default virtual external spool holder (used for standard single-nozzle models).
@@ -424,6 +444,17 @@ Enumeration of possible physical feed locations for loaded spools.
   Same wire address as [`ExternalSpool`](mapping/index.md#materialsource) (`ams_id` 255): the IDEX
   right carriage is the main one. Only [`ExternalSpoolLeft`](mapping/index.md#materialsource)
   (254) differs.
+
+- **`ExternalInput`**
+
+  One of the H3C's per-hotend external inputs (`247..=255`, `vir_slot` ids).
+  
+  The `ams_mapping2` entry is `{ams_id, slot_id: 0}`, the shape BambuStudio builds for an
+  external tray (`DevMapping.cpp`, `try_add` with `slot_id` 0). Build it through
+  [`ModelQuirks::external_input_source`](../quirks/index.md#modelquirks),
+  which checks the id against the model; this enum has no model, so an id below `247`, the
+  lowest any model reports, becomes the unmapped entry. Like every external spool, the
+  flat `ams_mapping` carries `-1` for it.
 
 - **`Unmapped`**
 
@@ -695,14 +726,17 @@ fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8>
 Computes the unique global channel identifier for a given expansion unit and local tray.
 
 Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3, the
-A2L-attached AMS Lite's normalized 6, AMS-HT 128–135, external 254–255) or if
-`tray_id >= 4` on a four-slot path.
+A2L-attached AMS Lite's normalized 6, the AMS 3H's 32, AMS-HT 128–135, external 254–255) or
+if `tray_id` is past the unit's slots (`>= 4` on a four-slot path, `>= 9` on the AMS 3H).
 
 The physical mapping aligns as:
 * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 * **AMS Lite on an A2L**: the normalized id 6 through the same formula, giving global ids
   24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`](#normalize-ams-unit-id)
   first (`.claude/rules/ams-lite-on-a2l-unit-id.md`).
+* **AMS 3H** (unit 32): nine slots, global ids `28 + tray_id`, i.e. 28–36. BambuStudio keys
+  this on the unit type; this keys on the id, and leaves out the AMS-B (`37 + slot`) because
+  its unit id is unrecorded.
 * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 
@@ -712,6 +746,19 @@ rather than silently ignored. Without that check this function and its sibling
 AMS-HT id paired with a bad `tray_id` (from a mis-decoded `tray_now`, say) got a
 silently-accepted `Some(ams_id)` here but `None` there, masking the caller bug the
 sibling catches. [`normalize_ams_unit_id`](#normalize-ams-unit-id)'s doc comment requires the two to agree.
+
+### `resolve_global_tray_id_for`
+
+```rust
+fn resolve_global_tray_id_for(quirks: &crate::quirks::ModelQuirks, ams_id: u8, tray_id: u8) -> Option<u8>
+```
+
+**Types:** [`ModelQuirks`](../quirks/index.md#modelquirks)
+
+Resolves a global tray id as [`resolve_global_tray_id`](parser/index.md#resolve-global-tray-id) does, but accepts the external inputs `quirks` reports.
+
+On the H3C `247..=253` are external inputs too, and resolve to the id itself as `254`/`255`
+do. Every other address resolves exactly as in the model-free function.
 
 ### `resolve_printing_global_id`
 
@@ -753,6 +800,7 @@ applied to the global tray id [`resolve_global_tray_id`](parser/index.md#resolve
 - a standard unit's slot is the unit's letter (`A` for id 0) and the 1-based slot, `A1`…`D4`
 - an A2L's AMS Lite is `Q1`…`Q4`; `ams_id` may be its physical 16 or its normalized 6
 - an AMS-HT is `HT-A`…`HT-H`, lettered from id 128
+- an AMS 3H slot has no label here: `None`
 - an external spool is `Ext`, or `Ext-R` (255) and `Ext-L` (254) when `extruder_count` is 2
 
 These are the labels BambuStudio's print, mapping and sync dialogs show, which pass this same

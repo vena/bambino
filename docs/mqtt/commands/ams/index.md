@@ -177,6 +177,7 @@ struct AmsFilamentDryingPayload {
     pub rotate_tray: bool,
     pub cooling_temp: u32,
     pub close_power_conflict: bool,
+    pub zone_id: Option<u8>,
     pub sequence_id: super::ClampedTaskId,
 }
 ```
@@ -232,6 +233,14 @@ incident #1447).
 - **`close_power_conflict`**: `bool`
 
   Whether to override the AMS unit's power-conflict interlock.
+
+- **`zone_id`**: `Option<u8>`
+
+  The drying zone a start names; `None` (omitted from the wire) on a stop.
+  
+  BambuStudio writes `zone_id` on every start, `m_dry_zone_id.value_or(0)` in
+  `AMSDryControl.cpp`'s `start_sending_drying_command`, so a unit without zones gets `0`;
+  `CtrlAmsStopDrying` sends none.
 
 - **`sequence_id`**: `super::ClampedTaskId`
 
@@ -472,6 +481,7 @@ struct DryingParams {
     pub rotate_tray: bool,
     pub cooling_temp: u32,
     pub close_power_conflict: bool,
+    pub zone_id: u8,
 }
 ```
 
@@ -510,6 +520,10 @@ least `temp` and `duration_hours`.
 - **`close_power_conflict`**: `bool`
 
   Whether to override the AMS unit's power-conflict interlock.
+
+- **`zone_id`**: `u8`
+
+  The zone to dry on a unit with several (the AMS 3H); `0` otherwise, as BambuStudio sends.
 
 #### Trait Implementations
 

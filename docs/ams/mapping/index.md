@@ -62,8 +62,8 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`ams_id`**: `u8`
 
-  AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 128-135 for AMS-HT,
-  254/255 for external/unmapped).
+  AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 32 for the AMS 3H,
+  128-135 for AMS-HT, 254/255 for external/unmapped).
   
   Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
   [`AmsEntryKind`](#amsentrykind) warns about, since a caller reading this field in isolation could add
@@ -72,7 +72,8 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`slot_id`**: `u8`
 
-  Tray slot index within the unit (0-3 for standard AMS, 0 for single-slot units).
+  Tray slot index within the unit (0-3 for standard AMS, 0-8 for the AMS 3H, 0 for
+  single-slot units).
 
 #### Implementations
 
@@ -111,6 +112,7 @@ enum AmsEntryKind {
     Standard,
     Ht,
     AmsLite,
+    Ams3H,
     External,
     Invalid,
 }
@@ -138,6 +140,10 @@ cannot omit a unit type by hand.
 - **`AmsLite`**
 
   The A2L's 4-slot AMS Lite, carried on the wire as physical unit id 16.
+
+- **`Ams3H`**
+
+  The H3C's nine-slot AMS 3H, carried on the wire as unit id 32 with a local slot `0..=8`.
 
 - **`External`**
 
@@ -295,9 +301,15 @@ enum MaterialSource {
     AmsLite {
         slot_id: u8,
     },
+    Ams3H {
+        slot_id: u8,
+    },
     ExternalSpool,
     ExternalSpoolLeft,
     ExternalSpoolRight,
+    ExternalInput {
+        ams_id: u8,
+    },
     Unmapped,
 }
 ```
@@ -324,6 +336,14 @@ Enumeration of possible physical feed locations for loaded spools.
   carries the **physical** unit id 16 rather than the normalized 6 the rest of the crate
   addresses it by. A `StandardAms { ams_id: 6, .. }` would get both wrong.
 
+- **`Ams3H`**
+
+  Spool loaded inside the H3C's built-in nine-slot AMS 3H (unit id 32).
+  
+  Kept separate from [`MaterialSource::StandardAms`](#materialsource) because its flat `ams_mapping` channel
+  is the global tray id `28 + slot`, not `ams_id * 4 + slot`, and `ams_mapping2` carries
+  `{ams_id: 32, slot_id: k}` with the local slot (bambuddy, tested).
+
 - **`ExternalSpool`**
 
   Default virtual external spool holder (used for standard single-nozzle models).
@@ -342,6 +362,17 @@ Enumeration of possible physical feed locations for loaded spools.
   Same wire address as [`ExternalSpool`](#materialsource) (`ams_id` 255): the IDEX
   right carriage is the main one. Only [`ExternalSpoolLeft`](#materialsource)
   (254) differs.
+
+- **`ExternalInput`**
+
+  One of the H3C's per-hotend external inputs (`247..=255`, `vir_slot` ids).
+  
+  The `ams_mapping2` entry is `{ams_id, slot_id: 0}`, the shape BambuStudio builds for an
+  external tray (`DevMapping.cpp`, `try_add` with `slot_id` 0). Build it through
+  [`ModelQuirks::external_input_source`](../../quirks/index.md#modelquirks),
+  which checks the id against the model; this enum has no model, so an id below `247`, the
+  lowest any model reports, becomes the unmapped entry. Like every external spool, the
+  flat `ams_mapping` carries `-1` for it.
 
 - **`Unmapped`**
 

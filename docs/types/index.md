@@ -112,6 +112,75 @@ named constants can be built, so a value never carries bits no routine owns.
 
 - <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](control/index.md#calibrationoption)
 
+### `AirPurifierTelemetry`
+
+```rust
+struct AirPurifierTelemetry {
+    pub kind: Option<i32>,
+    pub pm: Option<i32>,
+    pub gear: Option<i32>,
+    pub rpm: Option<i32>,
+}
+```
+
+Air purifier (APS) state from `device.aps`, per BambuStudio's `DevAirPurifier.cpp`.
+
+Leaves out the filter fields (`f_type`, `f_use`, `f_to`) only ha-bambulab reports.
+
+#### Fields
+
+- **`kind`**: `Option<i32>`
+
+  Accessory type code (`type` on the wire); meaning unrecorded.
+
+- **`pm`**: `Option<i32>`
+
+  Particulate reading (`pm`); unit unrecorded.
+
+- **`gear`**: `Option<i32>`
+
+  Gear code (`gear`); decode with [`AirPurifierTelemetry::purifier_gear`](telemetry/device/index.md#airpurifiertelemetry).
+
+- **`rpm`**: `Option<i32>`
+
+  Fan speed (`rpm`).
+
+#### Implementations
+
+- <span id="airpurifiertelemetry-purifier-gear"></span>`fn purifier_gear(&self) -> Option<PurifierGear>` — [`PurifierGear`](../mqtt/commands/hardware/index.md#purifiergear)
+
+  The reported gear as a [`PurifierGear`](../mqtt/commands/hardware/index.md#purifiergear); `None` when absent or not a code BambuStudio defines.
+
+#### Trait Implementations
+
+##### `impl Clone for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-clone"></span>`fn clone(&self) -> AirPurifierTelemetry` — [`AirPurifierTelemetry`](telemetry/device/index.md#airpurifiertelemetry)
+
+##### `impl Debug for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-default"></span>`fn default() -> AirPurifierTelemetry` — [`AirPurifierTelemetry`](telemetry/device/index.md#airpurifiertelemetry)
+
+##### `impl Deserialize<'de> for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for AirPurifierTelemetry`
+
+##### `impl Eq for AirPurifierTelemetry`
+
+##### `impl PartialEq for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-partialeq-eq"></span>`fn eq(&self, other: &AirPurifierTelemetry) -> bool` — [`AirPurifierTelemetry`](telemetry/device/index.md#airpurifiertelemetry)
+
+##### `impl Serialize for AirPurifierTelemetry`
+
+- <span id="airpurifiertelemetry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
 ### `AirductCollection`
 
 ```rust
@@ -232,8 +301,8 @@ Represents an individual auxiliary routing component.
 
 - **`id`**: `u32`
 
-  Part index matching hardware configurations (e.g., `160` for the second left-side
-  auxiliary fan on X2D/P2S — despite the wire port number suggesting a "right" fan).
+  Part index matching hardware configurations (e.g., `160` for the second
+  auxiliary fan on X2D/P2S, port 10).
 
 - **`state`**: `Option<i32>`
 
@@ -319,7 +388,7 @@ Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
 
 ```rust
 struct AmsStatusReport {
-    pub ams: Vec<AmsUnit>,
+    pub ams: Option<Vec<AmsUnit>>,
     pub ams_exist_bits: Option<String>,
     pub tray_exist_bits: Option<String>,
     pub tray_is_bbl_bits: Option<String>,
@@ -345,9 +414,13 @@ the intermediate `print.ams` object.
 
 #### Fields
 
-- **`ams`**: `Vec<AmsUnit>`
+- **`ams`**: `Option<Vec<AmsUnit>>`
 
   Array of connected AMS units on the expansion bus.
+  
+  `None` means the `ams` key was absent from this push, so cached units stay as they were.
+  `Some(vec![])` means the key was present but empty, which removes every cached unit
+  (see `merge_from`). Read through `units()` when the distinction doesn't matter.
 
 - **`ams_exist_bits`**: `Option<String>`
 
@@ -416,6 +489,10 @@ the intermediate `print.ams` object.
 
 #### Implementations
 
+- <span id="amsstatusreport-units"></span>`fn units(&self) -> &[AmsUnit]` — [`AmsUnit`](telemetry/ams/index.md#amsunit)
+
+  The reported units, or an empty slice when the `ams` key was absent.
+
 - <span id="amsstatusreport-unit"></span>`fn unit(&self, ams_id: u8) -> Option<&AmsUnit>` — [`AmsUnit`](telemetry/ams/index.md#amsunit)
 
   The unit at bus id `ams_id`, as normalized on ingest (an A2L's AMS Lite is `6`).
@@ -453,7 +530,7 @@ the intermediate `print.ams` object.
 ```rust
 struct AmsTray {
     pub id: String,
-    pub state: Option<u8>,
+    pub state: Option<u32>,
     pub tray_type: Option<String>,
     pub tray_color: Option<String>,
     pub tray_info_idx: Option<String>,
@@ -497,9 +574,16 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
   The physical index representing the slot (0 to 3), or an external holder's address
   (`"254"`/`"255"`) for a [`VirtualTray`](telemetry/ams/index.md#virtualtray). Sent as a string on the wire; empty if omitted.
 
-- **`state`**: `Option<u8>`
+- **`state`**: `Option<u32>`
 
   The native state code representing filament routing status [REF-AMS-DECODE].
+  
+  A `u32`, not a byte: values above 255 occur on the H3C's AMS 3H (`283` on loaded trays,
+  `160` on empty ones; ha-bambulab `MOCK-H3C.json`). Their low-bit meaning is unrecorded,
+  and BambuStudio reads bits 5-7 as `remain_fetch_status` (`DevAmsTray`,
+  `ParseAmsTrayInfo` in `DevFilaSystem.cpp`). The loaded-spool rule compares the raw value
+  against 0 / 9 / 10 only, so any other value falls through to the filament-metadata rule,
+  as in bambuddy's `on_ams_change`.
 
 - **`tray_type`**: `Option<String>`
 
@@ -654,7 +738,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
   `calibrate_remain_flag` setting is on (BambuStudio hides the value otherwise). The
   external spool's `0` is not an estimate either: BambuStudio never shows one there.
 
-- <span id="amstray-state"></span>`fn state(&self) -> u8`
+- <span id="amstray-state"></span>`fn state(&self) -> u32`
 
   Retrieves the raw status code of the spool, defaulting to `9` (Empty) if omitted.
 
@@ -667,7 +751,8 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
   True when this tray, in the unit at `ams_id`, holds a loaded spool.
 
   The same rule `clean_stale_tray_data` applies before
-  keeping a tray's material data: a missing `state` with filament metadata is loaded,
+  keeping a tray's material data: a tray with no filament metadata is loaded only in state
+  `11`, a missing `state` with filament metadata is loaded,
   states `9`/`10` mean empty except on AMS-HT units (`ams_id` 128-135, where they don't),
   and an explicitly blank `tray_type` means empty.
 
@@ -718,6 +803,7 @@ struct AmsUnit {
     pub tray: Option<Vec<AmsTray>>,
     pub info: Option<String>,
     pub dry_sf_reason: Option<Vec<i32>>,
+    pub zone_info: Option<Vec<AmsZone>>,
 }
 ```
 
@@ -779,6 +865,16 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - **`dry_sf_reason`**: `Option<Vec<i32>>`
 
   Drying failure reason codes per slot (X2D).
+
+- **`zone_info`**: `Option<Vec<AmsZone>>`
+
+  Per-zone climate and drying state of an AMS 3H or AMS-B, whose slots are split into
+  independent drying zones. Absent on every other unit type.
+  
+  `None` means the key was absent from this push, so cached zones stay as they were; a
+  present array replaces them wholesale. BambuStudio instead rebuilds its zone map on every
+  push (`ParseAmsInfo` clears `m_zones` before reading `zone_info`), so an absent key
+  empties it there; this crate keeps the cache, as for every other field of the unit.
 
 #### Implementations
 
@@ -848,6 +944,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Whether this unit can dry: `None` when its type is unknown (no `info`, or a type newer
   than this crate), which is not the same as "can't dry".
+
+  For an [`Ams3H`](telemetry/ams/index.md#amsunitmodel) or [`AmsB`](telemetry/ams/index.md#amsunitmodel) this is true when
+  any reported [`zone`](telemetry/ams/index.md#amsunit) can dry, BambuStudio's `DevAms::SupportDrying`;
+  before any zone has been reported it is `false`.
 
 - <span id="amsunit-dry-temp-range"></span>`fn dry_temp_range(&self) -> Option<(u32, u32)>`
 
@@ -947,6 +1047,122 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 ##### `impl Serialize for AmsUnit`
 
 - <span id="amsunit-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `AmsZone`
+
+```rust
+struct AmsZone {
+    pub zone_id: Option<u8>,
+    pub zone_slots: Vec<u8>,
+    pub temp: Option<String>,
+    pub humidity: Option<String>,
+    pub humidity_raw: Option<String>,
+    pub dry_time: Option<u32>,
+    pub dry_setting: Option<AmsDrySetting>,
+    pub dry_sf_reason: Option<Vec<i32>>,
+    pub info: Option<String>,
+    pub zone_dry_info: Option<String>,
+}
+```
+
+One drying zone of an AMS 3H or AMS-B (`zone_info[]` on the wire).
+
+Mirrors BambuStudio's `DevAms::DevAmsZone` (`DeviceCore/DevFilaSystem.h`), parsed in
+`ParseAmsInfo`. Field shapes are from ha-bambulab's `MOCK-H3C.json`: `zone_id` and
+`dry_time` integers, climate values strings as on [`AmsUnit`](telemetry/ams/index.md#amsunit).
+
+#### Fields
+
+- **`zone_id`**: `Option<u8>`
+
+  The zone's id (`0` and `1` in the capture); what a drying command's `zone_id` addresses.
+
+- **`zone_slots`**: `Vec<u8>`
+
+  The unit-local slots this zone covers. A zone dries only with exactly two.
+  
+  Integers or numeric strings, as BambuStudio accepts both; an entry that is neither is
+  dropped rather than failing the frame.
+
+- **`temp`**: `Option<String>`
+
+  Zone temperature in degrees Celsius, as a string (e.g. `"16.7"`).
+
+- **`humidity`**: `Option<String>`
+
+  Coarse humidity level `1..=5`, `1` wettest, as for [`AmsUnit::humidity`](telemetry/ams/index.md#amsunit).
+
+- **`humidity_raw`**: `Option<String>`
+
+  Relative humidity percentage, as a string (e.g. `"27"`). The AMS 3H reports a real
+  percentage (BambuStudio `SupportHumidityPercent` includes `ZMULTI_A`); the AMS-B is not
+  in that list, so read this only for a unit whose type is [`AmsUnitModel::Ams3H`](telemetry/ams/index.md#amsunitmodel).
+
+- **`dry_time`**: `Option<u32>`
+
+  Remaining drying time in minutes.
+
+- **`dry_setting`**: `Option<AmsDrySetting>`
+
+  Drying cycle configuration of this zone.
+
+- **`dry_sf_reason`**: `Option<Vec<i32>>`
+
+  Why the firmware will not start a drying cycle in this zone, as for
+  [`AmsUnit::dry_sf_reason`](telemetry/ams/index.md#amsunit).
+
+- **`info`**: `Option<String>`
+
+  Hex bitmask in the unit `info` layout (drying status in bits 4-7, fans 18-21, sub-status
+  22-23); the capture repeats the unit's own `info` here.
+
+- **`zone_dry_info`**: `Option<String>`
+
+  Raw `zone_dry_info` string (`"1"` / `"0"` in the capture). Meaning unrecorded:
+  BambuStudio doesn't read it.
+
+#### Implementations
+
+- <span id="amszone-supports-drying"></span>`fn supports_drying(&self) -> bool`
+
+  Whether this zone can dry: exactly two slots, BambuStudio's
+  `DevAmsZone::SupportDrying` (`zone_slots.size() == 2`).
+
+- <span id="amszone-temperature-c"></span>`fn temperature_c(&self) -> Option<f32>`
+
+  Zone temperature in °C, from the `temp` string.
+
+- <span id="amszone-humidity-percent"></span>`fn humidity_percent(&self) -> Option<u8>`
+
+  Relative humidity in percent, from `humidity_raw`.
+
+- <span id="amszone-humidity-level"></span>`fn humidity_level(&self) -> Option<u8>`
+
+  Coarse humidity level `1..=5` from `humidity`, `1` wettest.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsZone`
+
+- <span id="amszone-clone"></span>`fn clone(&self) -> AmsZone` — [`AmsZone`](telemetry/ams/index.md#amszone)
+
+##### `impl Debug for AmsZone`
+
+- <span id="amszone-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for AmsZone`
+
+- <span id="amszone-default"></span>`fn default() -> AmsZone` — [`AmsZone`](telemetry/ams/index.md#amszone)
+
+##### `impl Deserialize<'de> for AmsZone`
+
+- <span id="amszone-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for AmsZone`
+
+##### `impl Serialize for AmsZone`
+
+- <span id="amszone-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `BedInfo`
 
@@ -1136,6 +1352,7 @@ struct DeviceTelemetry {
     pub ext_tool: Option<ExtToolTelemetry>,
     pub fire_ext: Option<serde_json::Value>,
     pub bed_temp: Option<u32>,
+    pub aps: Option<AirPurifierTelemetry>,
 }
 ```
 
@@ -1183,6 +1400,12 @@ Appears at two locations on the wire:
   pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
   never consult this field either. Parsed for wire-format completeness only —
   The bed-temperature decode deliberately does not read it.
+
+- **`aps`**: `Option<AirPurifierTelemetry>`
+
+  Air purifier (APS) state; present only while the accessory reports.
+  
+  Whether the accessory is fitted is `print.aux` bit 37, not this object's presence.
 
 #### Trait Implementations
 
@@ -1355,7 +1578,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `ExtderSystemParser::ParseV2_0`, `DevExtruderSystem.cpp`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. A slot byte of `0xff` (including `0xFFFF`) means unmapped — see [`current_ams_slot()`](telemetry/device/index.md#extruderinfo).
 
 - **`spre`**: `Option<u32>`
 
@@ -1812,9 +2035,10 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Core physical nozzle composition or tool type designation.
   
   **Two vocabularies by generation.** Legacy printers report the nozzle *material* here
-  (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a *flow
-  code* instead (`"HH"` = high flow, `"HS"` = standard, followed by a hardware-variant
-  digit pair). Do not assume one and parse the other. The related but distinct
+  (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a packed
+  tool code instead: tool (`H` hotend), flow (`"HH"` = high flow, `"HS"` = standard), then
+  a material digit pair (`00` stainless, `01` hardened, `05` tungsten carbide), e.g.
+  `"HH01"`. Do not assume one and parse the other. The related but distinct
   `nozzle_id` on a K-profile entry uses the flow-code vocabulary only — see
   `crate::diagnostics::KProfileEntry::nozzle_id`.
 
@@ -2183,7 +2407,7 @@ raw field and re-implementing the decode:
 
 - **`big_fan1_speed`**: `Option<String>`
 
-  On-board left-side auxiliary fan speed (represented as discrete steps 0 to 15).
+  On-board auxiliary fan speed (represented as discrete steps 0 to 15).
 
 - **`big_fan2_speed`**: `Option<String>`
 
@@ -2587,6 +2811,13 @@ raw field and re-implementing the decode:
   bits on every frame that carries `home_flag`, so they are followed here; see
   `reference/03_mqtt_telemetry.md` for the disagreement.
 
+- <span id="printertelemetry-air-purifier-present"></span>`fn air_purifier_present(&self) -> Option<bool>`
+
+  Whether this frame's `aux` bit 37 reports an air purifier (APS) fitted (BambuStudio `DevAirPurifier`).
+
+  `None` when the frame carries no `aux` (or an empty one), as BambuStudio leaves its
+  presence flag untouched then. Distinct from `Some(false)`, a reported absence.
+
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
   Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
@@ -2598,6 +2829,15 @@ raw field and re-implementing the decode:
   Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
 
   Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
+
+- <span id="printertelemetry-top-cover-open"></span>`fn top_cover_open(&self) -> Option<bool>`
+
+  Reads the top cover state from bit 24 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
+
+  `Some(true)` open, `Some(false)` closed, `None` when `stat` is absent or unreadable. Reads
+  `stat` only: `home_flag` bit 24 is the unrelated nozzle blob detection setting. Whether
+  the model has a top cover sensor is the caller's question
+  ([`DoorSensor::Stat`](../quirks/index.md#doorsensor)).
 
 - <span id="printertelemetry-door-state"></span>`fn door_state(&self, sensor: crate::quirks::DoorSensor) -> Option<bool>` — [`DoorSensor`](../quirks/index.md#doorsensor)
 
@@ -3465,9 +3705,9 @@ Buzzer alarm/attention chime mode [REF-MQTT-LIFECYCLE]; supported on models with
 ```rust
 enum FanTarget {
     PartCooling,
-    AuxiliaryLeft,
+    Auxiliary,
     ChamberExhaust,
-    AuxiliaryLeft2,
+    Auxiliary2,
 }
 ```
 
@@ -3479,24 +3719,27 @@ Target onboard cooling fans [REF-CLIM-FANS].
 
   Primary part cooling fan (Port 1).
 
-- **`AuxiliaryLeft`**
+- **`Auxiliary`**
 
-  Primary left-side auxiliary fan (Port 2).
+  Primary auxiliary fan (Port 2).
+  
+  Which side of the printer it sits on depends on the model: left on the X2D, right on the
+  P2S and H3C/N10 (BambuStudio `resources/printers/<model_id>.json`, `fan` block).
 
 - **`ChamberExhaust`**
 
   Chamber exhaust/filtration fan (Port 3).
 
-- **`AuxiliaryLeft2`**
+- **`Auxiliary2`**
 
-  Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+  Secondary auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
   
-  Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
-  "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](control/index.md#fantarget)'s
-  primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
-  Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
-  part cooling fan" throughout (issue #60).
+  BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX`, distinct from
+  [`Auxiliary`](control/index.md#fantarget)'s port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into
+  `big_fan1_speed`). Reads at `device.airduct.parts[id=160].state`.
+  
+  The side is per model (BambuStudio `resources/printers/<model_id>.json`, `fan` block):
+  right on the X2D, left on the P2S and H3C/N10. Port 2 is the opposite side on each.
 
 #### Implementations
 
@@ -4150,6 +4393,8 @@ enum AmsUnitModel {
     Ams2Pro,
     AmsHt,
     AmsLiteMixed,
+    Ams3H,
+    AmsB,
 }
 ```
 
@@ -4197,6 +4442,18 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 
   AMS Lite variant for N9. Wire value `5` (BambuStudio `AMS_LITE_MIXED`). No drying chamber.
 
+- **`Ams3H`**
+
+  The H3C's built-in AMS 3H. Wire value `6` (BambuStudio `ZMULTI_A`). Nine slots, humidity
+  reported as a percentage, and drying **per zone** rather than per unit: see
+  [`AmsUnit::zone_info`](telemetry/ams/index.md#amsunit) and [`AmsUnit::supports_drying`](telemetry/ams/index.md#amsunit).
+
+- **`AmsB`**
+
+  AMS-B. Wire value `7` (BambuStudio `ZMULTI_B`). Dries per zone like the
+  [`Ams3H`](telemetry/ams/index.md#amsunitmodel). Its slot count and the unit id it reports are not recorded, so
+  the crate's id helpers don't address it.
+
 #### Implementations
 
 - <span id="amsunitmodel-from-wire"></span>`fn from_wire(value: u8) -> Option<Self>`
@@ -4214,7 +4471,9 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 
   True for [`Ams2Pro`](telemetry/ams/index.md#amsunitmodel) and [`AmsHt`](telemetry/ams/index.md#amsunitmodel) only. The original AMS and
   both AMS Lite variants have no heater, so a drying command addressed to one cannot do
-  anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp`,
+  anything. **False for [`Ams3H`](telemetry/ams/index.md#amsunitmodel) and [`AmsB`](telemetry/ams/index.md#amsunitmodel) because the type
+  alone doesn't settle it**: they dry only in a zone with exactly two slots, which
+  [`AmsUnit::supports_drying`](telemetry/ams/index.md#amsunit) reads from the reported zones. Confirmed by BambuStudio (`Widgets/AMSItem.hpp`,
   `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and independently by
   bambuddy (`print_scheduler.py`, `if module_type not in ("n3f", "n3s"): skip`).
 
@@ -4223,7 +4482,7 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
   Inclusive `(min, max)` drying-chamber temperature range in °C, or `None` if this unit
   cannot dry.
 
-  `(45, 65)` for the AMS 2 Pro and `(45, 85)` for the AMS-HT. **Both bounds are real** —
+  `(45, 65)` for the AMS 2 Pro, `(45, 85)` for the AMS-HT and the AMS 3H. **Both bounds are real** —
   BambuStudio refuses a temperature below the minimum just as it refuses one above the
   maximum (`AMSDryControl.cpp`), so a caller clamping only the ceiling still
   publishes values the vendor's own client rejects.
@@ -4232,11 +4491,13 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 
   Spool slots this unit type has, or `None` where the type alone doesn't determine it.
 
-  `1` for the AMS-HT, `4` for the original AMS, AMS Lite and AMS 2 Pro. `None` for
-  [`ExternalSpool`](telemetry/ams/index.md#amsunitmodel) and [`AmsLiteMixed`](telemetry/ams/index.md#amsunitmodel): upstream
-  has no static answer for those either and falls back to the observed tray count
-  (BambuStudio `DevAms::GetSlotCount`), so count [`AmsUnit::tray`](telemetry/ams/index.md#amsunit) rather than trusting a
-  number invented here.
+  `1` for the AMS-HT, `4` for the original AMS, AMS Lite and AMS 2 Pro, `9` for the
+  [`Ams3H`](telemetry/ams/index.md#amsunitmodel) (nine trays in the H3C capture; bambuddy's `tray_ids.py` agrees).
+  `None` for [`ExternalSpool`](telemetry/ams/index.md#amsunitmodel), [`AmsLiteMixed`](telemetry/ams/index.md#amsunitmodel)
+  and [`AmsB`](telemetry/ams/index.md#amsunitmodel): upstream has no static answer for those and falls back to the
+  observed tray count (BambuStudio `DevAms::GetSlotCount`), so count [`AmsUnit::tray`](telemetry/ams/index.md#amsunit)
+  rather than trusting a number invented here. BambuStudio has no static answer for the
+  AMS 3H either; the 9 is this crate's, from the capture.
 
 #### Trait Implementations
 

@@ -24,7 +24,8 @@ loaded match" instead of printing wrong.
 For each filament and each loaded tray BambuStudio computes a distance, and picks the
 lowest. A tray of a different material is never picked (`type` is a hard condition). For the
 same material the distance is the colour distance (0 to 1000, CIELAB ΔE76 combined with the
-alpha difference; see [`color_distance`](#color-distance)) plus 0 when the preset (`setting_id`) matches, 10000
+alpha difference; see [`color_distance`](#color-distance)), plus 2000 for a multi-colour tray
+(`kMultiColorPenalty`, `DevMapping.cpp`), plus 0 when the preset (`setting_id`) matches, 10000
 when only the filament class (`filament_id`, the file's `tray_info_idx` against the tray's)
 matches, and 20000 otherwise. So preset beats class beats colour.
 
@@ -43,11 +44,6 @@ material share a single loaded tray rather than going unmapped. A tie prefers an
 
 # Differences from BambuStudio
 
-- **Index versus key.** BambuStudio's loop reads `tray_filaments[picked_tar_idx]` where
-  `tray_filaments` is a `std::map` keyed by the tray's flat index and `picked_tar_idx` is a
-  column position. Whenever the two differ (any unit but the first, any gap), `operator[]`
-  inserts or reads the wrong tray in the tie-break. This port compares the tray the column
-  names.
 - **Retry order.** BambuStudio tries the used-tray retry for a filament as soon as that
   filament finds nothing unused, before later filaments are looked at. This port finishes the
   unused-tray pass over every remaining filament first, which is what its comments describe.

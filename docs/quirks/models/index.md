@@ -10,6 +10,19 @@ Isolates physical constraints (such as safe homing rules, bed coordinate limits,
 and relative axis orientation guidelines) into individual, model-specific modules,
 one per `PrinterModel` variant.
 
+## Contents
+
+- [Modules](#modules)
+  - [`a1`](a1/index.md)
+  - [`a2`](a2/index.md)
+  - [`h2`](h2/index.md)
+  - [`h3`](h3/index.md)
+  - [`p1`](p1/index.md)
+  - [`p2`](p2/index.md)
+  - [`unknown`](unknown/index.md)
+  - [`x1`](x1/index.md)
+  - [`x2`](x2/index.md)
+
 ## Quick Reference
 
 | Item | Kind | Description |
@@ -17,6 +30,7 @@ one per `PrinterModel` variant.
 | [`a1`](a1/index.md) | mod | # A1 Series (A1 & A1 Mini Bed-Slingers) Quirks & Coordinates |
 | [`a2`](a2/index.md) | mod | # A2 Series (A2L Bed-Slinger) Quirks & Coordinates |
 | [`h2`](h2/index.md) | mod | # H2 Series (H2S, H2D, H2D Pro, H2C) Quirks |
+| [`h3`](h3/index.md) | mod | # H3 Series (H3C) Quirks |
 | [`p1`](p1/index.md) | mod | # P1 Series (P1P & P1S CoreXY) Quirks |
 | [`p2`](p2/index.md) | mod | # P2 Series (P2S CoreXY) Quirks |
 | [`unknown`](unknown/index.md) | mod | # Unrecognized Model Fallback Quirks |
@@ -28,6 +42,7 @@ one per `PrinterModel` variant.
 - [`a1`](a1/index.md) — # A1 Series (A1 & A1 Mini Bed-Slingers) Quirks & Coordinates
 - [`a2`](a2/index.md) — # A2 Series (A2L Bed-Slinger) Quirks & Coordinates
 - [`h2`](h2/index.md) — # H2 Series (H2S, H2D, H2D Pro, H2C) Quirks
+- [`h3`](h3/index.md) — # H3 Series (H3C) Quirks
 - [`p1`](p1/index.md) — # P1 Series (P1P & P1S CoreXY) Quirks
 - [`p2`](p2/index.md) — # P2 Series (P2S CoreXY) Quirks
 - [`unknown`](unknown/index.md) — # Unrecognized Model Fallback Quirks

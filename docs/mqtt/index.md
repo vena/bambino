@@ -279,6 +279,7 @@ struct DryingParams {
     pub rotate_tray: bool,
     pub cooling_temp: u32,
     pub close_power_conflict: bool,
+    pub zone_id: u8,
 }
 ```
 
@@ -317,6 +318,10 @@ least `temp` and `duration_hours`.
 - **`close_power_conflict`**: `bool`
 
   Whether to override the AMS unit's power-conflict interlock.
+
+- **`zone_id`**: `u8`
+
+  The zone to dry on a unit with several (the AMS 3H); `0` otherwise, as BambuStudio sends.
 
 #### Trait Implementations
 
@@ -357,8 +362,9 @@ Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_map
 
 - **`rack_nozzle_id`**: `i32`
 
-  Physical nozzle ID of the rack position the printer currently reports as live, in
-  `RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX` (16..=21). The caller must supply this because
+  Physical nozzle ID of the rack position the printer currently reports as live, in the
+  model's [`rack_nozzle_ids`](../quirks/index.md#modelquirks) (`16..=21` on an
+  H2C, `16..=24` on an H3C). The caller must supply this because
   the mounted hotend can change between slicing and dispatch, and bambino does not model
   rack telemetry.
 
@@ -599,19 +605,21 @@ defaults for calibration flags.
 
   Enables or disables first-layer inspection for this job.
 
-- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32, model: PrinterModel) -> Result<Self, Error>` — [`PrinterModel`](../models/index.md#printermodel), [`Error`](../error/index.md#error)
 
   Supplies the tool-changer rack routing for this job (H2C only).
 
   `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
-  `rack_nozzle_id` is the physical ID of the live rack position. See
+  `rack_nozzle_id` is the physical ID of the live rack position, checked against `model`'s
+  [`rack_nozzle_ids`](../quirks/index.md#modelquirks). See
   [`resolve_rack_nozzle_mapping`](commands/print_job/index.md#resolve-rack-nozzle-mapping) for how they combine and when the resulting
-  `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
+  `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models, where
+  `rack_nozzle_id` is not checked.
 
   # Errors
 
-  [`Error::InvalidArgument`](../error/index.md#error) when `rack_nozzle_id` is outside the rack's physical IDs
-  (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
+  [`Error::InvalidArgument`](../error/index.md#error) when `model` has a rack and `rack_nozzle_id` is outside its
+  dock ids, rather than silently sending no mapping.
 
 - <span id="printjobconfig-pa-profile-sharing"></span>`fn pa_profile_sharing(self, shared_by_type: bool) -> Self`
 
@@ -1254,8 +1262,10 @@ The topic commands are published to.
 ### `resolve_rack_nozzle_mapping`
 
 ```rust
-fn resolve_rack_nozzle_mapping(slot_extruders: &[i32], rack_nozzle_id: i32) -> Option<Vec<i32>>
+fn resolve_rack_nozzle_mapping(slot_extruders: &[i32], rack_nozzle_id: i32, layout: crate::quirks::NozzleLayout) -> Option<Vec<i32>>
 ```
+
+**Types:** [`NozzleLayout`](../quirks/index.md#nozzlelayout)
 
 Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs.
 
@@ -1272,9 +1282,10 @@ print with another millimetres off the bed. Upstream reached that failure twice,
 declines rather than guesses when any of the following holds:
 
 - the slot list is empty, or longer than the wire format carries;
-- `rack_nozzle_id` is not a real rack position;
+- `layout` is not [`NozzleLayout::Rack`](../quirks/index.md#nozzlelayout), or `rack_nozzle_id` is outside its dock ids;
 - no slot actually needs the rack — BambuStudio omits `nozzle_mapping` for a fixed-hotend-only
   plate, so this matches rather than naming a nozzle it need not name;
+- a slot names the fixed hotend's extruder on a rack with no fixed hotend (H3C);
 - a slot names a carriage an H2C does not have, meaning the file was mapped for another
   machine and forwarding the value raw would name a physical nozzle by a foreign index.
 
@@ -1284,6 +1295,10 @@ Extruder indices and physical nozzle IDs overlap numerically and mean different 
 H2C the *fixed* hotend is extruder index `1` and physical ID `1`; the *rack* is extruder index
 `0` and physical IDs `16..=21`. Passing an index where an ID belongs is the entire bug class
 this function exists to prevent.
+
+`layout` is the model's [`NozzleLayout`](../quirks/index.md#nozzlelayout), which sets the dock range
+([`NozzleLayout::rack_nozzle_ids`]: `16..=21` on an H2C, `16..=24` on an H3C). On a rack with
+no fixed hotend (H3C) there is only the rack extruder `0`, so extruder `1` is refused.
 
 **Unverified on hardware here** — no H2C is available. Every value above is taken from
 bambuddy's hardware-measured constants; see `reference/03_mqtt_telemetry.md` for the

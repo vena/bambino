@@ -162,6 +162,14 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
 
   Door-open check support — see [`ModelQuirks::door_open_check_support`](../../quirks/index.md#modelquirks).
 
+- <span id="capabilities-door-open-check-slow-down-support"></span>`fn door_open_check_slow_down_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Door-open check slow-down mode support — see [`ModelQuirks::door_open_check_slow_down_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-non-visual-air-print-detect-support"></span>`fn non_visual_air_print_detect_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Non-visual air-printing detection (`air_printing_detection`) support — see [`ModelQuirks::non_visual_air_print_detect_support`](../../quirks/index.md#modelquirks).
+
 - <span id="capabilities-idle-heating-protection-support"></span>`fn idle_heating_protection_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 
   Idle heating protection support — see [`ModelQuirks::idle_heating_protection_support`](../../quirks/index.md#modelquirks).
@@ -173,6 +181,10 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
 - <span id="capabilities-pa-calibration-auto-support"></span>`fn pa_calibration_auto_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 
   Auto mode for per-job flow dynamics calibration — see [`ModelQuirks::pa_calibration_auto_support`](../../quirks/index.md#modelquirks).
+
+- <span id="capabilities-internal-model-read-support"></span>`fn internal_model_read_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  File-tunnel reads of internal-storage models — see [`ModelQuirks::internal_model_read_support`](../../quirks/index.md#modelquirks).
 
 - <span id="capabilities-pa-mode-support"></span>`fn pa_mode_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 

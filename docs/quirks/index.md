@@ -33,7 +33,7 @@ models.
   - [`decode_fan_percentage`](#decode-fan-percentage)
   - [`fan_step_to_percentage`](#fan-step-to-percentage)
 - [Constants](#constants)
-  - [`RACK_NOZZLE_IDS`](#rack-nozzle-ids)
+  - [`RACK_NOZZLE_ID_BASE`](#rack-nozzle-id-base)
 
 ## Quick Reference
 
@@ -50,7 +50,7 @@ models.
 | [`Support`](#support) | enum | How a capability answer was reached — the printer's own report, an inference, or a default. |
 | [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`](#fan-step-to-percentage). |
 | [`fan_step_to_percentage`](#fan-step-to-percentage) | fn | Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS]. |
-| [`RACK_NOZZLE_IDS`](#rack-nozzle-ids) | const | Nozzle ids of a tool changer's six rack slots (H2C) [REF-THER-DECODE]. |
+| [`RACK_NOZZLE_ID_BASE`](#rack-nozzle-id-base) | const | Physical nozzle id of a tool changer's first rack dock; dock `n` (from 0) is `RACK_NOZZLE_ID_BASE + n` [REF-THER-DECODE]. |
 
 ## Modules
 
@@ -402,11 +402,49 @@ must adapt to.
 
 - <span id="modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
-  Returns the number of physical hotends: `1` single, `2` IDEX, `7` on the H2C's rack (1 fixed + 6 interchangeable).
+  Returns the number of physical hotends: `1` single, `2` IDEX, `7` on the H2C's rack (1 fixed + 6 interchangeable), `9` on the H3C's.
 
 - <span id="modelquirks-has-nozzle-rack"></span>`fn has_nozzle_rack(&self) -> bool`
 
-  Returns true if the model mounts its hotends from a swappable tool-changer rack (H2C) — see [`NozzleLayout::Rack`](#nozzlelayout).
+  Returns true if the model mounts its hotends from a swappable tool-changer rack (H2C, H3C) — see [`NozzleLayout::Rack`](#nozzlelayout).
+
+- <span id="modelquirks-rack-nozzle-ids"></span>`fn rack_nozzle_ids(&self) -> Option<core::ops::RangeInclusive<u8>>`
+
+  Returns the physical nozzle ids of this model's rack docks, or `None` without a rack.
+
+  `RACK_NOZZLE_ID_BASE ..= RACK_NOZZLE_ID_BASE + docks - 1`: `16..=21` on the H2C, `16..=24` on the H3C.
+
+- <span id="modelquirks-external-spool-ids"></span>`fn external_spool_ids(&self) -> core::ops::RangeInclusive<u8>`
+
+  Returns the ids this model's external spool inputs report: `247..=255` on the H3C (one per rack dock), `254..=255` elsewhere.
+
+  The model-free `ams::ids::is_external_spool_id` predicate answers only `254`/`255`; use this
+  wherever the model is known.
+
+- <span id="modelquirks-is-external-spool-id"></span>`fn is_external_spool_id(&self, id: u8) -> bool`
+
+  Returns true if `id` names one of this model's external spool inputs, per [`external_spool_ids`](#modelquirks).
+
+- <span id="modelquirks-external-spool-rack-address"></span>`fn external_spool_rack_address(&self, id: u8) -> Option<u8>`
+
+  Returns the rack address the external input `id` feeds, `255 - id`, or `None` unless this model has a per-dock input there.
+
+  Only a rack with no fixed hotend (the H3C) has per-hotend inputs. BambuStudio's
+  `DevAmsTray::get_nozzle_addr_id` (`DevFilaSystem.cpp`), `EXT_SPOOL` branch.
+
+- <span id="modelquirks-external-spool-nozzle-id"></span>`fn external_spool_nozzle_id(&self, id: u8) -> Option<u8>`
+
+  Returns the physical nozzle id of the hotend the external input `id` feeds, `RACK_NOZZLE_ID_BASE + (255 - id)`, or `None` as for [`external_spool_rack_address`](#modelquirks).
+
+  `247` feeds nozzle `24` and `255` feeds nozzle `16` on the H3C. BambuStudio's
+  `DevAmsTray::get_nozzle_pos_id` (`DevFilaSystem.cpp`), `EXT_SPOOL` branch.
+
+- <span id="modelquirks-external-input-source"></span>`fn external_input_source(&self, id: u8) -> Option<crate::ams::MaterialSource>` — [`MaterialSource`](../ams/mapping/index.md#materialsource)
+
+  Returns the `ams_mapping2` feed source for the external input `id`, or `None` if this model has no such input.
+
+  `Some` for `254..=255` on any model, plus `247..=253` on the H3C. The source's entry is
+  `{ams_id: id, slot_id: 0}`, as BambuStudio builds it for an external tray.
 
 - <span id="modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../ams/mapping/index.md#amspoolcomposition)
 
@@ -479,11 +517,20 @@ must adapt to.
 
   Whether `id` addresses a nozzle on this model, as `M104 T<id>` and the print-job nozzle mapping use it.
 
-  On a tool changer ([`has_nozzle_rack`](#modelquirks), H2C) that is the fixed
-  hotend `0` or a rack slot in [`RACK_NOZZLE_IDS`](#rack-nozzle-ids) — *not* `0..physical_nozzle_count()`,
-  even though that count is `7` there. Elsewhere it is `0..physical_nozzle_count()`.
+  On a tool changer ([`has_nozzle_rack`](#modelquirks), H2C and H3C) that is `0` or
+  a dock id in [`rack_nozzle_ids`](#modelquirks) (`16..=21` on the H2C, `16..=24` on
+  the H3C) — *not* `0..physical_nozzle_count()`, even though that count is `7` or `9` there.
+  Elsewhere it is `0..physical_nozzle_count()`.
 
-  `reference/04_toolhead_thermal_motion.md` §4 confirms `16..=21` for the rack slots'
+  **`0` stays valid on every rack model, the H3C included, though the H3C has no fixed
+  hotend** and its telemetry lists only ids `16..=24`. `0` addresses the extruder, meaning
+  whichever hotend is currently mounted: BambuStudio's own H3C end G-code (`Bambu Lab H3C 0.4
+  nozzle template machine_end_gcode.json`) sends `M104 S0 T0`, Studio's main temperature
+  control sends `set_nozzle_temp` with `extruder_index` 0 (`MAIN_EXTRUDER_ID`), and bambuddy
+  defaults to `M104 T0`. A nonzero `M104 T0` on an H3C has not been captured; the
+  temperature is clamped to `nozzle_temp_max` regardless.
+
+  `reference/04_toolhead_thermal_motion.md` §4 confirms `16..=21` for the H2C rack slots'
   telemetry `stat` field only, not that a write to a passively stored tool does anything, so
   this is a permissive address check, not a statement about effect.
 
@@ -499,16 +546,17 @@ must adapt to.
 
   Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
 
-- <span id="modelquirks-has-auxiliary-left2-fan"></span>`fn has_auxiliary_left2_fan(&self) -> bool`
+- <span id="modelquirks-has-auxiliary2-fan"></span>`fn has_auxiliary2_fan(&self) -> bool`
 
-  Returns true if the model has a second left-side auxiliary fan (port 10) [REF-CLIM-FANS].
+  Returns true if the model has a second auxiliary fan (port 10) [REF-CLIM-FANS].
 
-  Wire-labeled "right" but confirmed a left-side fan — see `FanTarget::AuxiliaryLeft2`'s doc
-  comment, issue #60.
+  Its side is per model: right on the X2D, left on the P2S; see `FanTarget::Auxiliary2`.
 
-- <span id="modelquirks-has-auxiliary-left-fan"></span>`fn has_auxiliary_left_fan(&self) -> bool`
+- <span id="modelquirks-has-auxiliary-fan"></span>`fn has_auxiliary_fan(&self) -> bool`
 
-  Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
+  Returns true if the model has a primary auxiliary fan (port 2) [REF-CLIM-FANS].
+
+  Its side is per model: left on the X2D, right on the P2S; see `FanTarget::Auxiliary`.
 
   Every model except A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan), P1P
   (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) and the plain X1
@@ -685,6 +733,36 @@ must adapt to.
   is to show that option in the Send dialog (`SelectMachine.cpp`). No model rule exists,
   so nothing reported means `Assumed(false)`, always the case on P1 and A1, which send no
   `fun2`.
+
+- <span id="modelquirks-door-open-check-slow-down-support"></span>`fn door_open_check_slow_down_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has the door-open check's slow-down mode, with its provenance.
+
+  Reported by `fun2` bit 27 only, BambuStudio's `is_support_door_open_check_slow_down`
+  (`DeviceManager.cpp`, `parse_new_info`); `MachineObject::command_set_door_open_check` says
+  never to push the mode to a firmware not reporting it. No model rule exists, so nothing
+  reported means `Assumed(false)`, always the case on P1 and A1, which send no `fun2`.
+
+- <span id="modelquirks-non-visual-air-print-detect-support"></span>`fn non_visual_air_print_detect_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer has the second, non-visual air-printing detection, with its provenance.
+
+  This is the `print_option` `air_printing_detection` setting (`cfg` bit 41), separate from
+  the `air_print_detect` one [`air_print_detect_support`](#modelquirks)
+  covers. Reported by `fun2` bit 32 only, BambuStudio's `is_support_detect`
+  (`DevPrintOptions.cpp`). No model rule exists, so nothing reported means
+  `Assumed(false)`.
+
+- <span id="modelquirks-internal-model-read-support"></span>`fn internal_model_read_support(&self, ctx: &QuirkContext<'_>) -> Support` — [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
+
+  Returns whether the printer serves file-tunnel reads of its internal-storage models, with its provenance.
+
+  Reported by `fun2` bit 17 only, BambuStudio's `is_support_model_internal_storage`
+  (`DeviceManager.cpp`, `parse_new_info`), which shows the Internal tab for models only when
+  it is set. Listing internal models works regardless; a printer with the bit clear answers
+  `SUB_FILE` and `FILE_DOWNLOAD` of one with `2` (`reference/08_file_service.md` §8.4,
+  single source). No model rule exists, so nothing reported means `Assumed(false)`, always
+  the case on P1 and A1, which send no `fun2`.
 
 - <span id="modelquirks-light-support"></span>`fn light_support(&self, node: LedNode, ctx: &QuirkContext<'_>) -> Support` — [`LedNode`](../types/control/index.md#lednode), [`QuirkContext`](context/index.md#quirkcontext), [`Support`](#support)
 
@@ -946,7 +1024,8 @@ enum NozzleLayout {
     Single,
     Dual,
     Rack {
-        nozzles: u8,
+        docks: u8,
+        fixed_hotend: bool,
     },
 }
 ```
@@ -965,7 +1044,8 @@ How a model's hotends are arranged.
 
 - **`Rack`**
 
-  Hotends mounted from a swappable tool-changer rack (H2C: 1 fixed + 6 rack hotends).
+  Hotends mounted from a swappable tool-changer rack, with or without a fixed hotend
+  (H2C: 6 rack docks + 1 fixed hotend; H3C: 9 rack docks, no fixed hotend).
   
   A rack model addresses nozzles by *physical ID* rather than by extruder index, and the two
   namespaces overlap in a way that makes an untranslated value silently wrong rather than
@@ -975,7 +1055,21 @@ How a model's hotends are arranged.
 
 - <span id="nozzlelayout-nozzle-count"></span>`fn nozzle_count(self) -> u8`
 
-  Returns the number of physical hotends, rack slots included.
+  Returns the number of physical hotends, rack docks and the fixed hotend included.
+
+- <span id="nozzlelayout-rack-nozzle-ids"></span>`fn rack_nozzle_ids(self) -> Option<core::ops::RangeInclusive<u8>>`
+
+  Returns the physical nozzle ids of a rack's docks, or `None` for a layout without a rack.
+
+  `RACK_NOZZLE_ID_BASE ..= RACK_NOZZLE_ID_BASE + docks - 1`: `16..=21` for 6 docks, `16..=24` for 9.
+
+- <span id="nozzlelayout-external-spool-ids"></span>`fn external_spool_ids(self) -> core::ops::RangeInclusive<u8>`
+
+  Returns the ids the layout's external spool inputs report in `vt_tray` / `vir_slot`.
+
+  A rack with no fixed hotend (the H3C) has one input per dock, ids `256 - docks ..= 255`
+  (`247..=255` for 9 docks). Every other layout answers `254..=255`, the single-nozzle main
+  and IDEX deputy holders; the H2C's per-hotend inputs are unrecorded, so it is not widened.
 
 #### Trait Implementations
 
@@ -1101,10 +1195,10 @@ Implements standard mathematical rounding logic: `Round(Step * 100 / 15)`.
 
 ## Constants
 
-### `RACK_NOZZLE_IDS`
+### `RACK_NOZZLE_ID_BASE`
 ```rust
-const RACK_NOZZLE_IDS: core::ops::RangeInclusive<u8>;
+const RACK_NOZZLE_ID_BASE: u8 = 16u8;
 ```
 
-Nozzle ids of a tool changer's six rack slots (H2C) [REF-THER-DECODE].
+Physical nozzle id of a tool changer's first rack dock; dock `n` (from 0) is `RACK_NOZZLE_ID_BASE + n` [REF-THER-DECODE].
 
