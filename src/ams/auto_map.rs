@@ -18,7 +18,8 @@
 //! For each filament and each loaded tray BambuStudio computes a distance, and picks the
 //! lowest. A tray of a different material is never picked (`type` is a hard condition). For the
 //! same material the distance is the colour distance (0 to 1000, CIELAB ΔE76 combined with the
-//! alpha difference; see [`color_distance`]) plus 0 when the preset (`setting_id`) matches, 10000
+//! alpha difference; see [`color_distance`]), plus 2000 for a multi-colour tray
+//! (`kMultiColorPenalty`, `DevMapping.cpp`), plus 0 when the preset (`setting_id`) matches, 10000
 //! when only the filament class (`filament_id`, the file's `tray_info_idx` against the tray's)
 //! matches, and 20000 otherwise. So preset beats class beats colour.
 //!
@@ -37,11 +38,6 @@
 //!
 //! # Differences from BambuStudio
 //!
-//! - **Index versus key.** BambuStudio's loop reads `tray_filaments[picked_tar_idx]` where
-//!   `tray_filaments` is a `std::map` keyed by the tray's flat index and `picked_tar_idx` is a
-//!   column position. Whenever the two differ (any unit but the first, any gap), `operator[]`
-//!   inserts or reads the wrong tray in the tie-break. This port compares the tray the column
-//!   names.
 //! - **Retry order.** BambuStudio tries the used-tray retry for a filament as soon as that
 //!   filament finds nothing unused, before later filaments are looked at. This port finishes the
 //!   unused-tray pass over every remaining filament first, which is what its comments describe.
@@ -102,6 +98,13 @@ const COLOR_DISTANCE_MAX: f32 = 1000.0;
 const CLASS_DISTANCE_OFFSET: f32 = 10_000.0;
 /// Added when only the material matches, BambuStudio's `kTypeDistanceOffset`.
 const TYPE_DISTANCE_OFFSET: f32 = 20_000.0;
+/// Added when the tray holds a multi-colour filament, BambuStudio's `kMultiColorPenalty`
+/// (`DevMapping.cpp`), so a single-colour tray wins over a gradient one of the same material.
+const MULTI_COLOR_PENALTY: f32 = 2000.0;
+// BambuStudio asserts the same orderings: the penalty outweighs any colour distance but never
+// reaches the class offset, so it can't change which of preset, class or type a pair falls in.
+const _: () = assert!(MULTI_COLOR_PENALTY > COLOR_DISTANCE_MAX);
+const _: () = assert!(COLOR_DISTANCE_MAX + MULTI_COLOR_PENALTY < CLASS_DISTANCE_OFFSET);
 /// A used tray is a candidate again only below this distance.
 const REUSE_DISTANCE: f32 = 0.0001;
 /// A `u8` channel's range, to scale it into `0.0..=1.0`.
@@ -270,6 +273,8 @@ struct Candidate {
     setting_id: String,
     /// Percent remaining, `-1` when the firmware reports none.
     remain: i32,
+    /// Whether the tray holds a multi-colour filament (`cols` lists more than one colour).
+    multi_color: bool,
 }
 
 /// The candidates of a single-nozzle printer: every loaded AMS tray, in tray order.
@@ -405,6 +410,7 @@ fn candidate(order: u16, source: MaterialSource, tray: &AmsTray, material: &str)
         filament_id: info_idx.to_string(),
         setting_id: setting_id.to_string(),
         remain: tray.remain.unwrap_or(-1),
+        multi_color: tray.cols.as_ref().is_some_and(|cols| cols.len() > 1),
     }
 }
 
@@ -512,6 +518,9 @@ fn pair_distance(wanted: &Wanted<'_>, tray: &Candidate) -> Option<f32> {
         return None;
     }
     let mut distance = color_distance(wanted.color, tray.color);
+    if tray.multi_color {
+        distance += MULTI_COLOR_PENALTY;
+    }
     let sub_class = !wanted.setting_id.is_empty() && wanted.setting_id == tray.setting_id;
     if !sub_class {
         distance += if same_class(wanted.filament_id, &tray.filament_id) {
@@ -525,14 +534,17 @@ fn pair_distance(wanted: &Wanted<'_>, tray: &Candidate) -> Option<f32> {
 
 /// BambuStudio's `_prefer_tray_by_remain`: whether `candidate` should replace `picked` on an exact tie.
 ///
-/// Only for an exact class match, and only for a tray that reports filament left: an unknown or
-/// empty `picked` yields to any `candidate` that reports some, and `candidate` never wins by
-/// reporting none.
+/// Only for an exact class match, and only for a `candidate` that reports filament left. An
+/// unknown `picked` (`remain < 0`) is kept, as in BambuStudio; an empty one (`0`) yields to any
+/// such `candidate`, and otherwise the one with less filament left wins.
 fn prefer_by_remain(wanted: &Wanted<'_>, candidate: &Candidate, picked: &Candidate) -> bool {
     if !same_class(wanted.filament_id, &candidate.filament_id) || candidate.remain <= 0 {
         return false;
     }
-    picked.remain <= 0 || candidate.remain < picked.remain
+    if picked.remain < 0 {
+        return false;
+    }
+    picked.remain == 0 || candidate.remain < picked.remain
 }
 
 /// Matches `wanted` against `trays` greedily, returning each filament's tray index and distance.

@@ -197,9 +197,14 @@ fn test_remain_tie_break_prefers_less_filament() {
     );
     // Unknown or empty remain keeps the lowest slot first...
     assert_eq!(pick(&trays([None, Some(-1), Some(0)])), [standard(0, 0)]);
-    // ...but a tray that reports some beats one that reports none.
+    // ...and an unknown picked tray is kept even when a later one reports some (#663).
     assert_eq!(
         pick(&trays([Some(-1), Some(40), Some(0)])),
+        [standard(0, 0)]
+    );
+    // A picked tray at 0 yields to one that reports some.
+    assert_eq!(
+        pick(&trays([Some(0), Some(40), Some(60)])),
         [standard(0, 1)]
     );
     // A tray reporting 0 is never deliberately preferred.
@@ -207,6 +212,18 @@ fn test_remain_tie_break_prefers_less_filament() {
         pick(&trays([Some(30), Some(0), Some(60)])),
         [standard(0, 0)]
     );
+}
+
+#[test]
+fn test_single_colour_tray_beats_a_closer_gradient_tray() {
+    let mut gradient = tray(0, "PLA", RED, "", None);
+    gradient.cols = Some(vec!["FF0000FF".into(), "0000FFFF".into()]);
+    let mut single = tray(1, "PLA", BLUE, "", None);
+    single.cols = Some(vec!["0000FFFF".into()]);
+    let ams = report(vec![unit("0", None, vec![gradient, single])]);
+    let file = plate(vec![filament(1, "PLA", "#FF0000", "")], None);
+    let result = derive_ams_mapping(&file, Some(&ams), &[], false);
+    assert_eq!(sources(&result), [standard(0, 1)]);
 }
 
 /// A candidate for the internal matcher.
@@ -224,6 +241,7 @@ fn candidate_for(
         filament_id: filament_id.into(),
         setting_id: setting_id.into(),
         remain: -1,
+        multi_color: false,
     }
 }
 
