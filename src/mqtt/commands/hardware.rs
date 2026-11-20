@@ -727,7 +727,7 @@ pub struct SntpPayload {
     pub us: u32,
     /// The UTC offset in effect now, as `"UTC+HH:MM"` or `"UTC-HH:MM"`.
     pub tz: String,
-    /// Sender kind, always `1` — see [`SNTP_SRC_STUDIO`].
+    /// Sender kind, always `1`: BambuStudio's value, the only one documented.
     pub src: u8,
     /// Connection path, always `2` (LAN only).
     pub path: u8,
