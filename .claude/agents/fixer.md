@@ -2,6 +2,15 @@
 name: fixer
 description: Implements one planned batch of backlog fixes handed off by the backlog skill. Edits and runs tests only; never commits, pushes, or makes design decisions. Use only from the delegation flow in .claude/skills/backlog/fixing.md.
 model: sonnet
+mcpServers:
+  # Inline, not a reference: a fixer gets its own lean-ctx process instead of sharing the
+  # parent's, whose ctx_shell cwd persists across every agent on that connection. The name
+  # must differ from the inherited `lean-ctx`: a same-named inline server is ignored.
+  - lean-ctx-fixer:
+      type: stdio
+      command: /Users/vena/.local/bin/lean-ctx
+# Withhold the inherited, shared server so every ctx_* call goes to the fixer's own.
+disallowedTools: mcp__lean-ctx
 ---
 
 You implement one batch of GitHub Issues that the calling session has already planned. The handoff names the issues, the files you may touch, and any decision already made. Bodies are self-contained: run `gh issue view <N>` for each one.
