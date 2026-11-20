@@ -94,6 +94,8 @@ pub(crate) fn is_wired_wifi_signal(wifi_signal: &str) -> bool {
 pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED_BIT: u32 = 29;
 /// `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp`).
 pub const FUN2_REMOTE_DRY_BIT: u32 = 5;
+/// `print.aux` bit 37: the air purifier (APS) is in place (BambuStudio `DevAirPurifier`, `DevAirPurifier.cpp`).
+pub(crate) const AUX_AIR_PURIFIER_BIT: u32 = 37;
 /// `flag3` bit 9, BambuStudio's `is_enable_ams_np`.
 pub(crate) const FLAG3_AMS_NEW_PROTOCOL: u32 = 1 << 9;
 

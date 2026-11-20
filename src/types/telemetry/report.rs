@@ -768,6 +768,15 @@ impl PrinterTelemetry {
         })
     }
 
+    /// Whether this frame's `aux` bit 37 reports an air purifier (APS) fitted (BambuStudio `DevAirPurifier`).
+    ///
+    /// `None` when the frame carries no `aux` (or an empty one), as BambuStudio leaves its
+    /// presence flag untouched then. Distinct from `Some(false)`, a reported absence.
+    #[must_use]
+    pub fn air_purifier_present(&self) -> Option<bool> {
+        bits::hex_bit(self.aux.as_deref()?, bits::AUX_AIR_PURIFIER_BIT)
+    }
+
     /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
     ///
     /// Used by X1 series models where the door sensor is wired to the home_flag bitmask.

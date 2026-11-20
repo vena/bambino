@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::diagnostics::CtcTelemetry;
 use super::temps::{HeaterTemps, unpack_temperature};
+use crate::mqtt::commands::PurifierGear;
 
 /// Device hardware state properties containing physical tooling descriptions.
 ///
@@ -50,6 +51,68 @@ pub struct DeviceTelemetry {
     /// The bed-temperature decode deliberately does not read it.
     #[serde(default)]
     pub bed_temp: Option<u32>,
+
+    /// Air purifier (APS) state; present only while the accessory reports.
+    ///
+    /// Whether the accessory is fitted is `print.aux` bit 37, not this object's presence.
+    #[serde(default)]
+    pub aps: Option<AirPurifierTelemetry>,
+}
+
+/// Air purifier (APS) state from `device.aps`, per BambuStudio's `DevAirPurifier.cpp`.
+///
+/// Leaves out the filter fields (`f_type`, `f_use`, `f_to`) only ha-bambulab reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AirPurifierTelemetry {
+    /// Accessory type code (`type` on the wire); meaning unrecorded.
+    #[serde(
+        default,
+        rename = "type",
+        deserialize_with = "super::loose::deserialize_permissive_opt_int"
+    )]
+    pub kind: Option<i32>,
+    /// Particulate reading (`pm`); unit unrecorded.
+    #[serde(
+        default,
+        deserialize_with = "super::loose::deserialize_permissive_opt_int"
+    )]
+    pub pm: Option<i32>,
+    /// Gear code (`gear`); decode with [`AirPurifierTelemetry::purifier_gear`].
+    #[serde(
+        default,
+        deserialize_with = "super::loose::deserialize_permissive_opt_int"
+    )]
+    pub gear: Option<i32>,
+    /// Fan speed (`rpm`).
+    #[serde(
+        default,
+        deserialize_with = "super::loose::deserialize_permissive_opt_int"
+    )]
+    pub rpm: Option<i32>,
+}
+
+impl AirPurifierTelemetry {
+    /// The reported gear as a [`PurifierGear`]; `None` when absent or not a code BambuStudio defines.
+    #[must_use]
+    pub fn purifier_gear(&self) -> Option<PurifierGear> {
+        PurifierGear::from_code(self.gear?)
+    }
+}
+
+impl Mergeable for AirPurifierTelemetry {
+    /// Merges a freshly-parsed `AirPurifierTelemetry` into `self`, each field keeping its cached value when absent.
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            kind,
+            pm,
+            gear,
+            rpm,
+        } = incoming;
+        keep_new(&mut self.kind, kind);
+        keep_new(&mut self.pm, pm);
+        keep_new(&mut self.gear, gear);
+        keep_new(&mut self.rpm, rpm);
+    }
 }
 
 impl Mergeable for DeviceTelemetry {
@@ -87,6 +150,7 @@ impl Mergeable for DeviceTelemetry {
             ext_tool,
             fire_ext,
             bed_temp,
+            aps,
         } = incoming;
         merge_opt(&mut self.nozzle, nozzle.as_ref());
         merge_opt(&mut self.extruder, extruder.as_ref());
@@ -96,6 +160,7 @@ impl Mergeable for DeviceTelemetry {
         merge_opt(&mut self.ext_tool, ext_tool.as_ref());
         keep_new(&mut self.fire_ext, fire_ext);
         keep_new(&mut self.bed_temp, bed_temp);
+        merge_opt(&mut self.aps, aps.as_ref());
     }
 }
 

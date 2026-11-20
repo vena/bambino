@@ -785,6 +785,18 @@ Three more settings read back from `cfg` like the `print_option` ones, each with
 
 BambuStudio shows the door-open check in its Safety Options dialog on models with `support_safety_options: true` (X2D, P2S) and in Print Options elsewhere. Both send the same command.
 
+##### Air Purifier (APS)
+An accessory reporting through `print.aux` and `print.device.aps`, from BambuStudio's `DevAirPurifier.cpp`/`.hpp` (`MachineObject::parse_new_info`); ha-bambulab's `pybambu/air_purifier.py` agrees on presence, `device.aps` and the command. bambuddy has no purifier code. Which printers accept the accessory is not recorded.
+
+- **Presence**: `print.aux` (hex string) bit 37.
+- **State**: `print.device.aps` with integers `type`, `pm`, `gear`, `rpm`. ha-bambulab also reads `f_type`, `f_use`, `f_to`; bambino leaves those out until a second source agrees.
+- **Command**: `{"print": {"command": "part_control", "module": "aps", "action": "2"}}`. `action` is a **string**, `std::to_string(gear)`. Gears (`AIR_PURIFIER_GEAR`): `0` off, `1` silent, `2` standard, `3` max, `15` auto.
+
+Wire framing not verified on hardware.
+
+##### Setting the Clock (`sntp`)
+`{"system": {"command": "sntp", "second": u64, "us": u32, "tz": "UTC+HH:MM", "src": 1, "path": 2}}` (`MachineObject::command_set_sntp`). `tz` is the offset in effect now, formatted by `get_timezone_utc_hm` (`libslic3r/Utils.hpp`): `UTC+00:00`, `UTC-03:30`. `src` is `1` in BambuStudio, the only value documented. `path` is `1` internet, `2` LAN only, `3` USB wired. BambuStudio sends it on every connect and ignores an `err_code` in the reply (`MachineObject::parse_json`), so an unsupporting printer may answer with an error. Which firmware honours it is not recorded. The clock is the one behind `hms[].ts_unix` (`07_diagnostics_hms.md` §7.1). Wire framing not verified on hardware.
+
 ##### Camera Detectors (`xcam_control_set`)
 Switches one camera detector. The wrapper is `xcam`, not `print` (BambuStudio `DevPrintOptions::command_xcam_control`; bambuddy's `set_xcam_option` builds the same payload):
 ```json

@@ -35,8 +35,9 @@ pub use hardware::{
     AirPrintDetectRequest, AirPurificationRequest, AirductMode, AirductRequest,
     AutoRecoveryRequest, BuzzerRequest, DoorOpenCheckRequest, FilamentBackupRequest,
     FilamentTangleDetectRequest, FlashTiming, IdleHeatingProtectionRequest, LedCtrlRequest,
-    NonVisualAirPrintDetectRequest, NozzleBlobDetectRequest, PromptSoundRequest,
-    SmartNozzleBlobDetectRequest, StoreSentFilesRequest, XcamControlRequest,
+    NonVisualAirPrintDetectRequest, NozzleBlobDetectRequest, PartControlRequest,
+    PromptSoundRequest, PurifierGear, SmartNozzleBlobDetectRequest, SntpRequest,
+    StoreSentFilesRequest, XcamControlRequest,
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, JobFileLocation, NozzleRack, PrintJobConfig,
@@ -906,6 +907,71 @@ mod tests {
             serde_json::to_value(StoreSentFilesRequest::new(false, 1)).unwrap(),
             serde_json::json!({"system": {"command": "print_cache_set", "sequence_id": "1", "config": false}})
         );
+    }
+
+    /// `part_control` for the air purifier: `action` is a JSON string of the gear code.
+    #[test]
+    fn test_part_control_air_purifier_json() {
+        for (gear, action) in [
+            (PurifierGear::Off, "0"),
+            (PurifierGear::Silent, "1"),
+            (PurifierGear::Standard, "2"),
+            (PurifierGear::Max, "3"),
+            (PurifierGear::Auto, "15"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(PartControlRequest::air_purifier(gear, 7)).unwrap(),
+                serde_json::json!({"print": {
+                    "command": "part_control", "sequence_id": "7",
+                    "module": "aps", "action": action
+                }})
+            );
+            assert_eq!(PurifierGear::from_code(i32::from(gear.code())), Some(gear));
+        }
+        assert_eq!(PurifierGear::from_code(4), None);
+        assert_eq!(PurifierGear::from_code(-1), None);
+    }
+
+    /// `sntp` as BambuStudio's `command_set_sntp` builds it, with `get_timezone_utc_hm`'s `tz`.
+    #[test]
+    fn test_sntp_request_json() {
+        let json = |req: SntpRequest| serde_json::to_value(req).unwrap();
+        assert_eq!(
+            json(SntpRequest::new(1_700_000_000, 250_000, 120, 3).unwrap()),
+            serde_json::json!({"system": {
+                "command": "sntp", "sequence_id": "3", "second": 1_700_000_000u64,
+                "us": 250_000, "tz": "UTC+02:00", "src": 1, "path": 2
+            }})
+        );
+        assert_eq!(
+            json(SntpRequest::new(1, 0, -210, 3).unwrap())["system"]["tz"],
+            "UTC-03:30"
+        );
+        assert_eq!(
+            json(SntpRequest::new(1, 0, 0, 3).unwrap())["system"]["tz"],
+            "UTC+00:00"
+        );
+        assert_eq!(
+            json(SntpRequest::new(1, 999_999, 840, 3).unwrap())["system"]["tz"],
+            "UTC+14:00"
+        );
+        assert_eq!(
+            json(SntpRequest::new(1, 0, -720, 3).unwrap())["system"]["tz"],
+            "UTC-12:00"
+        );
+    }
+
+    #[test]
+    fn test_sntp_request_refuses_out_of_range_arguments() {
+        for (micros, offset) in [(1_000_000, 0), (0, -721), (0, 841)] {
+            assert!(
+                matches!(
+                    SntpRequest::new(1, micros, offset, 3),
+                    Err(crate::error::Error::InvalidArgument(_))
+                ),
+                "{micros} us, {offset} min"
+            );
+        }
     }
 
     /// `xcam_control_set` as BambuStudio's `command_xcam_control` builds it.

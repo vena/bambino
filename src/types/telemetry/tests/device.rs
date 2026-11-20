@@ -426,6 +426,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
         ext_tool: None,
         fire_ext: None,
         bed_temp: None,
+        aps: None,
     };
 
     let partial = DeviceTelemetry {
@@ -440,6 +441,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
         ext_tool: None,
         fire_ext: None,
         bed_temp: None,
+        aps: None,
     };
 
     cached.merge_from(&partial);
@@ -904,4 +906,55 @@ fn test_nozzle_info_is_installed() {
         ..empty_h2c.clone()
     };
     assert!(!empty_verbose.is_installed());
+}
+
+#[test]
+fn test_air_purifier_present_reads_aux_bit_37() {
+    // 0x20_0000_0000 is bit 37; 0x10_0000_0000 is bit 36.
+    assert_eq!(
+        parse_print(r#"{"print":{"aux":"2000000000"}}"#).air_purifier_present(),
+        Some(true)
+    );
+    assert_eq!(
+        parse_print(r#"{"print":{"aux":"1000000000"}}"#).air_purifier_present(),
+        Some(false)
+    );
+    assert_eq!(
+        parse_print(r#"{"print":{"aux":"3a"}}"#).air_purifier_present(),
+        Some(false),
+        "a short aux reads bit 37 clear"
+    );
+    assert_eq!(parse_print(r#"{"print":{}}"#).air_purifier_present(), None);
+}
+
+#[test]
+fn test_device_aps_parses_and_decodes_gear() {
+    use crate::mqtt::commands::PurifierGear;
+    let json = r#"{"print":{"device":{"aps":{"type":1,"pm":12,"gear":"2","rpm":900,"f_use":5}}}}"#;
+    let report = parse_report(json);
+    let aps = report
+        .device()
+        .and_then(|d| d.aps.as_ref())
+        .expect("aps parsed");
+    assert_eq!(aps.kind, Some(1));
+    assert_eq!(aps.pm, Some(12));
+    assert_eq!(aps.gear, Some(2));
+    assert_eq!(aps.rpm, Some(900));
+    assert_eq!(aps.purifier_gear(), Some(PurifierGear::Standard));
+
+    let unknown: DeviceTelemetry = serde_json::from_str(r#"{"aps":{"gear":7}}"#).unwrap();
+    assert_eq!(unknown.aps.unwrap().purifier_gear(), None);
+}
+
+#[test]
+fn test_device_aps_merge_keeps_absent_fields() {
+    let mut cached: DeviceTelemetry =
+        serde_json::from_str(r#"{"aps":{"type":1,"pm":12,"gear":2,"rpm":900}}"#).unwrap();
+    let partial: DeviceTelemetry = serde_json::from_str(r#"{"aps":{"pm":40}}"#).unwrap();
+    cached.merge_from(&partial);
+    let aps = cached.aps.unwrap();
+    assert_eq!(
+        (aps.kind, aps.pm, aps.gear, aps.rpm),
+        (Some(1), Some(40), Some(2), Some(900))
+    );
 }

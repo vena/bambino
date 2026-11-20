@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::{CommandHandle, PrinterClient};
-use crate::mqtt::commands::AirductMode;
+use crate::mqtt::commands::{AirductMode, PurifierGear, SntpRequest};
 use crate::types::control::{BuzzerMode, FanTarget, LedNode};
 #[cfg(not(feature = "std"))]
 use alloc::string as alloc_string;
@@ -104,6 +104,61 @@ where
         })?;
         self.dispatch(|seq| crate::mqtt::commands::AirductRequest::new(mode, seq))
             .await
+    }
+
+    /// Sets the air purifier (APS) gear.
+    ///
+    /// Refused unless the printer has reported the accessory fitted (`print.aux` bit 37, see
+    /// [`air_purifier_present()`](Self::air_purifier_present)), so poll telemetry after
+    /// connecting first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when `aux` bit 37 is clear, or when no `aux` has been reported.
+    pub async fn set_air_purifier_gear(
+        &mut self,
+        gear: PurifierGear,
+    ) -> Result<CommandHandle, Error> {
+        require(self.air_purifier_present() == Some(true), || {
+            "air purifier not reported fitted by this printer".into()
+        })?;
+        self.dispatch(|seq| crate::mqtt::commands::PartControlRequest::air_purifier(gear, seq))
+            .await
+    }
+
+    /// Sets the printer's clock, as BambuStudio does on every connection.
+    ///
+    /// The caller supplies the time, since `no_std` targets have no wall clock; `micros` is the
+    /// part past `unix_seconds` and `utc_offset_minutes` the offset in effect at that time,
+    /// daylight saving included. Not sent automatically on connect. Sends BambuStudio's `src`
+    /// (`1`, the only documented value) and `path` `2` (LAN only).
+    ///
+    /// A LAN-only printer with no route to an NTP server otherwise keeps whatever clock it has,
+    /// and that clock stamps `hms[].ts_unix`, which `reference/07_diagnostics_hms.md` §7.1 says
+    /// is not guaranteed UTC.
+    ///
+    /// The command isn't ack-correlated: BambuStudio ignores an `err_code` in the reply
+    /// (`MachineObject::parse_json`), so a printer that doesn't support it may answer with an
+    /// error. Which firmware honours it is unrecorded.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when `micros` is 1,000,000 or more, or `utc_offset_minutes` is
+    /// outside -12:00 to +14:00.
+    pub async fn set_clock(
+        &mut self,
+        unix_seconds: u64,
+        micros: u32,
+        utc_offset_minutes: i32,
+    ) -> Result<CommandHandle, Error> {
+        // Built with a placeholder sequence id the closure replaces, so a bad argument is refused
+        // before anything is sent.
+        let mut request = SntpRequest::new(unix_seconds, micros, utc_offset_minutes, 0u64)?;
+        self.dispatch(|seq| {
+            request.system.sequence_id = seq.into();
+            request
+        })
+        .await
     }
 
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].

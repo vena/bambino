@@ -16,9 +16,9 @@ pub use control::{
     BuzzerMode, CalibrationOption, FanTarget, LedNode, LightMode, PrintSpeed, PrintStatus,
 };
 pub use telemetry::{
-    AirductCollection, AirductModeListEntry, AirductPart, AmsDryFanStatus, AmsDrySetting,
-    AmsDryStatus, AmsDrySubStatus, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit,
-    AmsUnitModel, AmsZone, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry, DeviceTelemetry,
+    AirPurifierTelemetry, AirductCollection, AirductModeListEntry, AirductPart, AmsDryFanStatus,
+    AmsDrySetting, AmsDryStatus, AmsDrySubStatus, AmsFilamentStep, AmsStatusReport, AmsTray,
+    AmsUnit, AmsUnitModel, AmsZone, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry, DeviceTelemetry,
     ExtToolTelemetry, ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry, LightReport,
     NetInfo, NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState, TelemetryReport,
     VirtualTray, XcamDetector, XcamSensitivity, XcamTelemetry, is_developer_mode,

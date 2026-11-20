@@ -1858,3 +1858,101 @@ async fn test_top_cover_none_without_stat_door_sensor() {
     assert_eq!(client.is_top_cover_open(), None);
     broker_task.await.expect("Broker task panicked");
 }
+
+/// The purifier setter is refused until `aux` bit 37 has been reported set, and `aux` is cached
+/// across frames that omit it.
+#[tokio::test]
+async fn test_air_purifier_gear_gated_on_aux_bit_37() {
+    use bambino::mqtt::commands::PurifierGear;
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H2D, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            // aux bit 37 clear.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","aux":"1000000000"}}"#,
+                )
+                .await;
+            // aux bit 37 set, with device.aps.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","aux":"2000000000","device":{"aps":{"type":1,"pm":3,"gear":2,"rpm":800}}}}"#,
+                )
+                .await;
+            // A frame without aux or aps changes neither.
+            reports
+                .publish(
+                    &mut server_stream,
+                    br#"{"print":{"command":"push_status","gcode_state":"IDLE"}}"#,
+                )
+                .await;
+            let sent = read_publish_payload(&mut server_stream).await;
+            assert_eq!(sent["print"]["command"], "part_control");
+            assert_eq!(sent["print"]["module"], "aps");
+            assert_eq!(sent["print"]["action"], "15");
+        })
+        .await;
+
+    // aux never reported.
+    assert_eq!(client.air_purifier_present(), None);
+    assert!(matches!(
+        client.set_air_purifier_gear(PurifierGear::Auto).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("aux clear");
+    assert_eq!(client.air_purifier_present(), Some(false));
+    assert!(matches!(
+        client.set_air_purifier_gear(PurifierGear::Auto).await,
+        Err(Error::ModelMismatch(_))
+    ));
+
+    client.poll_telemetry().await.expect("aux set");
+    assert_eq!(client.air_purifier_present(), Some(true));
+    let aps = client.air_purifier().expect("device.aps cached");
+    assert_eq!(aps.purifier_gear(), Some(PurifierGear::Standard));
+    assert_eq!(aps.rpm, Some(800));
+
+    client.poll_telemetry().await.expect("frame without aux");
+    assert_eq!(client.air_purifier_present(), Some(true));
+    assert_eq!(client.air_purifier().and_then(|a| a.pm), Some(3));
+    client
+        .set_air_purifier_gear(PurifierGear::Auto)
+        .await
+        .expect("reported bit lifts the gate");
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// `set_clock` sends `sntp` with the caller's time and refuses a bad argument before sending.
+#[tokio::test]
+async fn test_set_clock_sends_sntp_and_validates() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::P1S, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let sent = read_publish_payload(&mut server_stream).await;
+            assert_eq!(sent["system"]["command"], "sntp");
+            assert_eq!(sent["system"]["second"], 1_700_000_000u64);
+            assert_eq!(sent["system"]["us"], 5);
+            assert_eq!(sent["system"]["tz"], "UTC-03:30");
+            assert_eq!(sent["system"]["src"], 1);
+            assert_eq!(sent["system"]["path"], 2);
+        })
+        .await;
+
+    assert!(matches!(
+        client.set_clock(1, 1_000_000, 0).await,
+        Err(Error::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        client.set_clock(1, 0, 841).await,
+        Err(Error::InvalidArgument(_))
+    ));
+    client
+        .set_clock(1_700_000_000, 5, -210)
+        .await
+        .expect("sntp sent");
+    broker_task.await.expect("Broker task panicked");
+}

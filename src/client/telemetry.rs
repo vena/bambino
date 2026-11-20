@@ -17,8 +17,9 @@ use crate::quirks::context::light_bit;
 use crate::types::control::FanTarget;
 use crate::types::telemetry::merge::{keep_new, merge_keyed, merge_opt};
 use crate::types::telemetry::{
-    FULL_REPORT_MIN_KEYS, FanStrings, HeaterTemps, NozzleTemps, bits, decode_bed_temperatures,
-    decode_fan_percent, decode_nozzle_temperatures, print_key_count, unpack_temperature,
+    AirPurifierTelemetry, FULL_REPORT_MIN_KEYS, FanStrings, HeaterTemps, NozzleTemps, bits,
+    decode_bed_temperatures, decode_fan_percent, decode_nozzle_temperatures, print_key_count,
+    unpack_temperature,
 };
 use crate::types::{
     AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, SdcardState,
@@ -108,6 +109,9 @@ pub(crate) struct TelemetryCache {
     // `cfg` at all is a fixed property of the printer, and once it has, the `print_option`
     // getters read `cfg` alone.
     pub(crate) last_cfg: Option<String>,
+    // The top-level `print.aux` hex string, cached because incremental frames omit it. Its bit 37
+    // reports the air purifier fitted, which gates `set_air_purifier_gear`.
+    pub(crate) last_aux: Option<String>,
     // The OTA firmware version, from a `get_version` round trip rather than from telemetry —
     // several capabilities are gated on it, and a caller should not have to re-query per check.
     pub(crate) last_firmware: Option<String>,
@@ -431,6 +435,7 @@ where
         }
         keep_new(&mut self.core.cache.last_gcode_state, &print.gcode_state);
         keep_new(&mut self.core.cache.last_cfg, &print.cfg);
+        keep_new(&mut self.core.cache.last_aux, &print.aux);
         // A frame without the door field leaves the last observed state in place.
         if let Some(open) = print.door_state(self.quirks().door_sensor()) {
             self.core.cache.last_door_open = Some(open);
@@ -583,6 +588,25 @@ where
     /// `None` before any telemetry carried a `device` object, from either wire location.
     pub fn device(&self) -> Option<&DeviceTelemetry> {
         self.core.cache.last_device.as_ref()
+    }
+
+    /// Returns the air purifier (APS) state as of the last-observed `device.aps`.
+    ///
+    /// `None` until a `device` object carrying `aps` has been seen. Whether the accessory is
+    /// fitted is [`air_purifier_present()`](Self::air_purifier_present).
+    pub fn air_purifier(&self) -> Option<&AirPurifierTelemetry> {
+        self.core.cache.last_device.as_ref()?.aps.as_ref()
+    }
+
+    /// Returns whether an air purifier (APS) is fitted, from the last-observed `print.aux` bit 37.
+    ///
+    /// `None` until a frame carrying `aux` has been seen — distinct from `Some(false)`, a
+    /// reported absence. Which printers accept the accessory is not recorded.
+    pub fn air_purifier_present(&self) -> Option<bool> {
+        bits::hex_bit(
+            self.core.cache.last_aux.as_deref()?,
+            bits::AUX_AIR_PURIFIER_BIT,
+        )
     }
 
     /// Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

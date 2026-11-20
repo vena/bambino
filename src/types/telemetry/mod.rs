@@ -39,8 +39,9 @@ pub use ams::{
 };
 pub use bits::{FUN2_REMOTE_DRY_BIT, hex_bit};
 pub use device::{
-    AirductCollection, AirductModeListEntry, AirductPart, BedInfo, BedTelemetry, DeviceTelemetry,
-    ExtToolTelemetry, ExtruderCollection, ExtruderInfo, NozzleCollection, NozzleInfo,
+    AirPurifierTelemetry, AirductCollection, AirductModeListEntry, AirductPart, BedInfo,
+    BedTelemetry, DeviceTelemetry, ExtToolTelemetry, ExtruderCollection, ExtruderInfo,
+    NozzleCollection, NozzleInfo,
 };
 pub use diagnostics::{CtcInfo, CtcTelemetry, HmsEntry, IpcamTelemetry};
 pub(crate) use loose::{

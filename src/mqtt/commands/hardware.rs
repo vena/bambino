@@ -1,8 +1,14 @@
 //! Hardware control commands (LEDs, fans, airduct mode, buzzer, `print_option` settings).
 
+#[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
 use serde::Serialize;
 
 use super::ClampedTaskId;
+use crate::error::Error;
 use crate::types::control::{
     AirPurificationMode, BuzzerMode, DoorOpenCheck, LedNode, LightMode, NozzleBlobDetectMode,
     XcamHaltSensitivity, XcamModule,
@@ -608,4 +614,185 @@ impl BuzzerRequest {
             },
         }
     }
+}
+
+/// Air purifier (APS) fan speed, the `action` of `part_control` for module `aps` and the decoded `device.aps.gear`.
+///
+/// Values follow BambuStudio's `AIR_PURIFIER_GEAR` (`DeviceCore/DevAirPurifier.hpp`);
+/// ha-bambulab's `pybambu/air_purifier.py` sends the same codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PurifierGear {
+    /// Off (`0`).
+    Off = 0,
+    /// Silent, low speed (`1`).
+    Silent = 1,
+    /// Standard, mid speed (`2`).
+    Standard = 2,
+    /// Max, high speed (`3`).
+    Max = 3,
+    /// Automatic (`15`).
+    Auto = 15,
+}
+
+impl PurifierGear {
+    /// The gear's numeric code, as reported in `device.aps.gear`.
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// Decodes a `device.aps.gear` value; `None` for a code BambuStudio doesn't define.
+    #[must_use]
+    pub const fn from_code(code: i32) -> Option<Self> {
+        match code {
+            0 => Some(Self::Off),
+            1 => Some(Self::Silent),
+            2 => Some(Self::Standard),
+            3 => Some(Self::Max),
+            15 => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    /// The `action` string sent on the wire: the decimal code, as BambuStudio's `std::to_string(gear)`.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Off => "0",
+            Self::Silent => "1",
+            Self::Standard => "2",
+            Self::Max => "3",
+            Self::Auto => "15",
+        }
+    }
+}
+
+/// Sets a printer part's state; here the air purifier's gear.
+#[derive(Debug, Clone, Serialize)]
+pub struct PartControlPayload {
+    /// Wire command name, always `"part_control"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// The part addressed; `"aps"` for the air purifier.
+    pub module: &'static str,
+    /// The setting, a decimal string: a JSON string, not a number — see [`PurifierGear::as_wire`].
+    pub action: &'static str,
+}
+
+/// Sets the air purifier's gear (BambuStudio `DevAirPurifier`, `part_control` with module `aps`).
+pub type PartControlRequest = super::Print<PartControlPayload>;
+
+/// The `part_control` module name of the air purifier.
+pub(crate) const PART_CONTROL_MODULE_APS: &str = "aps";
+
+impl PartControlRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "part_control";
+
+    /// Builds a `part_control` request setting the air purifier's gear.
+    pub fn air_purifier(gear: PurifierGear, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self {
+            print: PartControlPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                module: PART_CONTROL_MODULE_APS,
+                action: gear.as_wire(),
+            },
+        }
+    }
+}
+
+/// `src` of `sntp`: the sender is BambuStudio (`1`), the only value documented.
+pub(crate) const SNTP_SRC_STUDIO: u8 = 1;
+/// `path` of `sntp`: LAN-only connection (`2`); BambuStudio's others are `1` internet and `3` USB wired.
+pub(crate) const SNTP_PATH_LAN: u8 = 2;
+/// Lowest accepted UTC offset for `sntp`, UTC-12:00, in minutes.
+pub(crate) const SNTP_MIN_UTC_OFFSET_MINUTES: i32 = -12 * 60;
+/// Highest accepted UTC offset for `sntp`, UTC+14:00, in minutes.
+pub(crate) const SNTP_MAX_UTC_OFFSET_MINUTES: i32 = 14 * 60;
+/// Microseconds in a second; `sntp`'s `us` must stay below it.
+pub(crate) const MICROS_PER_SECOND: u32 = 1_000_000;
+
+/// Sets the printer's clock.
+#[derive(Debug, Clone, Serialize)]
+pub struct SntpPayload {
+    /// Wire command name, always `"sntp"`.
+    pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
+    pub sequence_id: ClampedTaskId,
+    /// Unix time, whole seconds.
+    pub second: u64,
+    /// Microseconds past `second`, below 1,000,000.
+    pub us: u32,
+    /// The UTC offset in effect now, as `"UTC+HH:MM"` or `"UTC-HH:MM"`.
+    pub tz: String,
+    /// Sender kind, always `1` — see [`SNTP_SRC_STUDIO`].
+    pub src: u8,
+    /// Connection path, always `2` (LAN only).
+    pub path: u8,
+}
+
+/// Sets the printer's clock (BambuStudio `MachineObject::command_set_sntp`).
+///
+/// A LAN-only printer with no route to an NTP server keeps whatever clock it has, and that clock
+/// stamps `hms[].ts_unix`, which `reference/07_diagnostics_hms.md` §7.1 says is not guaranteed
+/// UTC. Sending this is how BambuStudio sets it.
+///
+/// BambuStudio ignores an `err_code` in the reply (`MachineObject::parse_json`), so a printer
+/// that doesn't support the command may answer with an error. Which firmware honours it is not
+/// recorded. Not in `ACK_CORRELATED_COMMANDS`.
+pub type SntpRequest = super::System<SntpPayload>;
+
+impl SntpRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "sntp";
+
+    /// Builds an `sntp` request for the given Unix time and the UTC offset in effect now.
+    ///
+    /// `src` is `1`, BambuStudio's value and the only documented one; `path` is `2` (LAN only).
+    /// The offset must be the one in force at `unix_seconds`, daylight saving included: the
+    /// printer stores it as a plain offset.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when `micros` is 1,000,000 or more, or when
+    /// `utc_offset_minutes` is outside -12:00 to +14:00.
+    pub fn new(
+        unix_seconds: u64,
+        micros: u32,
+        utc_offset_minutes: i32,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Result<Self, Error> {
+        if micros >= MICROS_PER_SECOND {
+            return Err(Error::InvalidArgument(
+                format!("sntp microseconds {micros} must be below {MICROS_PER_SECOND}").into(),
+            ));
+        }
+        if !(SNTP_MIN_UTC_OFFSET_MINUTES..=SNTP_MAX_UTC_OFFSET_MINUTES)
+            .contains(&utc_offset_minutes)
+        {
+            return Err(Error::InvalidArgument(
+                format!("UTC offset {utc_offset_minutes} min is outside -12:00 to +14:00").into(),
+            ));
+        }
+        Ok(Self {
+            system: SntpPayload {
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                second: unix_seconds,
+                us: micros,
+                tz: format_utc_offset(utc_offset_minutes),
+                src: SNTP_SRC_STUDIO,
+                path: SNTP_PATH_LAN,
+            },
+        })
+    }
+}
+
+/// Formats a UTC offset as BambuStudio's `get_timezone_utc_hm` does: `"UTC+HH:MM"`, or `"UTC-HH:MM"` when negative.
+fn format_utc_offset(minutes: i32) -> String {
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let abs = minutes.unsigned_abs();
+    format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60)
 }
