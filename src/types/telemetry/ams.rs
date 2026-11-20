@@ -712,6 +712,12 @@ pub(crate) const AMS_HT_DRY_TEMP_MAX: u32 = 85;
 /// AMS 2 Pro hardware, not the host printer model.
 pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
 
+/// Maximum drying temperature (°C) for an AMS 3H (`ZMULTI_A`) drying zone.
+///
+/// BambuStudio's input validation (`AMSDryControl.cpp`, `ams_limits`: `ZMULTI_A` 45–85). Single
+/// source; no wiki page for the AMS 3H has been checked.
+pub(crate) const AMS_3H_DRY_TEMP_MAX: u32 = 85;
+
 /// Which physical AMS accessory is attached, decoded from `info` bits 0–3.
 ///
 /// **A property of the accessory, not of the host printer.** The quirks engine answers questions
@@ -811,7 +817,7 @@ impl AmsUnitModel {
     /// Inclusive `(min, max)` drying-chamber temperature range in °C, or `None` if this unit
     /// cannot dry.
     ///
-    /// `(45, 65)` for the AMS 2 Pro and `(45, 85)` for the AMS-HT. **Both bounds are real** —
+    /// `(45, 65)` for the AMS 2 Pro, `(45, 85)` for the AMS-HT and the AMS 3H. **Both bounds are real** —
     /// BambuStudio refuses a temperature below the minimum just as it refuses one above the
     /// maximum (`AMSDryControl.cpp`), so a caller clamping only the ceiling still
     /// publishes values the vendor's own client rejects.
@@ -820,12 +826,11 @@ impl AmsUnitModel {
         match self {
             Self::Ams2Pro => Some((AMS_DRY_TEMP_MIN, AMS_STANDARD_DRY_TEMP_MAX)),
             Self::AmsHt => Some((AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX)),
-            Self::ExternalSpool
-            | Self::Ams
-            | Self::AmsLite
-            | Self::AmsLiteMixed
-            | Self::Ams3H
-            | Self::AmsB => None,
+            Self::Ams3H => Some((AMS_DRY_TEMP_MIN, AMS_3H_DRY_TEMP_MAX)),
+            // AMS-B dries per zone too, but BambuStudio's `ams_limits` records no range for it.
+            Self::ExternalSpool | Self::Ams | Self::AmsLite | Self::AmsLiteMixed | Self::AmsB => {
+                None
+            }
         }
     }
 

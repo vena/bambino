@@ -21,6 +21,7 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use crate::ams::ids::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use crate::camera::CameraProtocol;
 use crate::error::Error;
 use crate::models::PrinterModel;
@@ -248,6 +249,22 @@ impl NozzleLayout {
                 Some(RACK_NOZZLE_ID_BASE..=(RACK_NOZZLE_ID_BASE + docks - 1))
             }
             _ => None,
+        }
+    }
+
+    /// Returns the ids the layout's external spool inputs report in `vt_tray` / `vir_slot`.
+    ///
+    /// A rack with no fixed hotend (the H3C) has one input per dock, ids `256 - docks ..= 255`
+    /// (`247..=255` for 9 docks). Every other layout answers `254..=255`, the single-nozzle main
+    /// and IDEX deputy holders; the H2C's per-hotend inputs are unrecorded, so it is not widened.
+    #[must_use]
+    pub fn external_spool_ids(self) -> core::ops::RangeInclusive<u8> {
+        match self {
+            Self::Rack {
+                docks,
+                fixed_hotend: false,
+            } if docks > 0 => (u8::MAX - docks + 1)..=u8::MAX,
+            _ => AMS_EXTERNAL_SPOOL_DEPUTY_ID..=AMS_EXTERNAL_SPOOL_MAIN_ID,
         }
     }
 }
@@ -600,6 +617,56 @@ impl ModelQuirks {
     #[must_use]
     pub fn rack_nozzle_ids(&self) -> Option<core::ops::RangeInclusive<u8>> {
         self.nozzles.rack_nozzle_ids()
+    }
+
+    /// Returns the ids this model's external spool inputs report: `247..=255` on the H3C (one per rack dock), `254..=255` elsewhere.
+    ///
+    /// The model-free `ams::ids::is_external_spool_id` predicate answers only `254`/`255`; use this
+    /// wherever the model is known.
+    #[must_use]
+    pub fn external_spool_ids(&self) -> core::ops::RangeInclusive<u8> {
+        self.nozzles.external_spool_ids()
+    }
+
+    /// Returns true if `id` names one of this model's external spool inputs, per [`external_spool_ids`](Self::external_spool_ids).
+    #[must_use]
+    pub fn is_external_spool_id(&self, id: u8) -> bool {
+        self.external_spool_ids().contains(&id)
+    }
+
+    /// Returns the rack address the external input `id` feeds, `255 - id`, or `None` unless this model has a per-dock input there.
+    ///
+    /// Only a rack with no fixed hotend (the H3C) has per-hotend inputs. BambuStudio's
+    /// `DevAmsTray::get_nozzle_addr_id` (`DevFilaSystem.cpp`), `EXT_SPOOL` branch.
+    #[must_use]
+    pub fn external_spool_rack_address(&self, id: u8) -> Option<u8> {
+        match self.nozzles {
+            NozzleLayout::Rack {
+                fixed_hotend: false,
+                ..
+            } if self.is_external_spool_id(id) => Some(u8::MAX - id),
+            _ => None,
+        }
+    }
+
+    /// Returns the physical nozzle id of the hotend the external input `id` feeds, `RACK_NOZZLE_ID_BASE + (255 - id)`, or `None` as for [`external_spool_rack_address`](Self::external_spool_rack_address).
+    ///
+    /// `247` feeds nozzle `24` and `255` feeds nozzle `16` on the H3C. BambuStudio's
+    /// `DevAmsTray::get_nozzle_pos_id` (`DevFilaSystem.cpp`), `EXT_SPOOL` branch.
+    #[must_use]
+    pub fn external_spool_nozzle_id(&self, id: u8) -> Option<u8> {
+        self.external_spool_rack_address(id)
+            .map(|address| RACK_NOZZLE_ID_BASE + address)
+    }
+
+    /// Returns the `ams_mapping2` feed source for the external input `id`, or `None` if this model has no such input.
+    ///
+    /// `Some` for `254..=255` on any model, plus `247..=253` on the H3C. The source's entry is
+    /// `{ams_id: id, slot_id: 0}`, as BambuStudio builds it for an external tray.
+    #[must_use]
+    pub fn external_input_source(&self, id: u8) -> Option<crate::ams::MaterialSource> {
+        self.is_external_spool_id(id)
+            .then_some(crate::ams::MaterialSource::ExternalInput { ams_id: id })
     }
 
     /// Returns this model's physical AMS unit pool structure.
@@ -2509,6 +2576,57 @@ mod tests {
         }
 
         assert_eq!(PrinterModel::P1S.quirks().rack_nozzle_ids(), None);
+    }
+
+    #[test]
+    fn test_external_spool_ids_per_model() {
+        let h3c = PrinterModel::H3C.quirks();
+        assert_eq!(h3c.external_spool_ids(), 247..=255);
+        assert!(h3c.is_external_spool_id(247) && h3c.is_external_spool_id(255));
+        assert!(!h3c.is_external_spool_id(246));
+        let x1c = PrinterModel::X1C.quirks();
+        assert_eq!(x1c.external_spool_ids(), 254..=255);
+        assert!(!x1c.is_external_spool_id(253) && x1c.is_external_spool_id(254));
+        // The H2C's per-hotend inputs are unrecorded: it keeps 254/255.
+        assert_eq!(PrinterModel::H2C.quirks().external_spool_ids(), 254..=255);
+        assert_eq!(PrinterModel::H2D.quirks().external_spool_ids(), 254..=255);
+    }
+
+    #[test]
+    fn test_external_spool_input_feeds_rack_nozzle() {
+        let h3c = PrinterModel::H3C.quirks();
+        assert_eq!(h3c.external_spool_nozzle_id(247), Some(24));
+        assert_eq!(h3c.external_spool_nozzle_id(255), Some(16));
+        assert_eq!(h3c.external_spool_rack_address(247), Some(8));
+        assert_eq!(h3c.external_spool_rack_address(255), Some(0));
+        assert_eq!(h3c.external_spool_nozzle_id(246), None);
+        assert_eq!(
+            PrinterModel::X1C.quirks().external_spool_nozzle_id(255),
+            None
+        );
+        assert_eq!(
+            PrinterModel::H2C.quirks().external_spool_nozzle_id(255),
+            None
+        );
+    }
+
+    #[test]
+    fn test_external_input_source_builds_mapping2_entry() {
+        let h3c = PrinterModel::H3C.quirks();
+        let entry = h3c.external_input_source(247).unwrap().to_mapping2_entry();
+        assert_eq!((entry.ams_id, entry.slot_id), (247, 0));
+        // External inputs stay out of the flat `ams_mapping`.
+        assert_eq!(
+            h3c.external_input_source(247).unwrap().flat_channel_id(),
+            -1
+        );
+        assert!(h3c.external_input_source(246).is_none());
+        assert!(
+            PrinterModel::X1C
+                .quirks()
+                .external_input_source(250)
+                .is_none()
+        );
     }
 
     #[test]

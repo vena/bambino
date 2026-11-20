@@ -672,7 +672,7 @@ where
             .iter()
             .find(|e| e.id == active_idx)?;
         let (ams_id, slot_id) = info.current_ams_slot()?;
-        crate::ams::resolve_global_tray_id(ams_id, slot_id)
+        crate::ams::resolve_global_tray_id_for(self.quirks(), ams_id, slot_id)
     }
 
     /// Returns a cloned copy of the cached AMS status report with every tray's stale material

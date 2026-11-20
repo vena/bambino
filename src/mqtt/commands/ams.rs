@@ -428,6 +428,33 @@ impl AmsChangeFilamentRequest {
         Self::build(ams_id, unload, unload, temps, extruder_id, sequence_id)
     }
 
+    /// Builds a request unloading `slot` of a rack AMS unit (the AMS 3H) at wire address `ams_id`.
+    ///
+    /// Sends `target: 255` and `slot_id: 255 - slot`, the encoding BambuStudio's web device page
+    /// uses for a real AMS slot (`PageFilament.cpp` `s_command_unload_filament`,
+    /// `ViewModelActions.cpp` `command_unload_slot`); a plain `slot_id: 255` is read as "unload
+    /// whatever is loaded" and does not retract that slot's feeder. Which models besides the H3C
+    /// need this encoding is unrecorded; every other unit and external spools use
+    /// [`unload`](Self::unload). A slot past the unit's own is the caller's to refuse, as
+    /// `PrinterClient` does.
+    pub fn unload_slot(
+        ams_id: u8,
+        slot: u8,
+        temps: ChangeTemps,
+        extruder_id: Option<u8>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
+        let unload = crate::ams::ids::SLOT_UNLOAD;
+        Self::build(
+            ams_id,
+            unload - slot,
+            unload,
+            temps,
+            extruder_id,
+            sequence_id,
+        )
+    }
+
     fn build(
         ams_id: u8,
         slot_id: u8,
@@ -499,6 +526,13 @@ pub struct AmsFilamentDryingPayload {
     pub cooling_temp: u32,
     /// Whether to override the AMS unit's power-conflict interlock.
     pub close_power_conflict: bool,
+    /// The drying zone a start names; `None` (omitted from the wire) on a stop.
+    ///
+    /// BambuStudio writes `zone_id` on every start, `m_dry_zone_id.value_or(0)` in
+    /// `AMSDryControl.cpp`'s `start_sending_drying_command`, so a unit without zones gets `0`;
+    /// `CtrlAmsStopDrying` sends none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_id: Option<u8>,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: ClampedTaskId,
 }
@@ -532,6 +566,8 @@ pub struct DryingParams {
     pub cooling_temp: u32,
     /// Whether to override the AMS unit's power-conflict interlock.
     pub close_power_conflict: bool,
+    /// The zone to dry on a unit with several (the AMS 3H); `0` otherwise, as BambuStudio sends.
+    pub zone_id: u8,
 }
 
 impl AmsFilamentDryingRequest {
@@ -540,7 +576,8 @@ impl AmsFilamentDryingRequest {
 
     /// Builds a request starting a drying cycle on the unit at `ams_id`.
     pub fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self {
-        Self::build(ams_id, DRYING_MODE_START, params, sequence_id)
+        let zone_id = Some(params.zone_id);
+        Self::build(ams_id, DRYING_MODE_START, params, zone_id, sequence_id)
     }
 
     /// Builds a request stopping the drying cycle on the unit at `ams_id`.
@@ -552,6 +589,7 @@ impl AmsFilamentDryingRequest {
             ams_id,
             DRYING_MODE_STOP,
             DryingParams::default(),
+            None,
             sequence_id,
         )
     }
@@ -560,6 +598,7 @@ impl AmsFilamentDryingRequest {
         ams_id: i32,
         mode: i32,
         params: DryingParams,
+        zone_id: Option<u8>,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
@@ -574,6 +613,7 @@ impl AmsFilamentDryingRequest {
                 rotate_tray: params.rotate_tray,
                 cooling_temp: params.cooling_temp,
                 close_power_conflict: params.close_power_conflict,
+                zone_id,
                 sequence_id: sequence_id.into(),
             },
         }

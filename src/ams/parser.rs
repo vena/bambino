@@ -179,6 +179,23 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     }
 }
 
+/// Resolves a global tray id as [`resolve_global_tray_id`] does, but accepts the external inputs `quirks` reports.
+///
+/// On the H3C `247..=253` are external inputs too, and resolve to the id itself as `254`/`255`
+/// do. Every other address resolves exactly as in the model-free function.
+#[must_use]
+pub fn resolve_global_tray_id_for(
+    quirks: &crate::quirks::ModelQuirks,
+    ams_id: u8,
+    tray_id: u8,
+) -> Option<u8> {
+    if quirks.is_external_spool_id(ams_id) {
+        Some(ams_id)
+    } else {
+        resolve_global_tray_id(ams_id, tray_id)
+    }
+}
+
 /// BambuStudio's short label for a slot or external spool, such as `"A1"`, `"HT-A"` or `"Ext-R"`.
 ///
 /// Transcribed from BambuStudio's `GUI_App::transition_tridid` (`src/slic3r/GUI/GUI_App.cpp`),
@@ -265,6 +282,21 @@ mod tests {
         // Regression (#344): a map built from wire ids carries the physical 16.
         assert_eq!(resolve_printing_global_id(1, Some(0), &[16]), Some(25));
         assert_eq!(resolve_printing_global_id(1, Some(0), &[6]), Some(25));
+    }
+
+    #[test]
+    fn test_resolve_global_tray_id_for_accepts_the_models_external_inputs() {
+        use crate::models::PrinterModel;
+        let h3c = PrinterModel::H3C.quirks();
+        for id in 247..=255 {
+            assert_eq!(resolve_global_tray_id_for(h3c, id, 0), Some(id), "{id}");
+        }
+        assert_eq!(resolve_global_tray_id_for(h3c, 246, 0), None);
+        // Other addresses resolve as the model-free function does.
+        assert_eq!(resolve_global_tray_id_for(h3c, 32, 2), Some(30));
+        let x1c = PrinterModel::X1C.quirks();
+        assert_eq!(resolve_global_tray_id_for(x1c, 253, 0), None);
+        assert_eq!(resolve_global_tray_id_for(x1c, 254, 0), Some(254));
     }
 
     #[test]

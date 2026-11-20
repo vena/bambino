@@ -22,10 +22,13 @@ use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::{AmsFilamentDryingRequest, DryingParams};
 use crate::types::DryingMaterial;
 use crate::types::drying::DEFAULT_COMMAND_COOLING_TEMP;
-use crate::types::telemetry::AmsUnitModel;
+use crate::types::telemetry::{AmsUnit, AmsUnitModel};
 
 use super::{CommandHandle, PrinterClient};
-use crate::ams::ids::{VALID_AMS_IDS_TEXT, is_ams_ht_id, is_valid_ams_id, wire_ams_id};
+use crate::ams::ids::{
+    VALID_AMS_IDS_TEXT, is_ams_3h_id, is_ams_ht_id, is_valid_ams_id, normalize_ams_unit_id,
+    wire_ams_id,
+};
 
 impl<
     MqttRawIO,
@@ -187,6 +190,7 @@ pub struct DryingCycle<
     humidity: u32,
     rotate_tray: bool,
     close_power_conflict: bool,
+    zone_id: u8,
 }
 
 impl<
@@ -263,6 +267,7 @@ where
             humidity: 0,
             rotate_tray: false,
             close_power_conflict: false,
+            zone_id: 0,
         }
     }
 
@@ -335,6 +340,17 @@ where
         self
     }
 
+    /// Names the drying zone to start, for a unit that has several (the AMS 3H). Defaults to `0`.
+    ///
+    /// `0` is what BambuStudio sends for a unit without zones (`m_dry_zone_id.value_or(0)` in
+    /// `AMSDryControl.cpp`). On an AMS 3H or AMS-B, [`send()`](Self::send) checks the zone against
+    /// the unit's reported `zone_info` and refuses one that does not exist or cannot dry (a zone
+    /// dries only with exactly two slots). On any other unit the value is sent as set.
+    pub fn with_zone(mut self, zone_id: u8) -> Self {
+        self.zone_id = zone_id;
+        self
+    }
+
     /// Whether to override the AMS unit's power-conflict interlock. Defaults to `false`.
     ///
     /// The interlock exists because several drying units on one supply can exceed it; overriding
@@ -342,6 +358,40 @@ where
     pub fn close_power_conflict(mut self, close: bool) -> Self {
         self.close_power_conflict = close;
         self
+    }
+
+    /// Refuses a cycle on a zoned unit (AMS 3H, AMS-B) whose zone cannot be shown to dry.
+    ///
+    /// Fails safe when the unit's `zone_info` has not been reported: a zone id cannot be checked
+    /// against zones nobody has seen.
+    fn check_zone(zone_id: u8, unit: Option<&AmsUnit>) -> Result<(), Error> {
+        let Some(zones) = unit
+            .and_then(|unit| unit.zone_info.as_deref())
+            .filter(|zones| !zones.is_empty())
+        else {
+            return Err(Error::ModelMismatch(
+                "AMS drying zones have not been reported yet — poll telemetry before drying on an AMS 3H"
+                    .into(),
+            ));
+        };
+        let zone = zones
+            .iter()
+            .find(|zone| zone.zone_id == Some(zone_id))
+            .ok_or_else(|| {
+                Error::InvalidArgument(
+                    format!("drying cycle: the unit has no drying zone {zone_id}").into(),
+                )
+            })?;
+        if !zone.supports_drying() {
+            return Err(Error::ModelMismatch(
+                format!(
+                    "drying zone {zone_id} cannot dry — a zone needs exactly two slots, this one has {}",
+                    zone.zone_slots.len()
+                )
+                .into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Validates and publishes the cycle, returning the published command's [`CommandHandle`] [REF-AMS-DRYER].
@@ -372,6 +422,12 @@ where
     /// attached box must have a heater.
     ///
     /// [`Error::InvalidArgument`] for an `ams_id` outside the documented address space.
+    ///
+    /// On an AMS 3H or AMS-B, whose type alone does not settle drying, the cached unit decides:
+    /// [`Error::ModelMismatch`] when its `zone_info` has not been reported yet (this includes an
+    /// unobserved unit `32`), or when the [`with_zone()`](Self::with_zone) zone cannot dry;
+    /// [`Error::InvalidArgument`] when no reported zone has that id. No temperature range is
+    /// enforced for these units, because none is recorded.
     ///
     /// [`Error::InvalidArgument`] when the temperature falls outside the unit's
     /// [`dry_temp_range`](AmsUnitModel::dry_temp_range). **Both bounds are rejected, not
@@ -458,8 +514,20 @@ where
             ));
         }
 
-        let unit_model = self.client.ams_unit_model(self.ams_id);
-        if let Some(model) = unit_model
+        let unit = self
+            .client
+            .ams()
+            .and_then(|ams| ams.unit(normalize_ams_unit_id(self.ams_id)));
+        let unit_model = unit.and_then(AmsUnit::unit_model);
+        // A zoned unit (AMS 3H, AMS-B) dries per zone, so the type alone does not settle it:
+        // the cached unit's own `supports_drying()` and its zones do. The AMS 3H's id is as
+        // unambiguous as the AMS Lite's, so an unobserved unit 32 is gated here too rather
+        // than passed through — a zone cannot be checked without its zones.
+        let zoned = matches!(unit_model, Some(AmsUnitModel::Ams3H | AmsUnitModel::AmsB))
+            || is_ams_3h_id(self.ams_id);
+        if zoned {
+            Self::check_zone(self.zone_id, unit)?;
+        } else if let Some(model) = unit_model
             && !model.supports_drying()
         {
             return Err(Error::ModelMismatch(
@@ -470,14 +538,21 @@ where
 
         // `dry_temp_range()` is the authority when the unit is known. Unobserved, assume the
         // dryer the address implies — wrong for an original AMS or an AMS Lite at `0..=3`, but
-        // that is exactly the case the gate above cannot rule on either.
-        let assumed_model = unit_model.unwrap_or(if is_ams_ht_id(self.ams_id) {
+        // that is exactly the case the gate above cannot rule on either. A zoned unit has passed
+        // `check_zone`, so it is cached and its type is known (unit 32 is the AMS 3H). A unit with
+        // no recorded range (AMS-B) is refused rather than sent an unbounded heater target.
+        let assumed_model = unit_model.unwrap_or(if is_ams_3h_id(self.ams_id) {
+            AmsUnitModel::Ams3H
+        } else if is_ams_ht_id(self.ams_id) {
             AmsUnitModel::AmsHt
         } else {
             AmsUnitModel::Ams2Pro
         });
         let (min_temp, max_temp) = assumed_model.dry_temp_range().ok_or_else(|| {
-            Error::ModelMismatch("attached AMS unit has no drying chamber".into())
+            Error::ModelMismatch(
+                "attached AMS unit has no drying chamber, or no recorded drying temperature range"
+                    .into(),
+            )
         })?;
         if temp < min_temp || temp > max_temp {
             return Err(Error::InvalidArgument(
@@ -506,6 +581,7 @@ where
             rotate_tray: self.rotate_tray,
             cooling_temp,
             close_power_conflict: self.close_power_conflict,
+            zone_id: self.zone_id,
         };
         let ams_id = i32::from(wire_ams_id(self.ams_id));
         self.client

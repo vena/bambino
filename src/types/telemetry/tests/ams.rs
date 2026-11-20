@@ -21,8 +21,9 @@ const UNIT_MODELS: [UnitModelRow; 8] = [
     (3, AmsUnitModel::Ams2Pro, Some((45, 65)), Some(4)),
     (4, AmsUnitModel::AmsHt, Some((45, 85)), Some(1)),
     (5, AmsUnitModel::AmsLiteMixed, None, None),
-    // Drying is per zone, not per type: see `test_ams_3h_zone_info_and_drying_support`.
-    (6, AmsUnitModel::Ams3H, None, Some(9)),
+    // Whether it dries is per zone, not per type (`test_ams_3h_zone_info_and_drying_support`);
+    // the range is the zone's, BambuStudio's `ams_limits`.
+    (6, AmsUnitModel::Ams3H, Some((45, 85)), Some(9)),
     (7, AmsUnitModel::AmsB, None, None),
 ];
 
@@ -500,7 +501,13 @@ fn test_ams_unit_model_table() {
         );
         // Both bounds, not just the ceiling — BambuStudio rejects sub-45 °C as well.
         assert_eq!(model.dry_temp_range(), dry_range, "{model:?}");
-        assert_eq!(model.supports_drying(), dry_range.is_some(), "{model:?}");
+        // Zoned types (AMS 3H, AMS-B) answer drying per zone, so the type says no.
+        let zoned = matches!(model, AmsUnitModel::Ams3H | AmsUnitModel::AmsB);
+        assert_eq!(
+            model.supports_drying(),
+            dry_range.is_some() && !zoned,
+            "{model:?}"
+        );
         assert_eq!(model.slot_count(), slots, "{model:?}");
     }
 

@@ -4,9 +4,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 
 use crate::ams::ids::{
-    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_SLOTS_PER_UNIT, SLOT_UNLOAD, VALID_AMS_IDS_TEXT,
-    is_bus_unit_id, is_external_spool_id, is_unit_slot, is_valid_ams_id, normalize_ams_unit_id,
-    wire_ams_id,
+    AMS_3H_UNIT_ID, AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_SLOTS_PER_UNIT, SLOT_UNLOAD,
+    VALID_AMS_IDS_TEXT, is_bus_unit_id, is_external_spool_id, is_unit_slot, is_valid_ams_id,
+    normalize_ams_unit_id, wire_ams_id,
 };
 use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::Error;
@@ -67,10 +67,15 @@ where
     ///
     /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
     ///   AMS Lite (`6` as telemetry reports it, or its physical `16`), or `254`/`255` for
-    ///   external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
-    /// * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
-    ///   load, or `255` to unload/retract (see `ams_change_filament` examples in
-    ///   `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
+    ///   external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively). The H3C also takes
+    ///   its per-dock external inputs `247..=253`
+    ///   ([`ModelQuirks::external_spool_ids`](crate::quirks::ModelQuirks::external_spool_ids)),
+    ///   and its AMS 3H is unit `32`.
+    /// * `slot_id`: Slot within the AMS (`0..=3`, `0..=8` on the AMS 3H), `254` for a
+    ///   single-nozzle external-spool load, or `255` to unload/retract (see `ams_change_filament`
+    ///   examples in `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]). A `255` unload on the
+    ///   AMS 3H is the plain sentinel and does not name a slot; use
+    ///   [`unload_ams_3h_slot`](Self::unload_ams_3h_slot).
     /// * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
     ///
     /// The wire's `target` field is derived, not caller-supplied — see
@@ -95,18 +100,21 @@ where
         tar_temp: i32,
         extruder_id: Option<u8>,
     ) -> Result<CommandHandle, Error> {
+        // The model's own external inputs: `247..=255` on the H3C, `254..=255` elsewhere.
+        let is_external = self.quirks().is_external_spool_id(ams_id);
         let slot_valid = match slot_id {
             SLOT_UNLOAD => true,
             // Only meaningful as the external-spool load sentinel. The reference documents an
             // AMS-HT slot only as `{"ams_id": ams_id, "slot_id": 0}`
-            // (`reference/05_materials_ams.md` §5.3), so (130, 254) is not a load.
+            // (`reference/05_materials_ams.md` §5.3), so (130, 254) is not a load. Kept to the
+            // model-free 254/255: what a load from the H3C's other inputs sends is unrecorded.
             SLOT_EXTERNAL_LOAD => is_external_spool_id(ams_id),
             // An external holder takes the local slot range too; a bus unit only its own slots,
             // which for a single-slot AMS-HT is just 0 (#357), matching `resolve_global_tray_id`.
-            slot if is_external_spool_id(ams_id) => slot < AMS_SLOTS_PER_UNIT,
+            slot if is_external => slot < AMS_SLOTS_PER_UNIT,
             slot => is_unit_slot(ams_id, slot),
         };
-        if !is_valid_ams_id(ams_id) || !slot_valid {
+        if !(is_valid_ams_id(ams_id) || is_external) || !slot_valid {
             return Err(Error::InvalidArgument(
                 format!(
                     "change_filament: ams_id {ams_id} slot_id {slot_id} is not a load or unload \
@@ -134,6 +142,55 @@ where
                     seq,
                 )
             }
+        })
+        .await
+    }
+
+    /// Retracts one slot of the H3C's AMS 3H (unit `32`), sending `slot_id` as `255 - slot_id`.
+    ///
+    /// [`change_filament`](Self::change_filament) with `slot_id` `255` sends the plain unload
+    /// sentinel, which the firmware reads as "unload whatever is loaded"; a rack AMS slot needs
+    /// the `255 - slot` encoding so that slot's own feeder retracts. BambuStudio's web device
+    /// page does this for every AMS slot and keeps `255` only for an external spool
+    /// (`PageFilament.cpp` `s_command_unload_filament`, `ViewModelActions.cpp`
+    /// `command_unload_slot`); bambuddy sends it for the AMS 3H and tested it on an H3C
+    /// (`bambu_mqtt.py` `_rack_change_filament`). **Which other models need this encoding is
+    /// unrecorded**, so no other unit has a method for it.
+    ///
+    /// **The AMS 3H cannot rewind the filament**, so the unload ends with pulling it out by hand
+    /// (bambuddy's note on the same code). `extruder_id`, `curr_temp` and `tar_temp` are as for
+    /// [`change_filament`](Self::change_filament).
+    ///
+    /// **Wire framing is unverified on hardware** (`slot_id` and `target` as above).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when `slot_id` is not one of the unit's nine slots (`0..=8`).
+    pub async fn unload_ams_3h_slot(
+        &mut self,
+        slot_id: u8,
+        curr_temp: i32,
+        tar_temp: i32,
+        extruder_id: Option<u8>,
+    ) -> Result<CommandHandle, Error> {
+        if !is_unit_slot(AMS_3H_UNIT_ID, slot_id) {
+            return Err(Error::InvalidArgument(
+                format!("unload_ams_3h_slot: slot_id {slot_id} is not an AMS 3H slot (0..=8)")
+                    .into(),
+            ));
+        }
+        let temps = ChangeTemps {
+            current: curr_temp,
+            target: tar_temp,
+        };
+        self.dispatch(|seq| {
+            crate::mqtt::AmsChangeFilamentRequest::unload_slot(
+                AMS_3H_UNIT_ID,
+                slot_id,
+                temps,
+                extruder_id,
+                seq,
+            )
         })
         .await
     }
@@ -273,7 +330,8 @@ where
     /// [`AmsFilamentSettingRequest::new`](crate::mqtt::AmsFilamentSettingRequest::new).
     ///
     /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
-    ///   AMS Lite (`6` or its physical `16`; sent as `16`), or an external spool.
+    ///   AMS Lite (`6` or its physical `16`; sent as `16`), or an external spool (on the H3C,
+    ///   any of its inputs `247..=255`).
     /// * `slot_id`: Slot within the unit (`0..=3`, `0` on AMS-HT), or `0` for an external spool.
     /// * `filament` / `details`: what to store; see [`FilamentSpec`] and
     ///   [`TrayFilamentDetails`].
@@ -310,7 +368,10 @@ where
         filament: FilamentSpec<'_>,
         details: TrayFilamentDetails<'_>,
     ) -> Result<CommandHandle, Error> {
-        let address_valid = if is_external_spool_id(ams_id) {
+        // The model's own external inputs, so the H3C's `247..=253` are addressable too. Studio's
+        // `command_ams_filament_settings` gives them `tray_id` = the slot (0), not `254`, which is
+        // what `AmsFilamentSettingRequest::new` derives.
+        let address_valid = if self.quirks().is_external_spool_id(ams_id) {
             slot_id == 0
                 && (ams_id != AMS_EXTERNAL_SPOOL_DEPUTY_ID
                     || self.quirks().physical_nozzle_count() > 1)

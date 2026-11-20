@@ -445,6 +445,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ams_change_filament_unload_slot_json() {
+        let req =
+            AmsChangeFilamentRequest::unload_slot(32, 3, ChangeTemps::FIRMWARE, Some(0), 40009);
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["print"]["ams_id"], 32);
+        assert_eq!(json["print"]["slot_id"], 252);
+        assert_eq!(json["print"]["target"], 255);
+        assert_eq!(json["print"]["extruder_id"], 0);
+        // The plain unload keeps the sentinel.
+        let plain = AmsChangeFilamentRequest::unload(32, ChangeTemps::FIRMWARE, None, 40010);
+        let plain: serde_json::Value = serde_json::to_value(&plain).unwrap();
+        assert_eq!(plain["print"]["slot_id"], 255);
+        assert_eq!(plain["print"]["target"], 255);
+    }
+
+    #[test]
+    fn test_ams_filament_drying_zone_id_on_start_only() {
+        let start = AmsFilamentDryingRequest::start(32, DryingParams::default(), 40006);
+        let json: serde_json::Value = serde_json::to_value(&start).unwrap();
+        assert_eq!(json["print"]["zone_id"], 0);
+        let zoned = DryingParams {
+            zone_id: 1,
+            ..Default::default()
+        };
+        let json: serde_json::Value =
+            serde_json::to_value(AmsFilamentDryingRequest::start(32, zoned, 40007)).unwrap();
+        assert_eq!(json["print"]["zone_id"], 1);
+        let stop: serde_json::Value =
+            serde_json::to_value(AmsFilamentDryingRequest::stop(32, 40008)).unwrap();
+        assert!(stop["print"].get("zone_id").is_none());
+    }
+
+    #[test]
     fn test_ams_filament_drying_json() {
         // Field names/shapes rewritten to match the real wire protocol.
         let params = DryingParams {

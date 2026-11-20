@@ -20,5 +20,5 @@ pub use mapping::{
 };
 pub use parser::{
     clean_stale_tray_data, evaluate_spool_presence, resolve_global_tray_id,
-    resolve_printing_global_id, slot_label,
+    resolve_global_tray_id_for, resolve_printing_global_id, slot_label,
 };

@@ -910,6 +910,203 @@ fn ams_snapshot(id: &str, info: &str, fun2: Option<&str>) -> Vec<u8> {
     .into_bytes()
 }
 
+/// A synthetic AMS 3H report: unit `32`, type nibble `6`, zone 0 of two slots and zone 1 of seven.
+///
+/// The shape follows the H3C capture's `zone_info` (a two-slot zone and the rest); the values are
+/// made up. `zones` false omits `zone_info` entirely.
+fn ams_3h_snapshot(zones: bool) -> Vec<u8> {
+    let zone_info = if zones {
+        r#","zone_info":[{"zone_id":0,"zone_slots":[5,7]},{"zone_id":1,"zone_slots":[0,1,2,3,4,6,8]}]"#
+    } else {
+        ""
+    };
+    format!(
+        r#"{{"print":{{"ams":{{"ams":[{{"id":"32","temp":"25","humidity":"4","info":"6"{zone_info}}}]}}}}}}"#
+    )
+    .into_bytes()
+}
+
+/// A start on an observed AMS 3H names its zone, and a zone with two slots is accepted.
+#[tokio::test]
+async fn test_start_drying_on_ams_3h_accepts_a_two_slot_zone() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H3C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, &ams_3h_snapshot(true))
+                .await;
+
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_filament_drying");
+            assert_eq!(json["print"]["ams_id"], 32);
+            assert_eq!(json["print"]["zone_id"], 0);
+        })
+        .await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    client
+        .dry(32)
+        .with_zone(0)
+        .temp(55)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect("a two-slot zone of an observed AMS 3H must dry");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// A zone with seven slots cannot dry, and a zone id nothing reported is refused.
+#[tokio::test]
+async fn test_start_drying_on_ams_3h_refuses_non_drying_and_unknown_zones() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H3C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, &ams_3h_snapshot(true))
+                .await;
+        })
+        .await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    let err = client
+        .dry(32)
+        .with_zone(1)
+        .temp(55)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect_err("a seven-slot zone cannot dry");
+    assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
+
+    let err = client
+        .dry(32)
+        .with_zone(7)
+        .temp(55)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect_err("zone 7 was never reported");
+    assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+    // BambuStudio's `ams_limits` bounds an AMS 3H zone to 45-85°C.
+    for temp in [44, 86] {
+        let err = client
+            .dry(32)
+            .with_zone(0)
+            .temp(temp)
+            .duration_hours(8)
+            .send()
+            .await
+            .expect_err("outside the AMS 3H's 45-85°C range");
+        assert!(matches!(err, Error::InvalidArgument(_)), "{temp}: {err:?}");
+    }
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Without reported zones an AMS 3H start is refused rather than sent blind, observed or not.
+#[tokio::test]
+async fn test_start_drying_on_ams_3h_refuses_until_zones_are_reported() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H3C, |mut server_stream| async move {
+            let mut reports = ReportPublisher::new(SERIAL);
+            handle_mqtt_handshake(&mut server_stream).await;
+            reports
+                .publish(&mut server_stream, &ams_3h_snapshot(false))
+                .await;
+        })
+        .await;
+    // Nothing observed yet: unit 32 is still gated.
+    let err = client
+        .dry(32)
+        .temp(55)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect_err("an unobserved AMS 3H has no zones to check");
+    assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+    let err = client
+        .dry(32)
+        .temp(55)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect_err("an AMS 3H reporting no zones must be refused");
+    assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The AMS 3H unload names the slot: `slot_id` is `255 - slot` and `target` stays `255`.
+#[tokio::test]
+async fn test_unload_ams_3h_slot_sends_complemented_slot_id() {
+    let (mut client, broker_task) =
+        with_broker(SERIAL, PrinterModel::H3C, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "ams_change_filament");
+            assert_eq!(json["print"]["ams_id"], 32);
+            assert_eq!(json["print"]["slot_id"], 252);
+            assert_eq!(json["print"]["target"], 255);
+        })
+        .await;
+
+    assert!(matches!(
+        client.unload_ams_3h_slot(9, -1, -1, None).await,
+        Err(Error::InvalidArgument(_))
+    ));
+    client
+        .unload_ams_3h_slot(3, -1, -1, None)
+        .await
+        .expect("AMS 3H slot 3 must unload");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The H3C's per-dock external inputs are addressable; a model without them refuses the same id.
+#[tokio::test]
+async fn test_h3c_external_input_ids_are_per_model() {
+    let (mut h3c, h3c_broker) =
+        with_broker(SERIAL, PrinterModel::H3C, |mut server_stream| async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["ams_id"], 247);
+            assert_eq!(json["print"]["slot_id"], 255);
+        })
+        .await;
+    h3c.change_filament(247, 255, -1, -1, None)
+        .await
+        .expect("247 is an H3C external input");
+    assert!(matches!(
+        h3c.change_filament(246, 255, -1, -1, None).await,
+        Err(Error::InvalidArgument(_))
+    ));
+    h3c_broker.await.expect("H3C broker task panicked");
+
+    let (mut x1c, x1c_broker) = connect_idle_client(PrinterModel::X1C).await;
+    assert!(matches!(
+        x1c.change_filament(253, 255, -1, -1, None).await,
+        Err(Error::InvalidArgument(_))
+    ));
+    x1c_broker.await.expect("X1C broker task panicked");
+}
+
 /// A reported `fun2` bit 5 outranks the model's own rule, end to end through the client.
 ///
 /// **The payload here is synthetic and no P1S produces it.** The P1 family sends neither `fun`

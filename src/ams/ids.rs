@@ -10,7 +10,8 @@
 //! - an AMS Lite on an A2L, physical `16` and normalized `6` (4 slots, trays `24..=27`)
 //! - the AMS 3H, unit `32` (9 slots, trays `28..=36`; see [`AMS_3H_UNIT_ID`])
 //! - AMS-HT units `128..=135` (1 slot each, trays = the unit id)
-//! - external spool holders `254` / `255`
+//! - external spool holders `254` / `255` (the H3C adds `247..=253`; see
+//!   [`ModelQuirks::external_spool_ids`](crate::quirks::ModelQuirks::external_spool_ids))
 //!
 //! See `.claude/rules/ams-lite-on-a2l-unit-id.md` before adding a predicate here: the AMS Lite on
 //! an A2L (`16` / `6`) is the unit that rule was written for, and each new block has to be
@@ -87,6 +88,10 @@ pub(crate) const AMS_3H_SLOTS: u8 = 9;
 /// Global tray id and `tray_exist_bits` bit of the AMS 3H's slot 0 (`28 + slot`), BambuStudio's
 /// `DevAms::GetTrayId` / `DevAmsTray::get_tray_flag_bit` `ZMULTI_A` branch.
 pub(crate) const AMS_3H_TRAY_BASE: u8 = 28;
+/// The lowest external input id any model reports: the H3C's nine per-dock inputs are `247..=255`
+/// (`vir_slot` ids in ha-bambulab's `MOCK-H3C.json`). A model-free floor; the per-model range is
+/// [`ModelQuirks::external_spool_ids`](crate::quirks::ModelQuirks::external_spool_ids).
+pub(crate) const AMS_EXTERNAL_INPUT_ID_MIN: u8 = 247;
 /// The single-nozzle external spool, and IDEX's right (primary) carriage — BambuStudio's
 /// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md`, "Virtual / External Spool
 /// Telemetry" and "Virtual Slot Remapping on Single-Nozzle Platforms"). This is the id an
@@ -146,6 +151,11 @@ pub(crate) const fn is_ams_3h_id(ams_id: u8) -> bool {
 }
 
 /// Returns true for an external spool holder id: `254` (deputy) or `255` (main).
+///
+/// **Model-free**: the H3C also reports `247..=253`, one external input per rack dock, and a
+/// caller that knows the model must use
+/// [`ModelQuirks::is_external_spool_id`](crate::quirks::ModelQuirks::is_external_spool_id)
+/// instead. This is the answer for the callers that hold only an id.
 ///
 /// Commands disagree on which pair addresses which holder — `ams_filament_setting` and
 /// `extrusion_cali_sel` each have their own rule, documented on the client method that sends

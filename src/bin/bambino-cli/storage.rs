@@ -1080,6 +1080,7 @@ fn tray_label(source: MaterialSource) -> String {
         MaterialSource::ExternalSpool => String::from("external spool"),
         MaterialSource::ExternalSpoolLeft => String::from("external left"),
         MaterialSource::ExternalSpoolRight => String::from("external right"),
+        MaterialSource::ExternalInput { ams_id } => format!("external input {ams_id}"),
         MaterialSource::Unmapped => String::from("unmapped"),
     }
 }
@@ -1364,6 +1365,10 @@ mod map_tests {
             (MaterialSource::ExternalSpool, "external spool"),
             (MaterialSource::ExternalSpoolLeft, "external left"),
             (MaterialSource::ExternalSpoolRight, "external right"),
+            (
+                MaterialSource::ExternalInput { ams_id: 247 },
+                "external input 247",
+            ),
             (MaterialSource::Unmapped, "unmapped"),
         ];
         for (source, label) in cases {

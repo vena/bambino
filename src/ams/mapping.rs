@@ -11,8 +11,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::ids::{
-    AMS_3H_SLOTS, AMS_3H_TRAY_BASE, AMS_3H_UNIT_ID, AMS_EXTERNAL_SPOOL_DEPUTY_ID,
-    AMS_EXTERNAL_SPOOL_MAIN_ID,
+    AMS_3H_SLOTS, AMS_3H_TRAY_BASE, AMS_3H_UNIT_ID, AMS_EXTERNAL_INPUT_ID_MIN,
+    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,18 @@ pub enum MaterialSource {
     /// right carriage is the main one. Only [`ExternalSpoolLeft`](Self::ExternalSpoolLeft)
     /// (254) differs.
     ExternalSpoolRight,
+    /// One of the H3C's per-hotend external inputs (`247..=255`, `vir_slot` ids).
+    ///
+    /// The `ams_mapping2` entry is `{ams_id, slot_id: 0}`, the shape BambuStudio builds for an
+    /// external tray (`DevMapping.cpp`, `try_add` with `slot_id` 0). Build it through
+    /// [`ModelQuirks::external_input_source`](crate::quirks::ModelQuirks::external_input_source),
+    /// which checks the id against the model; this enum has no model, so an id below `247`, the
+    /// lowest any model reports, becomes the unmapped entry. Like every external spool, the
+    /// flat `ams_mapping` carries `-1` for it.
+    ExternalInput {
+        /// The input's `vir_slot` id, `247..=255` on the H3C.
+        ams_id: u8,
+    },
     /// Virtual unmapped placeholder slot (indicates an unused project filament).
     Unmapped,
 }
@@ -150,6 +162,16 @@ impl MaterialSource {
                 ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
                 slot_id: 0,
             },
+            MaterialSource::ExternalInput { ams_id } => {
+                if *ams_id >= AMS_EXTERNAL_INPUT_ID_MIN {
+                    AmsMapping2Entry {
+                        ams_id: *ams_id,
+                        slot_id: 0,
+                    }
+                } else {
+                    AmsMapping2Entry::UNMAPPED
+                }
+            }
             MaterialSource::Unmapped => AmsMapping2Entry::UNMAPPED,
         }
     }
