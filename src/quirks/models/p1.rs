@@ -58,6 +58,6 @@ const P1S_BASE: ModelQuirks = ModelQuirks::new(
 /// `MODEL_MATRIX.csv`'s Aux Part Cooling Fan row lists P1P as `Optional` (not guaranteed present)
 /// vs. P1S's `Yes`; reporting `true` would over-report on a P1P without the fan installed.
 pub(crate) const P1P: ModelQuirks = ModelQuirks {
-    auxiliary_left_fan: false,
+    auxiliary_fan: false,
     ..P1S
 };

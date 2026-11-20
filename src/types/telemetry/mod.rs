@@ -139,7 +139,7 @@ impl TelemetryReport {
             fan,
             FanStrings {
                 part_cooling: print.and_then(|p| p.cooling_fan_speed.as_deref()),
-                aux_left: print.and_then(|p| p.big_fan1_speed.as_deref()),
+                aux: print.and_then(|p| p.big_fan1_speed.as_deref()),
                 chamber_exhaust: print.and_then(|p| p.big_fan2_speed.as_deref()),
             },
             self.device(),
@@ -231,13 +231,13 @@ impl TelemetryReport {
 #[derive(Default, Clone, Copy)]
 pub(crate) struct FanStrings<'a> {
     pub(crate) part_cooling: Option<&'a str>,
-    pub(crate) aux_left: Option<&'a str>,
+    pub(crate) aux: Option<&'a str>,
     pub(crate) chamber_exhaust: Option<&'a str>,
 }
 
 /// Shared fan decode behind [`TelemetryReport::fan_percent`] and `PrinterClient::fan_speed`.
 ///
-/// Three fans report a 0-15 step string in `print`; the second left auxiliary fan reports a
+/// Three fans report a 0-15 step string in `print`; the second auxiliary fan reports a
 /// direct percentage in `device.airduct.parts` instead.
 pub(crate) fn decode_fan_percent(
     fan: FanTarget,
@@ -247,9 +247,9 @@ pub(crate) fn decode_fan_percent(
     use crate::quirks::decode_fan_percentage;
     match fan {
         FanTarget::PartCooling => decode_fan_percentage(strings.part_cooling),
-        FanTarget::AuxiliaryLeft => decode_fan_percentage(strings.aux_left),
+        FanTarget::Auxiliary => decode_fan_percentage(strings.aux),
         FanTarget::ChamberExhaust => decode_fan_percentage(strings.chamber_exhaust),
-        FanTarget::AuxiliaryLeft2 => {
+        FanTarget::Auxiliary2 => {
             let id = fan.airduct_part_id()?;
             device?.airduct.as_ref()?.part_percent(id)
         }

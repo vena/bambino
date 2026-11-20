@@ -38,7 +38,7 @@ const fn a1(side: f32, bed_max: u16, sliced_for: &'static [&'static str]) -> Mod
         sliced_for,
         plaintext_ftps_data_channel: true,
         prompt_sound: true,
-        auxiliary_left_fan: false,
+        auxiliary_fan: false,
         ..ModelQuirks::new(
             SafetyLimits {
                 volume: BuildVolume::cube(side),

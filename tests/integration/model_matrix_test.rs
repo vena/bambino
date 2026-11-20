@@ -145,7 +145,7 @@ fn check(model: PrinterModel, q: &ModelQuirks, matrix: &[Vec<String>]) {
         );
     }
     if let Some(v) = get("Aux Part Cooling Fan") {
-        assert_eq!(q.has_auxiliary_left_fan(), yes(v), "{model} aux fan");
+        assert_eq!(q.has_auxiliary_fan(), yes(v), "{model} aux fan");
     }
     if let Some(v) = get("Chamber Exhaust Fan") {
         assert_eq!(q.has_chamber_exhaust_fan(), yes(v), "{model} exhaust fan");

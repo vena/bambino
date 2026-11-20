@@ -82,7 +82,7 @@ pub(crate) const X2D: ModelQuirks = ModelQuirks {
     door: DoorSensor::Stat,
     chamber_temperature_sensor: true,
     nozzles: NozzleLayout::Dual,
-    auxiliary_left2_fan: true,
+    auxiliary2_fan: true,
     airduct_mode: true,
     chamber_exhaust_fan: true,
     store_sent_files: true,

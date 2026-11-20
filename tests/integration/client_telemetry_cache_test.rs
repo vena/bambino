@@ -858,7 +858,7 @@ async fn test_fan_speed_cache_from_telemetry() {
         None
     );
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary2),
         None
     );
 
@@ -872,7 +872,7 @@ async fn test_fan_speed_cache_from_telemetry() {
         Some(100)
     );
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary),
         Some(53)
     );
     assert_eq!(
@@ -881,7 +881,7 @@ async fn test_fan_speed_cache_from_telemetry() {
     );
     assert_eq!(client.heatbreak_fan_speed(), Some(100));
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary2),
         Some(75)
     );
 
@@ -895,7 +895,7 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
     // Regression for #38: X2D/P2S previously decoded the four flat fan keys as
     // already-percentage (ModelQuirks::reports_auxiliary_fan_percentage), reading ~6.7x too low.
     // They must step-decode identically to every other model — only the id-160 airduct part
-    // (auxiliary_left2_fan_speed) is a true wire percentage.
+    // (auxiliary2_fan_speed) is a true wire percentage.
     let (mut client, broker_task) =
         with_broker(SERIAL, PrinterModel::X2D, |mut server_stream| async move {
             handle_mqtt_handshake(&mut server_stream).await;
@@ -919,7 +919,7 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
         Some(100)
     );
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary),
         Some(53)
     );
     assert_eq!(
@@ -928,7 +928,7 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
     );
     assert_eq!(client.heatbreak_fan_speed(), Some(100));
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary2),
         Some(75)
     );
 
@@ -936,7 +936,7 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
 }
 
 #[tokio::test]
-async fn test_auxiliary_left2_fan_negative_state_is_none() {
+async fn test_auxiliary2_fan_negative_state_is_none() {
     let mut reports = ReportPublisher::new(SERIAL);
 
     // A negative `state` is a firmware sentinel for "off/unknown"; it must report
@@ -960,7 +960,7 @@ async fn test_auxiliary_left2_fan_negative_state_is_none() {
         .expect("poll_telemetry should parse fan speed report");
 
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary2),
         None
     );
 
@@ -968,7 +968,7 @@ async fn test_auxiliary_left2_fan_negative_state_is_none() {
 }
 
 #[tokio::test]
-async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
+async fn test_auxiliary2_fan_packed_state_decodes_low_byte() {
     let mut reports = ReportPublisher::new(SERIAL);
 
     // The low-8-bit mask must still apply to a non-negative state (BambuStudio's
@@ -996,7 +996,7 @@ async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
         .expect("poll_telemetry should parse fan speed report");
 
     assert_eq!(
-        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        client.fan_speed(bambino::client::FanTarget::Auxiliary2),
         Some(50)
     );
 

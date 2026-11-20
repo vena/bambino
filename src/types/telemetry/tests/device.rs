@@ -690,7 +690,7 @@ fn test_airduct_collection_merge_from_clears_parts_and_mode_list_on_present_empt
 fn test_airduct_collection_merge_from_upserts_parts_by_id_on_partial_frame() {
     // A partial frame (a non-empty subset of part ids, not present-but-empty) must upsert
     // by id, not wholesale-replace — otherwise a frame that only repeats id 160 would wipe
-    // previously-known parts like id 10 (left-aux) or id 3 (exhaust). See
+    // previously-known parts like id 10 (aux) or id 3 (exhaust). See
     // AirductCollection::merge_from's doc comment.
     let mut cached = AirductCollection {
         parts: Some(vec![

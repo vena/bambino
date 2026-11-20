@@ -387,8 +387,8 @@ pub struct ModelQuirks {
     nozzles: NozzleLayout,
     heatbed_thermal_calibration: bool,
     wallclock_rtsp_timestamps: bool,
-    auxiliary_left_fan: bool,
-    auxiliary_left2_fan: bool,
+    auxiliary_fan: bool,
+    auxiliary2_fan: bool,
     chamber_exhaust_fan: bool,
     airduct_mode: bool,
     prompt_sound: bool,
@@ -407,7 +407,7 @@ impl ModelQuirks {
     ///
     /// Defaults: encrypted FTPS data channel, no TLS 1.2 cap, no door sensor, no chamber
     /// temperature sensor, one nozzle, no heatbed thermal calibration, RTP timestamps, a primary
-    /// left auxiliary fan and nothing else optional. It accepts no sliced file's `printer_model_id`
+    /// auxiliary fan (port 2) and nothing else optional. It accepts no sliced file's `printer_model_id`
     /// ([`accepts_sliced_for`](Self::accepts_sliced_for)); a row sets `sliced_for` to its own.
     pub(crate) const fn new(
         limits: SafetyLimits,
@@ -433,8 +433,8 @@ impl ModelQuirks {
             nozzles: NozzleLayout::Single,
             heatbed_thermal_calibration: false,
             wallclock_rtsp_timestamps: false,
-            auxiliary_left_fan: true,
-            auxiliary_left2_fan: false,
+            auxiliary_fan: true,
+            auxiliary2_fan: false,
             chamber_exhaust_fan: false,
             airduct_mode: false,
             prompt_sound: false,
@@ -707,23 +707,24 @@ impl ModelQuirks {
         self.wallclock_rtsp_timestamps
     }
 
-    /// Returns true if the model has a second left-side auxiliary fan (port 10) [REF-CLIM-FANS].
+    /// Returns true if the model has a second auxiliary fan (port 10) [REF-CLIM-FANS].
     ///
-    /// Wire-labeled "right" but confirmed a left-side fan — see `FanTarget::AuxiliaryLeft2`'s doc
-    /// comment, issue #60.
+    /// Its side is per model: right on the X2D, left on the P2S; see `FanTarget::Auxiliary2`.
     #[must_use]
-    pub fn has_auxiliary_left2_fan(&self) -> bool {
-        self.auxiliary_left2_fan
+    pub fn has_auxiliary2_fan(&self) -> bool {
+        self.auxiliary2_fan
     }
 
-    /// Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
+    /// Returns true if the model has a primary auxiliary fan (port 2) [REF-CLIM-FANS].
+    ///
+    /// Its side is per model: left on the X2D, right on the P2S; see `FanTarget::Auxiliary`.
     ///
     /// Every model except A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan), P1P
     /// (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) and the plain X1
     /// (BambuStudio's X1 profile sets `auxiliary_fan` to `0`).
     #[must_use]
-    pub fn has_auxiliary_left_fan(&self) -> bool {
-        self.auxiliary_left_fan
+    pub fn has_auxiliary_fan(&self) -> bool {
+        self.auxiliary_fan
     }
 
     /// Returns true if the model has a chamber exhaust/filtration fan (port 3): H2S, H2D, H2D Pro, H2C, X2D [REF-CLIM-FANS].
@@ -2042,8 +2043,8 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.has_auxiliary_left2_fan());
-        assert!(!q.has_auxiliary_left_fan());
+        assert!(!q.has_auxiliary2_fan());
+        assert!(!q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -2079,7 +2080,7 @@ mod tests {
         assert!(q.relative_move_gcode(Axis::Z, 300.0, 3000).is_some());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 80);
-        assert!(!q.has_auxiliary_left_fan());
+        assert!(!q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(
@@ -2112,7 +2113,7 @@ mod tests {
         assert!(q.relative_move_gcode(Axis::Z, 150.0, 3000).is_some());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 80);
-        assert!(!q.has_auxiliary_left_fan());
+        assert!(!q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(
@@ -2142,8 +2143,8 @@ mod tests {
             assert!(!q.supports_nozzle_offset_calibration());
             assert!(q.is_bed_on_z());
             assert!(!q.requires_wallclock_rtsp_timestamps());
-            assert!(!q.has_auxiliary_left2_fan());
-            assert_eq!(q.has_auxiliary_left_fan(), model == PrinterModel::P1S);
+            assert!(!q.has_auxiliary2_fan());
+            assert_eq!(q.has_auxiliary_fan(), model == PrinterModel::P1S);
             assert!(!q.has_chamber_exhaust_fan());
             assert_eq!(q.build_volume().z, 256.0);
             assert_eq!(q.nozzle_temp_max(), 300);
@@ -2176,8 +2177,8 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(q.requires_wallclock_rtsp_timestamps());
-        assert!(q.has_auxiliary_left2_fan());
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary2_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -2209,8 +2210,8 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.has_auxiliary_left2_fan());
-        assert!(q.has_auxiliary_left_fan());
+        assert!(!q.has_auxiliary2_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -2229,7 +2230,7 @@ mod tests {
     fn test_x1_quirks_match_x1c_except_aux_fan() {
         let x1 = PrinterModel::X1.quirks();
         let x1c = PrinterModel::X1C.quirks();
-        assert!(!x1.has_auxiliary_left_fan());
+        assert!(!x1.has_auxiliary_fan());
         assert_eq!(x1.nozzle_temp_max(), x1c.nozzle_temp_max());
         for mains in [Some(true), Some(false), None] {
             assert_eq!(x1.bed_temp_max(mains), x1c.bed_temp_max(mains));
@@ -2263,7 +2264,7 @@ mod tests {
         assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 320);
         assert_eq!(q.bed_temp_max(None), 110);
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(
@@ -2291,8 +2292,8 @@ mod tests {
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
-        assert!(q.has_auxiliary_left2_fan());
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary2_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -2326,7 +2327,7 @@ mod tests {
         assert_eq!(q.build_volume().z, 340.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(
@@ -2353,7 +2354,7 @@ mod tests {
         assert_eq!(q.build_volume().z, 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(
@@ -2379,7 +2380,7 @@ mod tests {
         assert_eq!(q.build_volume().z, 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(
@@ -2406,7 +2407,7 @@ mod tests {
         assert_eq!(q.build_volume().z, 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(
@@ -2428,7 +2429,7 @@ mod tests {
         assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(q.has_auxiliary_left_fan());
+        assert!(q.has_auxiliary_fan());
         assert!(!q.has_chamber_exhaust_fan());
 
         // The fallback's ceilings must be the floor of the whole family, and must not vary

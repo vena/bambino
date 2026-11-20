@@ -277,7 +277,7 @@ pub struct PrinterTelemetry {
     /// On-board part cooling fan speed (represented as discrete steps 0 to 15) [REF-CLIM-FANS].
     pub cooling_fan_speed: Option<String>,
 
-    /// On-board left-side auxiliary fan speed (represented as discrete steps 0 to 15).
+    /// On-board auxiliary fan speed (represented as discrete steps 0 to 15).
     pub big_fan1_speed: Option<String>,
 
     /// On-board filtration or chamber exhaust fan speed (represented as discrete steps 0 to 15).

@@ -55,31 +55,34 @@ pub enum FanTarget {
     /// Primary part cooling fan (Port 1).
     #[cfg_attr(feature = "cli", value(name = "part"))]
     PartCooling,
-    /// Primary left-side auxiliary fan (Port 2).
+    /// Primary auxiliary fan (Port 2).
+    ///
+    /// Which side of the printer it sits on depends on the model: left on the X2D, right on the
+    /// P2S and H3C/N10 (BambuStudio `resources/printers/<model_id>.json`, `fan` block).
     #[cfg_attr(feature = "cli", value(name = "aux"))]
-    AuxiliaryLeft,
+    Auxiliary,
     /// Chamber exhaust/filtration fan (Port 3).
     #[cfg_attr(feature = "cli", value(name = "exhaust"))]
     ChamberExhaust,
-    /// Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+    /// Secondary auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
     ///
-    /// Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
-    /// "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-    /// a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](Self::AuxiliaryLeft)'s
-    /// primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
-    /// Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
-    /// part cooling fan" throughout (issue #60).
-    #[cfg_attr(feature = "cli", value(name = "left2"))]
-    AuxiliaryLeft2,
+    /// BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX`, distinct from
+    /// [`Auxiliary`](Self::Auxiliary)'s port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into
+    /// `big_fan1_speed`). Reads at `device.airduct.parts[id=160].state`.
+    ///
+    /// The side is per model (BambuStudio `resources/printers/<model_id>.json`, `fan` block):
+    /// right on the X2D, left on the P2S and H3C/N10. Port 2 is the opposite side on each.
+    #[cfg_attr(feature = "cli", value(name = "aux2"))]
+    Auxiliary2,
 }
 
 impl FanTarget {
     /// Every fan, in declaration order.
     pub const ALL: &'static [FanTarget] = &[
         FanTarget::PartCooling,
-        FanTarget::AuxiliaryLeft,
+        FanTarget::Auxiliary,
         FanTarget::ChamberExhaust,
-        FanTarget::AuxiliaryLeft2,
+        FanTarget::Auxiliary2,
     ];
 
     /// The M106 `P` port that drives this fan.
@@ -87,9 +90,9 @@ impl FanTarget {
     pub const fn write_port(self) -> u16 {
         match self {
             FanTarget::PartCooling => 1,
-            FanTarget::AuxiliaryLeft => 2,
+            FanTarget::Auxiliary => 2,
             FanTarget::ChamberExhaust => 3,
-            FanTarget::AuxiliaryLeft2 => 10,
+            FanTarget::Auxiliary2 => 10,
         }
     }
 
@@ -100,8 +103,8 @@ impl FanTarget {
     #[must_use]
     pub const fn airduct_part_id(self) -> Option<u32> {
         match self {
-            FanTarget::AuxiliaryLeft2 => Some(160),
-            FanTarget::PartCooling | FanTarget::AuxiliaryLeft | FanTarget::ChamberExhaust => None,
+            FanTarget::Auxiliary2 => Some(160),
+            FanTarget::PartCooling | FanTarget::Auxiliary | FanTarget::ChamberExhaust => None,
         }
     }
 
@@ -110,9 +113,9 @@ impl FanTarget {
     pub fn is_supported_by(self, quirks: &crate::quirks::ModelQuirks) -> bool {
         match self {
             FanTarget::PartCooling => true,
-            FanTarget::AuxiliaryLeft => quirks.has_auxiliary_left_fan(),
+            FanTarget::Auxiliary => quirks.has_auxiliary_fan(),
             FanTarget::ChamberExhaust => quirks.has_chamber_exhaust_fan(),
-            FanTarget::AuxiliaryLeft2 => quirks.has_auxiliary_left2_fan(),
+            FanTarget::Auxiliary2 => quirks.has_auxiliary2_fan(),
         }
     }
 }
@@ -666,8 +669,8 @@ mod tests {
         }
         assert!(LedNode::from_str("chamber_ligt").is_err());
         assert_eq!(BuzzerMode::Chirp.code(), 2);
-        assert_eq!(FanTarget::AuxiliaryLeft2.write_port(), 10);
-        assert_eq!(FanTarget::AuxiliaryLeft2.airduct_part_id(), Some(160));
+        assert_eq!(FanTarget::Auxiliary2.write_port(), 10);
+        assert_eq!(FanTarget::Auxiliary2.airduct_part_id(), Some(160));
     }
 
     #[test]

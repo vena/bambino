@@ -127,10 +127,10 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
 
         for pct in [
             client.fan_speed(FanTarget::PartCooling),
-            client.fan_speed(FanTarget::AuxiliaryLeft),
+            client.fan_speed(FanTarget::Auxiliary),
             client.fan_speed(FanTarget::ChamberExhaust),
             client.heatbreak_fan_speed(),
-            client.fan_speed(FanTarget::AuxiliaryLeft2),
+            client.fan_speed(FanTarget::Auxiliary2),
         ]
         .into_iter()
         .flatten()

@@ -778,14 +778,14 @@ where
 
     /// Returns `fan`'s speed as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)); `None` before any telemetry carrying it.
     ///
-    /// [`FanTarget::AuxiliaryLeft2`] (X2D/P2S, port 10) reports at a different wire location
-    /// than the other three — `device.airduct.parts[id=160].state`, already a percentage
+    /// [`FanTarget::Auxiliary2`] (X2D/P2S, port 10; right on the X2D, left on the P2S)
+    /// reports at a different wire location than the other three — `device.airduct.parts[id=160].state`, already a percentage
     /// [REF-CLIM-FANS] — which this handles.
     pub fn fan_speed(&self, fan: FanTarget) -> Option<u8> {
         let cache = &self.core.cache;
         let strings = FanStrings {
             part_cooling: cache.last_cooling_fan_speed.as_deref(),
-            aux_left: cache.last_big_fan1_speed.as_deref(),
+            aux: cache.last_big_fan1_speed.as_deref(),
             chamber_exhaust: cache.last_big_fan2_speed.as_deref(),
         };
         decode_fan_percent(fan, strings, cache.last_device.as_ref())

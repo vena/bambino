@@ -404,17 +404,15 @@ async fn test_cooling_fans_and_peripheral_switches() {
         .await
         .expect("Part cooling fan set failed");
     client_p1s
-        .set_fan_speed(FanTarget::AuxiliaryLeft, 100)
+        .set_fan_speed(FanTarget::Auxiliary, 100)
         .await
-        .expect("Auxiliary left fan set failed");
+        .expect("Auxiliary fan set failed");
 
-    // Verify the second left-side auxiliary fan (port 10) is restricted on non-X2D models
-    let err_res = client_p1s
-        .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
-        .await;
+    // Verify the second auxiliary fan (port 10) is restricted on non-X2D models
+    let err_res = client_p1s.set_fan_speed(FanTarget::Auxiliary2, 80).await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
-    // Verify the second left-side auxiliary fan is supported on X2D (port 10)
+    // Verify the second auxiliary fan is supported on X2D (port 10)
 
     let (mut client_x2, broker_task_x2) = with_broker(
         "20P000000000000",
@@ -430,9 +428,9 @@ async fn test_cooling_fans_and_peripheral_switches() {
     .await;
 
     client_x2
-        .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
+        .set_fan_speed(FanTarget::Auxiliary2, 80)
         .await
-        .expect("X2D second left auxiliary fan set failed");
+        .expect("X2D second auxiliary fan set failed");
 
     broker_task.await.expect("P1S broker task panicked");
     broker_task_x2.await.expect("X2D broker task panicked");
@@ -462,8 +460,8 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
 #[tokio::test]
 async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     // FanTarget::ChamberExhaust was never exercised through set_fan_speed, unlike its
-    // 3 sibling fan targets above (PartCooling, AuxiliaryLeft, AuxiliaryLeft2). Mirrors the
-    // AuxiliaryLeft2 success (X2D)/mismatch (P1S) pair in
+    // 3 sibling fan targets above (PartCooling, Auxiliary, Auxiliary2). Mirrors the
+    // Auxiliary2 success (X2D)/mismatch (P1S) pair in
     // test_cooling_fans_and_peripheral_switches, using H2D for the success case since chamber
     // exhaust is an H2-series/X2D feature.
 

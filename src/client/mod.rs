@@ -13,7 +13,7 @@
 //! - **Chamber heater guards** — `set_chamber_temperature()` rejects requests on models
 //!   without an active PTC heater (open-frame machines like A1/P1).
 //! - **Fan routing** — Fan commands are directed to the correct controller, including
-//!   the second left-side auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
+//!   the second auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
 
 mod ams;
 mod camera;

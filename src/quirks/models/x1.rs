@@ -101,7 +101,7 @@ pub(crate) const X1C: ModelQuirks = ModelQuirks {
 /// X1 Carbon inherits `1`. The aux fan is therefore treated like the P1P's: not guaranteed
 /// present.
 pub(crate) const X1: ModelQuirks = ModelQuirks {
-    auxiliary_left_fan: false,
+    auxiliary_fan: false,
     ..X1C
 };
 

@@ -59,7 +59,7 @@ pub(crate) const P2S: ModelQuirks = ModelQuirks {
     door: DoorSensor::Stat,
     chamber_temperature_sensor: true,
     wallclock_rtsp_timestamps: true,
-    auxiliary_left2_fan: true,
+    auxiliary2_fan: true,
     airduct_mode: true,
     store_sent_files: true,
     ai_monitoring: true,

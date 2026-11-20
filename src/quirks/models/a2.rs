@@ -28,7 +28,7 @@ pub const A2L_BED_TEMP_MAX: u16 = 80;
 /// `_DRY_WHILE_PRINTING_MIN_FIRMWARE`.
 pub(crate) const A2L: ModelQuirks = ModelQuirks {
     prompt_sound: true,
-    auxiliary_left_fan: false,
+    auxiliary_fan: false,
     auto_flow_calibration: true,
     sliced_for: &["N9"],
     ..ModelQuirks::new(

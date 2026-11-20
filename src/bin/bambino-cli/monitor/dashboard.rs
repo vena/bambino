@@ -228,18 +228,15 @@ fn render_fans_and_system(printer: &Printer, w: &mut impl Write) {
             "Part Cooling",
             pct(printer.fan_speed(FanTarget::PartCooling)),
         ),
-        ("Aux Fan", pct(printer.fan_speed(FanTarget::AuxiliaryLeft))),
+        ("Aux Fan", pct(printer.fan_speed(FanTarget::Auxiliary))),
         (
             "Chamber Fan",
             pct(printer.fan_speed(FanTarget::ChamberExhaust)),
         ),
         ("Heatbreak Fan", pct(printer.heatbreak_fan_speed())),
     ];
-    if FanTarget::AuxiliaryLeft2.is_supported_by(quirks) {
-        fans.push((
-            "Aux Fan 2",
-            pct(printer.fan_speed(FanTarget::AuxiliaryLeft2)),
-        ));
+    if FanTarget::Auxiliary2.is_supported_by(quirks) {
+        fans.push(("Aux Fan 2", pct(printer.fan_speed(FanTarget::Auxiliary2))));
     }
 
     let sdcard = match printer.sdcard_status() {
